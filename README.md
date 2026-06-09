@@ -53,7 +53,7 @@ All agents understand natural language and shorthand triggers:
 
 ```
 ingest raw/papers/my-paper.md              # ingest a markdown source
-ingest report.pdf                          # auto-converts to .md, then ingests
+ingest report.pdf                          # auto-converts in memory, then ingests
 ingest slides.pptx notes.docx              # batch, mixed formats
 python tools/raw_md.py /path/to/project     # build a full-project raw-md evidence layer
 query: what are the main themes?           # synthesize answer from wiki pages
@@ -71,7 +71,7 @@ Plain English works too:
 
 **Claude Code** also provides `/wiki-ingest`, `/wiki-query`, `/wiki-lint`, `/wiki-graph` as slash commands (via `.claude/commands/`). These are Claude Code-specific — other agents use the natural language triggers above, which work identically.
 
-Works with markdown, PDF, DOCX, PPTX, XLSX, HTML, TXT, CSV, JSON, XML, RST, EPUB, and more. Non-markdown files are auto-converted via [markitdown](https://github.com/microsoft/markitdown) at ingest time — no separate step needed.
+Works with markdown, PDF, DOCX, PPTX, XLSX, HTML, TXT, CSV, JSON, XML, RST, EPUB, and more. Non-markdown files are auto-converted in memory via [markitdown](https://github.com/microsoft/markitdown) at ingest time — no adjacent `.md` sidecar is written.
 
 ## Project Wiki Layers
 
@@ -276,7 +276,7 @@ For whole-project initialization, prefer `python tools/raw_md.py <project-root>`
 Drop any supported file directly into `ingest` — no separate conversion step needed:
 
 ```bash
-# These all work — auto-converted at ingest time
+# These all work — auto-converted in memory at ingest time
 ingest report.pdf
 ingest meeting-notes.docx
 ingest slides.pptx
@@ -288,7 +288,7 @@ ingest raw/mixed-folder/          # recursively finds all supported files
 **Supported formats:**
 `.md` `.pdf` `.docx` `.pptx` `.xlsx` `.xls` `.html` `.htm` `.txt` `.csv` `.json` `.xml` `.rst` `.rtf` `.epub` `.ipynb` `.yaml` `.yml` `.tsv` `.wav` `.mp3`
 
-Non-markdown files are auto-converted via [markitdown](https://github.com/microsoft/markitdown). Use `--no-convert` to skip auto-conversion and process only `.md` files.
+Non-markdown files are auto-converted in memory via [markitdown](https://github.com/microsoft/markitdown). Use `--no-convert` to skip auto-conversion and process only `.md` files. Ingest does not write converted `.md` files beside source files.
 
 ### arXiv Papers (Advanced)
 
@@ -307,13 +307,19 @@ ingest raw/papers/my-paper.md
 
 ### Batch Directory Conversion (Advanced)
 
-To pre-convert an entire directory (useful for bulk imports):
+For safe whole-directory conversion, use raw-md output:
 ```bash
 python tools/file_to_md.py --input_dir raw/imports/
-python tools/file_to_md.py --input_dir raw/imports/ --delete_source  # remove originals
 ```
 
-`tools/file_to_md.py` is the legacy adjacent-file converter. It writes `.md` next to the source files and can delete originals when requested. For project evidence preservation, use `tools/raw_md.py` instead; it never modifies source files and writes into the project wiki directory.
+`tools/file_to_md.py` is now a compatibility wrapper around `tools/raw_md.py` by default. It never modifies source files in safe mode. The old adjacent-file behavior is still available only when explicitly requested:
+
+```bash
+python tools/file_to_md.py --input_dir raw/imports/ --legacy-adjacent-output
+python tools/file_to_md.py --input_dir raw/imports/ --legacy-adjacent-output --delete_source --allow-delete-source
+```
+
+Use the delete form only for deliberate one-off migrations. It is not part of the recommended raw evidence workflow.
 
 ### Optional Dependencies
 
@@ -329,7 +335,7 @@ python tools/file_to_md.py --input_dir raw/imports/ --delete_source  # remove or
 
 - For a mixed code/document project, run `python tools/raw_md.py <project-root>` before asking the agent to summarize; use `raw-md/` for evidence and `wiki/` for curated knowledge.
 
-- Just drop files (PDF, DOCX, etc.) into `raw/` and `ingest` them — conversion is automatic
+- Just drop files (PDF, DOCX, etc.) into `raw/` and `ingest` them; conversion is automatic and happens in memory.
 - For arXiv papers, `tools/pdf2md.py` gives higher-fidelity output than generic markitdown conversion
 - Query answers are shown first — the agent then asks if you want to file them as synthesis pages. Your explorations compound just like ingested sources
 - The wiki is a git repo — version history for free

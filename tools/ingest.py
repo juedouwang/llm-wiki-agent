@@ -5,12 +5,12 @@ Ingest a source document into the LLM Wiki.
 Usage:
     python tools/ingest.py <path-to-source>
     python tools/ingest.py raw/articles/my-article.md
-    python tools/ingest.py report.pdf                  # auto-converts to .md
+    python tools/ingest.py report.pdf                  # auto-converts in memory
     python tools/ingest.py slides.pptx notes.docx       # batch, mixed formats
     python tools/ingest.py raw/mixed/ --no-convert      # skip auto-conversion
     python tools/ingest.py --validate-only              # run validation only
 
-Supported formats (auto-converted via markitdown):
+Supported formats (auto-converted in memory via markitdown):
     .pdf .docx .pptx .xlsx .html .htm .txt .csv .json .xml
     .rst .rtf .epub .ipynb .yaml .yml .tsv .wav .mp3
 
@@ -29,8 +29,6 @@ import sys
 import json
 import hashlib
 import re
-import shutil
-import tempfile
 from pathlib import Path
 from collections import defaultdict
 from datetime import date
@@ -197,11 +195,12 @@ def validate_ingest(changed_pages: list[str] | None = None) -> dict:
     return {"broken_links": broken_links, "unindexed": unindexed}
 
 
-def convert_to_md(source: Path) -> Path:
-    """Convert a non-markdown file to .md using markitdown.
+def convert_to_markdown_text(source: Path) -> str:
+    """Convert a non-markdown file to markdown text using markitdown.
 
-    Returns the path to the converted .md file (placed next to the original
-    with a .md extension, or in a temp location if the source dir is read-only).
+    The converted content is returned in memory. This intentionally does not
+    write a .md sidecar next to the source file; raw evidence should be created
+    with tools/raw_md.py instead.
     """
     try:
         from markitdown import MarkItDown
@@ -217,18 +216,12 @@ def convert_to_md(source: Path) -> Path:
         print(f"Error: failed to convert '{source.name}': {e}")
         sys.exit(1)
 
-    # Write converted output next to source as <name>.md
-    output = source.with_suffix(".md")
-    try:
-        output.write_text(result.text_content, encoding="utf-8")
-    except OSError:
-        # Fallback: source directory may be read-only
-        tmp = Path(tempfile.mkdtemp()) / f"{source.stem}.md"
-        tmp.write_text(result.text_content, encoding="utf-8")
-        output = tmp
+    print(f"  Converted {source.name} in memory; source file unchanged")
+    return result.text_content or ""
 
-    print(f"  ✓ Converted {source.name} → {output.name}")
-    return output
+
+def source_display_path(source: Path) -> str:
+    return str(source.relative_to(REPO_ROOT)) if source.is_relative_to(REPO_ROOT) else str(source)
 
 
 def ingest(source_path: str, auto_convert: bool = True):
@@ -237,8 +230,7 @@ def ingest(source_path: str, auto_convert: bool = True):
         print(f"Error: file not found: {source_path}")
         sys.exit(1)
 
-    # Auto-convert non-markdown files
-    converted_path = None
+    original_source = source
     if source.suffix.lower() != ".md":
         if not auto_convert:
             print(f"  Skipping non-.md file (--no-convert): {source.name}")
@@ -247,15 +239,15 @@ def ingest(source_path: str, auto_convert: bool = True):
             print(f"  ⚠️  Unsupported format: {source.suffix} — skipping {source.name}")
             print(f"       Supported: {', '.join(sorted(ALL_SUPPORTED_EXTENSIONS))}")
             return
-        print(f"  Converting {source.name} to markdown...")
-        converted_path = convert_to_md(source)
-        source = converted_path
-
-    source_content = source.read_text(encoding="utf-8")
+        print(f"  Converting {source.name} to markdown in memory...")
+        source_content = convert_to_markdown_text(source)
+    else:
+        source_content = source.read_text(encoding="utf-8")
     source_hash = sha256(source_content)
     today = date.today().isoformat()
+    source_label = source_display_path(original_source)
 
-    print(f"\nIngesting: {source.name}  (hash: {source_hash})")
+    print(f"\nIngesting: {source_label}  (content hash: {source_hash})")
 
     wiki_context = build_wiki_context()
     schema = read_file(SCHEMA_FILE)
@@ -268,7 +260,7 @@ Schema and conventions:
 Current wiki state (index + recent pages):
 {wiki_context if wiki_context else "(wiki is empty — this is the first source)"}
 
-New source to ingest (file: {source.relative_to(REPO_ROOT) if source.is_relative_to(REPO_ROOT) else source.name}):
+New source to ingest (file: {source_label}):
 === SOURCE START ===
 {source_content}
 === SOURCE END ===

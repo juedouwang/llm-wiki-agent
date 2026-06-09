@@ -92,10 +92,10 @@ Rules:
 
 Triggered by: *"ingest <file>"* or `/wiki-ingest`
 
-**Supported formats:** Markdown (`.md`) ingested directly. Non-markdown files (`.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, `.txt`, `.csv`, `.json`, `.xml`, `.rst`, `.rtf`, `.epub`, `.ipynb`, `.yaml`, `.yml`, `.tsv`, `.wav`, `.mp3`) auto-converted to markdown via [markitdown](https://github.com/microsoft/markitdown) before ingestion. Use `--no-convert` to skip auto-conversion.
+**Supported formats:** Markdown (`.md`) ingested directly. Non-markdown files (`.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, `.txt`, `.csv`, `.json`, `.xml`, `.rst`, `.rtf`, `.epub`, `.ipynb`, `.yaml`, `.yml`, `.tsv`, `.wav`, `.mp3`) auto-converted in memory via [markitdown](https://github.com/microsoft/markitdown) before ingestion. Ingest must not write converted `.md` files beside source files. Use `--no-convert` to skip auto-conversion.
 
 Steps (in order):
-1. Read the source document fully using the Read tool (auto-convert if non-markdown)
+1. Read the source document fully using the Read tool (auto-convert in memory if non-markdown)
 2. Read `wiki/index.md` and `wiki/overview.md` for current wiki context
 3. Write `wiki/sources/<slug>.md` — use the source page format below
 4. Update `wiki/index.md` — add entry under Sources section

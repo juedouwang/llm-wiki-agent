@@ -90,9 +90,9 @@ Rules:
 
 Triggered by: *"ingest <file>"*
 
-**Supported formats:** `.md` ingested directly. Non-markdown files (`.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, `.txt`, `.csv`, `.json`, `.xml`, `.rst`, `.rtf`, `.epub`, `.ipynb`, `.yaml`, `.yml`, `.tsv`, `.wav`, `.mp3`) auto-converted via markitdown. Use `--no-convert` to skip.
+**Supported formats:** `.md` ingested directly. Non-markdown files (`.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, `.txt`, `.csv`, `.json`, `.xml`, `.rst`, `.rtf`, `.epub`, `.ipynb`, `.yaml`, `.yml`, `.tsv`, `.wav`, `.mp3`) auto-converted in memory via markitdown. Ingest must not write converted `.md` files beside source files. Use `--no-convert` to skip.
 
-1. Read the source document fully (auto-convert if non-markdown)
+1. Read the source document fully (auto-convert in memory if non-markdown)
 2. Read `wiki/index.md` and `wiki/overview.md` for current wiki context
 3. Write `wiki/sources/<slug>.md` (source page format below)
 4. Update `wiki/index.md` — add entry under Sources
