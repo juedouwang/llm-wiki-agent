@@ -16,6 +16,7 @@ Or use shorthand triggers:
 - `health` → runs the Health Workflow (fast, every session)
 - `lint` → runs the Lint Workflow (expensive, periodic)
 - `build graph` → runs the Graph Workflow
+- `raw-md <project-root>` -> runs the Raw Markdown Evidence Workflow
 
 ---
 
@@ -55,6 +56,33 @@ last_updated: YYYY-MM-DD
 ```
 
 Use `[[PageName]]` wikilinks to link to other wiki pages.
+
+---
+
+## Raw Markdown Evidence Workflow
+
+Triggered by: *"raw-md <project-root>"*, *"build raw-md for <project-root>"*, *"initialize project wiki raw layer"*, or any request to convert a whole project into raw Markdown evidence.
+
+Run:
+
+```bash
+python tools/raw_md.py <project-root>
+```
+
+Default output goes to `<project-root>/<project-name>-wiki/`:
+
+```text
+raw-md/primary/              # mirrored source paths, one .md page per input file
+state/raw-md-manifest.json   # machine-readable conversion manifest
+reports/raw-md-report.md     # human-readable conversion report
+```
+
+Rules:
+1. This workflow is deterministic and must not call an LLM API.
+2. Never modify source project files; write only to the generated project wiki directory.
+3. Treat `raw-md/` as the raw evidence layer. It preserves source paths, hashes, byte counts, converters, status, direct code fences, document conversion output, and metadata-only placeholders.
+4. Treat `wiki/sources/`, `wiki/entities/`, `wiki/concepts/`, and `wiki/overview.md` as curated knowledge produced after reading evidence. Do not bulk-copy every `raw-md/` file into `wiki/sources/`.
+5. For exact values, implementation details, disputed claims, or low-confidence summaries, trace back from curated wiki pages to the relevant `raw-md/` pages.
 
 ---
 
@@ -156,8 +184,9 @@ Triggered by: *"query: <question>"*
 Steps:
 1. Read `wiki/index.md` to identify relevant pages
 2. Read those pages
-3. Synthesize an answer with inline citations as `[[PageName]]` wikilinks
-4. Ask the user if they want the answer filed as `wiki/syntheses/<slug>.md`
+3. If the question needs exact source fidelity (numbers, code behavior, file paths, conflicts, or detailed quotations), read the relevant `raw-md/` pages before finalizing.
+4. Synthesize an answer with inline citations as `[[PageName]]` wikilinks and mention raw-md paths when the answer depends on raw evidence.
+5. Ask the user if they want the answer filed as `wiki/syntheses/<slug>.md`
 
 ---
 
@@ -258,7 +287,7 @@ If Python/deps unavailable, build manually:
 
 `## [YYYY-MM-DD] <operation> | <title>`
 
-Operations: `ingest`, `query`, `health`, `lint`, `graph`, `report`
+Operations: `raw-md`, `ingest`, `query`, `health`, `lint`, `graph`, `report`
 
 ---
 

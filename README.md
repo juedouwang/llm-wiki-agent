@@ -55,6 +55,7 @@ All agents understand natural language and shorthand triggers:
 ingest raw/papers/my-paper.md              # ingest a markdown source
 ingest report.pdf                          # auto-converts to .md, then ingests
 ingest slides.pptx notes.docx              # batch, mixed formats
+python tools/raw_md.py /path/to/project     # build a full-project raw-md evidence layer
 query: what are the main themes?           # synthesize answer from wiki pages
 lint                                       # find orphans, contradictions, gaps
 build graph                                # build graph.html from all wikilinks
@@ -71,6 +72,41 @@ Plain English works too:
 **Claude Code** also provides `/wiki-ingest`, `/wiki-query`, `/wiki-lint`, `/wiki-graph` as slash commands (via `.claude/commands/`). These are Claude Code-specific — other agents use the natural language triggers above, which work identically.
 
 Works with markdown, PDF, DOCX, PPTX, XLSX, HTML, TXT, CSV, JSON, XML, RST, EPUB, and more. Non-markdown files are auto-converted via [markitdown](https://github.com/microsoft/markitdown) at ingest time — no separate step needed.
+
+## Project Wiki Layers
+
+For a whole project directory, build a raw evidence layer first:
+
+```bash
+python tools/raw_md.py /path/to/project
+```
+
+Default output is written inside the input project:
+
+```text
+<project-name>-wiki/
+  raw-md/
+    primary/        # source-path mirror; one .md page per readable/input file
+  wiki/             # curated knowledge layer maintained by the agent
+    sources/        # source summaries, not raw file dumps
+    entities/
+    concepts/
+    overview.md
+  state/
+    raw-md-manifest.json
+  reports/
+    raw-md-report.md
+```
+
+The layers have different jobs:
+
+| Layer | Owner | Purpose |
+|---|---|---|
+| `raw-md/` | deterministic scripts | Raw evidence layer. Preserve source paths, hashes, metadata, code fences, converted document text, and metadata-only placeholders for binary/unsupported files. |
+| `wiki/` | agent + user review | Curated knowledge layer. Summaries, entity pages, concept pages, overviews, contradictions, and saved syntheses. |
+| `state/` / `reports/` | scripts and agents | Maintenance layer. Manifests, conversion reports, health reports, graph reports. |
+
+Daily answers should start from the curated `wiki/` layer. For exact values, implementation details, disputed claims, or anything that depends on source fidelity, the agent should trace back to `raw-md/` and use it as the evidence layer. Do not bulk-copy every raw-md page into `wiki/sources/`; `wiki/sources/` remains a curated summary layer.
 
 ## What You Get
 
@@ -235,6 +271,8 @@ If you want to keep the LLM Wiki Agent repository separate from your main person
 
 ## Multi-Format Ingest
 
+For whole-project initialization, prefer `python tools/raw_md.py <project-root>` first. That command creates a non-destructive raw evidence layer under `<project-name>-wiki/raw-md/`; `ingest` then remains the curated workflow that turns selected evidence into `wiki/sources/`, entities, concepts, and overview pages.
+
 Drop any supported file directly into `ingest` — no separate conversion step needed:
 
 ```bash
@@ -275,17 +313,21 @@ python tools/file_to_md.py --input_dir raw/imports/
 python tools/file_to_md.py --input_dir raw/imports/ --delete_source  # remove originals
 ```
 
+`tools/file_to_md.py` is the legacy adjacent-file converter. It writes `.md` next to the source files and can delete originals when requested. For project evidence preservation, use `tools/raw_md.py` instead; it never modifies source files and writes into the project wiki directory.
+
 ### Optional Dependencies
 
 | Package | Install | Used for |
 |---|---|---|
-| [markitdown](https://github.com/microsoft/markitdown) | `pip install markitdown` | Auto-conversion of non-.md files (required for multi-format ingest) |
+| [markitdown](https://github.com/microsoft/markitdown) | `pip install "markitdown[all]"` | Auto-conversion of document formats for ingest and raw-md |
 | [arxiv2md](https://github.com/ryansingman/arxiv2md) | `pip install arxiv2markdown` | arXiv papers via structured source |
 | [Marker](https://github.com/VikParuchuri/marker) | `pip install marker-pdf` | Complex academic PDFs with multi-column layouts |
 | [PyMuPDF4LLM](https://github.com/pymupdf/RAG) | `pip install pymupdf4llm` | Fast PDF extraction (no GPU needed) |
 | [tqdm](https://github.com/tqdm/tqdm) | `pip install tqdm` | Progress bar for batch directory conversion |
 
 ## Tips
+
+- For a mixed code/document project, run `python tools/raw_md.py <project-root>` before asking the agent to summarize; use `raw-md/` for evidence and `wiki/` for curated knowledge.
 
 - Just drop files (PDF, DOCX, etc.) into `raw/` and `ingest` them — conversion is automatic
 - For arXiv papers, `tools/pdf2md.py` gives higher-fidelity output than generic markitdown conversion
