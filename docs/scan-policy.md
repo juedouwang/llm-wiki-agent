@@ -1,6 +1,6 @@
 # B-02 项目扫描策略约定
 
-- 状态：已实现扫描策略内核，并由 B-03 目录盘点消费
+- 状态：已实现扫描策略内核，并由 B-03/B-04 目录盘点与指纹流程消费
 - 实现：`tools/scan_policy.py`
 - 测试：`tests/test_scan_policy.py`
 - Schema：`llmwiki-scan-policy` v1
@@ -9,7 +9,7 @@
 
 B-02 把“哪些路径属于扫描边界、哪些内容可以本地读取、哪些原始内容可以发送给外部模型”变成确定性、可解释、可测试的策略。
 
-它只做策略判断，不遍历项目目录，不生成 `manifest.jsonl`，不计算源文件 hash，不提取内容，也不调用 LLM。B-03 已使用本策略进行全量目录盘点，但当前单独调用 `load_scan_policy()` 仍不等于完成项目扫描。
+它只做策略判断，不遍历项目目录，不生成 `manifest.jsonl`，不自行计算源文件 hash，不提取内容，也不调用 LLM。B-03 使用本策略进行完整目录盘点，B-04 的 inventory consumer 在相同边界内增加本地 SHA-256；单独调用 `load_scan_policy()` 仍不等于完成项目扫描。
 
 策略加载和判断都是源项目只读操作，不会创建、修改或删除被扫描项目中的文件。项目内的 `.llmwikiignore` 只有在用户或项目本身已经提供时才会被读取。
 
@@ -33,7 +33,7 @@ boundary = policy.decide_path("results/ablation.pdf", is_directory=False)
 access = policy.decide_file("models/model.ckpt", size_bytes=900_000_000)
 ```
 
-`policy.as_dict()` 返回带 `schema_version`、`kind`、有效配置和全部规则来源的机器可读快照。B-03 把该快照写入基础 Manifest 摘要；B-04 后续再把它与 scan generation 和增量复用关联。
+`policy.as_dict()` 返回带 `schema_version`、`kind`、有效配置和全部规则来源的机器可读快照。B-03 把该快照写入基础 Manifest 摘要；B-04 继续保存同一快照，并在 summary 中关联 scan generation 和增量复用统计。
 
 ## 3. `.llmwikiignore` 语法
 
@@ -106,7 +106,9 @@ artifacts/tmp/
 - `metadata_only`：敏感路径或超过本地阈值；
 - `blocked`：文件本身处于扫描边界之外。
 
-这里的 `metadata_only` 是 B-02 的访问保护结果；B-05～B-07 还会根据格式、科研角色、引用关系和目标决定最终阅读深度。例如，小型模型权重即使未触发通用大小阈值，后续格式策略仍可将它设为元数据读取。
+这里的 `metadata_only` 是 B-02 对后续打开、提取和语义处理的访问保护结果；B-05～B-07 还会根据格式、科研角色、引用关系和目标决定最终阅读深度。例如，小型模型权重即使未触发通用大小阈值，后续格式策略仍可将它设为元数据读取。
+
+B-04 的本地完整性 hash 是独立的确定性账本操作。它会为所有扫描边界内普通文件流式计算 SHA-256，包括敏感路径或后续只能元数据处理的文件；原始字节不持久化、不外发、不进入 LLM，也不构成内容提取。Manifest 仍属于默认忽略 Git 的本机状态。完整边界见 [`file-fingerprints.md`](file-fingerprints.md)。
 
 ## 6. 敏感路径
 
@@ -114,7 +116,7 @@ artifacts/tmp/
 
 敏感路径仍进入“发现了该文件”的账本，但：
 
-- 不读取原始内容，只保留安全元数据；
+- 不允许后续提取或语义读取原始内容；B-04 仅可在本地流式计算单向 SHA-256，不保存原始字节；
 - 永远不会被批准发送原始内容到外部模型；
 - 显式 include 只能改变扫描边界，不能绕过敏感内容保护。
 
@@ -136,7 +138,7 @@ artifacts/tmp/
 
 ## 8. 符号链接
 
-默认 `follow_symlinks=False`：符号链接条目可以被 B-03 记录，但不会被跟随。
+默认 `follow_symlinks=False`：符号链接条目可以被 B-03/B-04 inventory 记录，但不会被跟随。
 
 显式启用后仍有不可绕过的保护：
 
@@ -146,9 +148,9 @@ artifacts/tmp/
 4. 损坏、不可解析或解析时形成循环的链接 fail closed；
 5. 每次拒绝都返回稳定 `reason_code`，而不是静默跳过。
 
-B-02 提供 `assess_symlink_target()` 和 `decide_symlink()`，但不自行遍历目录。B-03 的目录盘点器负责维护祖先集合和全局已访问目标集合。
+B-02 提供 `assess_symlink_target()` 和 `decide_symlink()`，但不自行遍历目录。B-03/B-04 的目录盘点器负责维护祖先集合和全局已访问目标集合。
 
-B-03 还会同时检查符号链接的逻辑路径和规范化项目内目标路径，避免别名绕过 `.git/`、`.llmwiki/` 或用户排除规则。普通真实路径先于链接别名处理；每个链接无论是否跟随都有 Manifest 记录和稳定原因。完整消费约定见 [`project-inventory.md`](project-inventory.md)。
+B-03/B-04 还会同时检查符号链接的逻辑路径和规范化项目内目标路径，避免别名绕过 `.git/`、`.llmwiki/` 或用户排除规则。普通真实路径先于链接别名处理；每个链接无论是否跟随都有 Manifest 记录和稳定原因。符号链接记录本身不保存内容指纹。完整消费约定见 [`project-inventory.md`](project-inventory.md)。
 
 ## 9. B-02 完成前后差异
 
@@ -158,7 +160,7 @@ B-03 还会同时检查符号链接的逻辑路径和规范化项目内目标路
 | 默认排除和用户覆盖没有统一语义 | 规则优先级、冲突和重包含行为已固定 |
 | 大文件可能被直接跳过 | 保留发现记录，内容访问降为元数据级并给出理由 |
 | 符号链接行为未定义 | 默认不跟随；启用时限制根目录、循环和重复目标 |
-| `.env` 等可能混入模型上下文 | 敏感路径原始内容本地不读且禁止外发 |
+| `.env` 等可能混入模型上下文 | 敏感路径禁止提取和外发；仅允许 B-04 本地单向完整性 hash |
 | 无法解释为什么排除某文件 | 每个决定都有规则来源、行号、reason code 和说明 |
 
 ## 10. 明确非目标
@@ -167,7 +169,7 @@ B-02 不实现：
 
 - 项目注册更新或扫描配置持久化 UI；
 - 目录遍历、文件数量统计和排除摘要（B-03）；
-- 源文件内容 hash、scan generation 和增量复用（B-04）；
+- 源文件内容 hash、scan generation 和增量复用；这些由 B-04 inventory consumer 实现，而不是策略对象本身；
 - 格式、语言和科研角色识别（B-05）；
 - Manifest 最终双轴状态（B-06）；
 - 内容提取、LLM 调用、MCP、Hook 或 Web 页面。

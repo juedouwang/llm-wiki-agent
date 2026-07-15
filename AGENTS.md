@@ -77,7 +77,7 @@ Inventory a B-01 registered project with:
 python tools/project.py inventory <project_id> --json
 ```
 
-B-03 loads the registered source root, consumes the B-02 policy, records every in-scope regular file regardless of format, records excluded files and each pruned-directory boundary, and atomically writes only `.llmwiki/projects/<project_id>/manifest.jsonl`. Symbolic links are always recorded and use B-02 root/cycle/duplicate checks. Inventory must not read source-file content, calculate hashes, sizes or mtimes, classify formats or research roles, call an LLM, or write into the source project. See `docs/project-inventory.md`.
+B-03 established the accountable directory ledger: every in-scope regular file is recorded regardless of format, excluded files and pruned-directory boundaries remain reconcilable, and symbolic links use B-02 root/cycle/duplicate checks. B-04 keeps those guarantees and writes `project-inventory-v2` with scan generation, local SHA-256, size, mtime, and conservative incremental reuse. Source bytes may only be streamed into the local hash state; they must not be extracted, persisted, sent externally, passed to an LLM, or written back to the source project. Do not add format/research-role classification, final processing states, MCP, Hook, or Web behavior to this inventory step. See `docs/project-inventory.md` and `docs/file-fingerprints.md`.
 
 Existing top-level `wiki/` workflows and the current `raw-md` output layout remain compatible during migration. See `docs/project-storage-layout.md`.
 

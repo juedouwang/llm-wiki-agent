@@ -29,7 +29,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | P-05 最终产品与 Agent 原生闭环约定 | 已完成 | `272c693` | `checkpoint/p-05-product-contract` |
 | B-01 项目注册 | 已完成 | `15d317a` | `checkpoint/b-01-project-register` |
 | B-02 扫描策略 | 已完成 | `07be63d` | `checkpoint/b-02-scan-policy` |
-| B-03 目录盘点与基础 Manifest | 本次落库 | 本次提交 | `checkpoint/b-03-project-inventory` |
+| B-03 目录盘点与基础 Manifest | 已完成 | `be4b825` | `checkpoint/b-03-project-inventory` |
+| B-04 文件指纹与增量 Manifest | 本次落库 | 本次提交 | `checkpoint/b-04-file-fingerprints` |
 
 ## 3. 后续最小改动计划
 
@@ -313,19 +314,19 @@ git tag checkpoint/b-01-project-register
 
 ## 6. 下一项可执行任务
 
-B-03 完成后的下一项是：
+B-04 完成后的下一项是：
 
-> **B-04：文件指纹与增量 Manifest**
+> **B-05：格式、语言与科研角色识别**
 
 它的最小范围严格限制为：
 
-- 在 B-03 基础目录账本上增加 scan generation；
-- 为普通文件记录内容 SHA-256、大小和 mtime；
-- 内容变化必须导致 hash 变化；
-- 仅触碰 mtime 时不能误报内容变化；
-- 重复扫描未变化文件时复用已有指纹结果；
-- 保持源项目零写入；
-- 不提前实现格式、语言或科研角色分类；
-- 不实现最终 `processing_status` / `read_depth`、内容提取、LLM、MCP、Hook 或 Web。
+- 在 B-04 `project-inventory-v2` 的普通文件账本上增加确定性分类结果；
+- 识别文件格式、主要语言和科研角色，并保存可解释的分类理由；
+- 扩展名、magic/MIME 和路径规则优先，主流程不得依赖 LLM 才能完成；
+- fixture 覆盖伪扩展名、无扩展名和常见科研文件；
+- 无法识别的文件仍保留 Manifest 记录并显式标记未知，不能静默遗漏；
+- 保留 B-01 注册、B-02 边界与符号链接安全、B-03 排除对账和 B-04 指纹/代次语义；
+- 保持源科研项目零写入；
+- 不提前实现最终 `processing_status` / `read_depth`、内容提取、Evidence、MCP、Hook 或 Web。
 
-B-04 必须复用 B-03 的注册加载、目录边界、排除对账和符号链接安全，不能重新引入格式白名单或静默遗漏文件。
+B-05 仍是可嵌入宿主 Agent 的 Research Core 确定性能力，不新增独立聊天入口，也不能破坏后续 Codex/Claude Code 通过 Core 共享同一项目状态的产品边界。

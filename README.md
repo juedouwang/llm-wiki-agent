@@ -57,6 +57,7 @@ ingest raw/papers/my-paper.md              # ingest a markdown source
 ingest report.pdf                          # auto-converts in memory, then ingests
 ingest slides.pptx notes.docx              # batch, mixed formats
 python tools/project.py register /path/to/project --json  # register only; no scan
+python tools/project.py inventory <project_id> --json       # accountable incremental Manifest
 python tools/raw_md.py /path/to/project     # legacy full-project raw-md evidence layer
 query: what are the main themes?           # synthesize answer from wiki pages
 lint                                       # find orphans, contradictions, gaps
@@ -133,13 +134,13 @@ See `docs/project-storage-layout.md` for the registration, storage, and compatib
 
 B-02 provides a deterministic, source-read-only scan-policy core. It reads an optional project `.llmwikiignore`, layers explicit include/exclude rules, keeps protected VCS/Core state excluded, applies size and sensitive-path controls, defaults Research Core external sends to `local-only`, and returns explainable path, raw-content, external-send, and symlink decisions. See `docs/scan-policy.md`.
 
-Create the B-03 basic Manifest for an already registered project:
+Create or incrementally refresh the Manifest for an already registered project:
 
 ```bash
 python tools/project.py inventory <project_id> --json
 ```
 
-The inventory records every in-scope regular file regardless of format, records excluded files and pruned-directory boundaries for reconciliation, applies B-02 symbolic-link safety, and atomically writes `.llmwiki/projects/<project_id>/manifest.jsonl`. It does not read source-file content, hash files, record size/mtime, classify formats or research roles, call an LLM, or modify the source project. See `docs/project-inventory.md`.
+The inventory preserves B-03 accountability for every in-scope regular file, excluded file, pruned-directory boundary, and symbolic link. B-04 writes `project-inventory-v2` with scan generation, local SHA-256, size, mtime, and conservative reuse of unchanged fingerprints. Source bytes are streamed only into local hash state: no content is extracted, persisted, sent to an LLM, or written back to the source project. Format/research-role classification and final processing states remain later tasks. See `docs/project-inventory.md` and `docs/file-fingerprints.md`.
 
 ## Research Assistant Evolution (In Development)
 
@@ -148,7 +149,8 @@ The `research-assistant` branch is evolving this repository into a local-first, 
 - [Final product and scan-output contract](docs/research-assistant-product-contract.md)
 - [Minimum-scope implementation roadmap](docs/research-assistant-roadmap.md)
 - [B-02 explainable scan-policy contract](docs/scan-policy.md)
-- [B-03 project inventory and basic Manifest contract](docs/project-inventory.md)
+- [B-03 project inventory and accountable directory contract](docs/project-inventory.md)
+- [B-04 file fingerprints and incremental Manifest contract](docs/file-fingerprints.md)
 
 ## What You Get
 

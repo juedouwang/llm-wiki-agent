@@ -7,16 +7,21 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 
 from tools.project_inventory import (
+    CONTENT_HASH_ALGORITHM,
+    FINGERPRINT_CACHE_STRATEGY,
+    LEGACY_PROJECT_MANIFEST_VERSION,
     PROJECT_MANIFEST_KIND,
     PROJECT_MANIFEST_SCHEMA_VERSION,
     PROJECT_MANIFEST_VERSION,
     ProjectInventoryTraversalError,
+    ProjectManifestError,
     inventory_project,
 )
 from tools.project_registry import ProjectRecordError, register_project
@@ -242,14 +247,9 @@ class ProjectInventoryTests(unittest.TestCase):
 
         result = inventory_project(self.workspace, registration.project_id)
         rows = self.manifest_rows(result.manifest_file)
+        summary = rows[0]
         actual_counts = Counter(row["record_type"] for row in rows[1:])
         forbidden_keys = {
-            "hash",
-            "sha256",
-            "content_hash",
-            "size_bytes",
-            "mtime",
-            "mtime_ns",
             "format",
             "language",
             "role",
@@ -258,6 +258,8 @@ class ProjectInventoryTests(unittest.TestCase):
             "read_depth",
             "content",
             "text",
+            "source_id",
+            "evidence_id",
         }
 
         def nested_keys(value: object) -> set[str]:
@@ -279,60 +281,312 @@ class ProjectInventoryTests(unittest.TestCase):
             self.assertEqual(row["manifest_version"], PROJECT_MANIFEST_VERSION)
             self.assertTrue(forbidden_keys.isdisjoint(nested_keys(row)))
 
-        self.assertEqual(rows[0]["record_type"], "summary")
-        self.assertEqual(rows[0]["total_records"], len(rows) - 1)
+        self.assertEqual(summary["record_type"], "summary")
+        self.assertEqual(summary["scan_generation"], 1)
+        self.assertEqual(summary["total_records"], len(rows) - 1)
         self.assertEqual(
-            rows[0]["record_counts"],
+            summary["record_counts"],
             {
                 record_type: actual_counts[record_type]
-                for record_type in rows[0]["record_counts"]
+                for record_type in summary["record_counts"]
+            },
+        )
+        self.assertEqual(
+            summary["fingerprint_summary"],
+            {
+                "algorithm": CONTENT_HASH_ALGORITHM,
+                "cache_strategy": FINGERPRINT_CACHE_STRATEGY,
+                "hashed_files": summary["record_counts"]["file"],
+                "reused_files": 0,
             },
         )
 
-    def test_inventory_does_not_read_source_file_content_or_write_source(self) -> None:
+        for row in rows[1:]:
+            if row["record_type"] != "file":
+                self.assertNotIn("content_sha256", row)
+                continue
+            source = self.project / Path(row["path"])
+            metadata = source.stat()
+            self.assertEqual(
+                row["content_sha256"],
+                hashlib.sha256(source.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(row["size_bytes"], metadata.st_size)
+            self.assertEqual(row["mtime_ns"], metadata.st_mtime_ns)
+            cache = row["fingerprint_cache"]
+            self.assertIsInstance(cache, dict)
+            self.assertEqual(cache["strategy"], FINGERPRINT_CACHE_STRATEGY)
+
+    def test_inventory_hashes_locally_without_writing_source(self) -> None:
         (self.project / "opaque.bin").write_bytes(os.urandom(256))
         registration = self.register()
         before = self.source_snapshot()
-        original_read_bytes = Path.read_bytes
-        original_read_text = Path.read_text
-        source_root = self.project.resolve()
 
-        def is_source(candidate: Path) -> bool:
-            try:
-                candidate.expanduser().resolve().relative_to(source_root)
-            except ValueError:
-                return False
-            return True
-
-        def guarded_read_bytes(candidate: Path) -> bytes:
-            if is_source(candidate):
-                raise AssertionError(f"source content read: {candidate}")
-            return original_read_bytes(candidate)
-
-        def guarded_read_text(candidate: Path, *args, **kwargs) -> str:
-            if is_source(candidate):
-                raise AssertionError(f"source content read: {candidate}")
-            return original_read_text(candidate, *args, **kwargs)
-
-        with patch.object(Path, "read_bytes", guarded_read_bytes), patch.object(
-            Path,
-            "read_text",
-            guarded_read_text,
-        ):
-            result = inventory_project(self.workspace, registration.project_id)
+        result = inventory_project(self.workspace, registration.project_id)
 
         self.assertTrue(result.manifest_file.is_file())
         self.assertEqual(before, self.source_snapshot())
 
-    def test_repeated_unchanged_inventory_is_byte_stable(self) -> None:
+    def test_repeated_unchanged_inventory_reuses_every_fingerprint(self) -> None:
         registration = self.register()
 
         first = inventory_project(self.workspace, registration.project_id)
-        first_bytes = first.manifest_file.read_bytes()
-        second = inventory_project(self.workspace, registration.project_id)
+        first_rows = self.manifest_rows(first.manifest_file)
+        first_files = {
+            row["path"]: {
+                key: row[key]
+                for key in (
+                    "content_sha256",
+                    "size_bytes",
+                    "mtime_ns",
+                    "fingerprint_cache",
+                )
+            }
+            for row in first_rows
+            if row["record_type"] == "file"
+        }
 
-        self.assertEqual(first.manifest_file, second.manifest_file)
-        self.assertEqual(first_bytes, second.manifest_file.read_bytes())
+        with patch(
+            "tools.project_inventory._hash_file_content",
+            side_effect=AssertionError("unchanged files must reuse prior SHA-256"),
+        ):
+            second = inventory_project(self.workspace, registration.project_id)
+
+        second_rows = self.manifest_rows(second.manifest_file)
+        second_files = {
+            row["path"]: {
+                key: row[key]
+                for key in (
+                    "content_sha256",
+                    "size_bytes",
+                    "mtime_ns",
+                    "fingerprint_cache",
+                )
+            }
+            for row in second_rows
+            if row["record_type"] == "file"
+        }
+        self.assertEqual(first.scan_generation, 1)
+        self.assertEqual(second.scan_generation, 2)
+        self.assertEqual(first_files, second_files)
+        self.assertEqual(
+            second.fingerprint_summary,
+            {
+                "algorithm": CONTENT_HASH_ALGORITHM,
+                "cache_strategy": FINGERPRINT_CACHE_STRATEGY,
+                "hashed_files": 0,
+                "reused_files": len(second_files),
+            },
+        )
+
+    def test_content_change_updates_sha256_when_size_and_mtime_are_restored(
+        self,
+    ) -> None:
+        registration = self.register()
+        target = self.project / "src" / "model.py"
+        first = inventory_project(self.workspace, registration.project_id)
+        first_rows = self.manifest_rows(first.manifest_file)
+        first_record = next(
+            row for row in first_rows if row.get("path") == "src/model.py"
+        )
+        previous_metadata = target.stat()
+
+        time.sleep(0.02)
+        target.write_bytes(b"VALUE = 8\n")
+        os.utime(
+            target,
+            ns=(previous_metadata.st_atime_ns, previous_metadata.st_mtime_ns),
+        )
+        restored_metadata = target.stat()
+        self.assertEqual(restored_metadata.st_size, previous_metadata.st_size)
+        self.assertEqual(restored_metadata.st_mtime_ns, previous_metadata.st_mtime_ns)
+
+        second = inventory_project(self.workspace, registration.project_id)
+        second_rows = self.manifest_rows(second.manifest_file)
+        second_record = next(
+            row for row in second_rows if row.get("path") == "src/model.py"
+        )
+        self.assertNotEqual(
+            first_record["content_sha256"],
+            second_record["content_sha256"],
+        )
+        self.assertEqual(second.fingerprint_summary["hashed_files"], 1)
+        self.assertEqual(
+            second.fingerprint_summary["reused_files"],
+            second.record_counts["file"] - 1,
+        )
+
+    def test_touch_only_rehashes_without_changing_content_sha256(self) -> None:
+        registration = self.register()
+        target = self.project / "README.md"
+        first = inventory_project(self.workspace, registration.project_id)
+        first_rows = self.manifest_rows(first.manifest_file)
+        first_record = next(
+            row for row in first_rows if row.get("path") == "README.md"
+        )
+        metadata = target.stat()
+        os.utime(
+            target,
+            ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 2_000_000_000),
+        )
+
+        second = inventory_project(self.workspace, registration.project_id)
+        second_rows = self.manifest_rows(second.manifest_file)
+        second_record = next(
+            row for row in second_rows if row.get("path") == "README.md"
+        )
+        self.assertEqual(
+            first_record["content_sha256"],
+            second_record["content_sha256"],
+        )
+        self.assertNotEqual(first_record["mtime_ns"], second_record["mtime_ns"])
+        self.assertEqual(second.fingerprint_summary["hashed_files"], 1)
+        self.assertNotIn("content_changed", second_record)
+
+    def test_add_rename_and_delete_refresh_the_current_generation(self) -> None:
+        registration = self.register()
+        first = inventory_project(self.workspace, registration.project_id)
+        self.assertEqual(first.scan_generation, 1)
+
+        added = self.project / "data.unknown-format"
+        added.write_bytes(b"opaque")
+        second = inventory_project(self.workspace, registration.project_id)
+        second_rows = self.manifest_rows(second.manifest_file)
+        added_record = next(
+            row for row in second_rows if row.get("path") == added.name
+        )
+        self.assertEqual(second.scan_generation, 2)
+        self.assertEqual(added_record["record_type"], "file")
+        self.assertEqual(
+            added_record["content_sha256"],
+            hashlib.sha256(b"opaque").hexdigest(),
+        )
+
+        old_path = self.project / "src" / "model.py"
+        renamed = self.project / "src" / "renamed.opaque"
+        old_hash = next(
+            row["content_sha256"]
+            for row in second_rows
+            if row.get("path") == "src/model.py"
+        )
+        old_path.rename(renamed)
+        third = inventory_project(self.workspace, registration.project_id)
+        third_rows = self.manifest_rows(third.manifest_file)
+        third_by_path = {row.get("path"): row for row in third_rows[1:]}
+        self.assertEqual(third.scan_generation, 3)
+        self.assertNotIn("src/model.py", third_by_path)
+        self.assertEqual(
+            third_by_path["src/renamed.opaque"]["content_sha256"],
+            old_hash,
+        )
+
+        (self.project / "README.md").unlink()
+        fourth = inventory_project(self.workspace, registration.project_id)
+        fourth_rows = self.manifest_rows(fourth.manifest_file)
+        self.assertEqual(fourth.scan_generation, 4)
+        self.assertNotIn(
+            "README.md",
+            {row.get("path") for row in fourth_rows[1:]},
+        )
+
+    def test_b03_manifest_upgrades_from_generation_zero_without_reuse(self) -> None:
+        registration = self.register()
+        current = inventory_project(self.workspace, registration.project_id)
+        legacy_rows = self.manifest_rows(current.manifest_file)
+        for row in legacy_rows:
+            row["manifest_version"] = LEGACY_PROJECT_MANIFEST_VERSION
+            if row["record_type"] == "summary":
+                row.pop("scan_generation")
+                row.pop("fingerprint_summary")
+            elif row["record_type"] == "file":
+                row.pop("content_sha256")
+                row.pop("size_bytes")
+                row.pop("mtime_ns")
+                row.pop("fingerprint_cache")
+        current.manifest_file.write_text(
+            "".join(
+                json.dumps(
+                    row,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+                for row in legacy_rows
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        upgraded = inventory_project(self.workspace, registration.project_id)
+        self.assertEqual(upgraded.scan_generation, 1)
+        self.assertEqual(
+            upgraded.fingerprint_summary["hashed_files"],
+            upgraded.record_counts["file"],
+        )
+        self.assertEqual(upgraded.fingerprint_summary["reused_files"], 0)
+
+    def test_corrupt_manifest_fails_closed_without_replacement(self) -> None:
+        registration = self.register()
+        result = inventory_project(self.workspace, registration.project_id)
+        corrupt = b'{"schema_version":1\n'
+        result.manifest_file.write_bytes(corrupt)
+
+        with self.assertRaises(ProjectManifestError):
+            inventory_project(self.workspace, registration.project_id)
+
+        self.assertEqual(result.manifest_file.read_bytes(), corrupt)
+        self.assertEqual(
+            list(result.manifest_file.parent.glob(".manifest.jsonl.*")),
+            [],
+        )
+
+    def test_future_manifest_schema_fails_closed_without_replacement(self) -> None:
+        registration = self.register()
+        result = inventory_project(self.workspace, registration.project_id)
+        rows = self.manifest_rows(result.manifest_file)
+        rows[0]["schema_version"] = PROJECT_MANIFEST_SCHEMA_VERSION + 1
+        future = (
+            "".join(
+                json.dumps(
+                    row,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+                for row in rows
+            )
+        ).encode("utf-8")
+        result.manifest_file.write_bytes(future)
+
+        with self.assertRaisesRegex(ProjectManifestError, "newer than supported"):
+            inventory_project(self.workspace, registration.project_id)
+
+        self.assertEqual(result.manifest_file.read_bytes(), future)
+
+    def test_fingerprint_failure_preserves_existing_manifest(self) -> None:
+        registration = self.register()
+        first = inventory_project(self.workspace, registration.project_id)
+        previous = first.manifest_file.read_bytes()
+        (self.project / "README.md").write_text(
+            "# Changed\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        with patch(
+            "tools.project_inventory._hash_file_content",
+            side_effect=PermissionError("simulated read denial"),
+        ):
+            with self.assertRaises(ProjectInventoryTraversalError):
+                inventory_project(self.workspace, registration.project_id)
+
+        self.assertEqual(first.manifest_file.read_bytes(), previous)
+        self.assertEqual(
+            list(first.manifest_file.parent.glob(".manifest.jsonl.*")),
+            [],
+        )
 
     def test_inventory_consumes_b02_symlink_decision_without_os_link_privilege(
         self,

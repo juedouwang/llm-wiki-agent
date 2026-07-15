@@ -4,7 +4,8 @@
 - 实现：`tools/project_inventory.py`
 - 命令：`python tools/project.py inventory <project_id> --json`
 - 测试：`tests/test_project_inventory.py`
-- Schema：`llmwiki-project-manifest` / `project-inventory-v1`
+- B-03 artifact：`llmwiki-project-manifest` / `project-inventory-v1`
+- 当前 artifact：B-04 `project-inventory-v2`（见 [`file-fingerprints.md`](file-fingerprints.md)）
 
 ## 1. 本任务解决什么
 
@@ -14,7 +15,7 @@ B-03 为 B-01 已注册的科研项目建立第一份可对账目录账本。盘
 .llmwiki/projects/<project_id>/manifest.jsonl
 ```
 
-源科研项目保持只读。盘点不会接受一个临时源路径来绕过注册记录，也不会把 Manifest 写回源目录。
+源科研项目保持只读。盘点不会接受一个临时源路径来绕过注册记录，也不会把 Manifest 写回源目录。B-04 在不改变这些边界、记录类型、排除对账和符号链接语义的前提下，为普通文件增加本地指纹与 scan generation；当前命令写入 v2，详见 [`file-fingerprints.md`](file-fingerprints.md)。
 
 ## 2. CLI
 
@@ -49,7 +50,9 @@ result = inventory_project(
 )
 
 print(result.manifest_file)
+print(result.scan_generation)
 print(result.record_counts["file"])
+print(result.fingerprint_summary)
 ```
 
 ## 3. 盘点与排除规则
@@ -90,9 +93,9 @@ total_records = excluded_files + pruned_directories
 
 `symlink` 行同时保存 B-02 原始决定、最终是否跟随以及最终 `follow_reason_code`；`symlink_summary` 可与这些记录对账。
 
-## 5. Manifest Schema v1
+## 5. B-03 Manifest artifact v1（历史基线）
 
-JSONL 第一行是 `summary`，后续每行是一条目录盘点记录。所有行都包含：
+B-03 的 JSONL 第一行是 `summary`，后续每行是一条目录盘点记录。所有行都包含：
 
 ```json
 {
@@ -113,7 +116,7 @@ JSONL 第一行是 `summary`，后续每行是一条目录盘点记录。所有�
 - 按最终链接原因分组的 `symlink_summary`；
 - 完整的 B-02 `policy.as_dict()` 快照。
 
-普通 `file` 行只记录相对路径和扫描边界决定。例如：
+在 B-03 v1 中，普通 `file` 行只记录相对路径和扫描边界决定。例如：
 
 ```json
 {
@@ -134,6 +137,8 @@ JSONL 第一行是 `summary`，后续每行是一条目录盘点记录。所有�
 }
 ```
 
+当前 writer 不再生成本节示例中的 v1，而是生成 `project-inventory-v2`。v2 保留所有 B-03 行类型和边界字段，只为普通 `file` 行增加 SHA-256/size/mtime/cache 元数据，并在 summary 中增加代次与指纹统计。有效 v1 可由当前读取器升级；未知 artifact 版本或 future Schema fail closed。
+
 ## 6. 原子写入与失败语义
 
 记录先写入机器状态目录中的临时文件。只有目录遍历和摘要构建全部成功后，才使用同文件系统的 `os.replace()` 替换 `manifest.jsonl`。若任何在范围内的目录无法枚举：
@@ -143,14 +148,14 @@ JSONL 第一行是 `summary`，后续每行是一条目录盘点记录。所有�
 - 临时文件被清理；
 - 源项目不产生任何写入。
 
-未变化项目重复盘点会得到字节稳定的基础 Manifest；B-04 才会引入 scan generation 和增量复用语义。
+上述原子替换和失败语义继续适用于 B-04。B-03 v1 的未变化输出可以字节稳定；当前 B-04 v2 会在每次成功扫描时增加 summary 中的 `scan_generation`，因此不再要求整个 Manifest 字节不变。
 
-## 7. 明确非目标
+## 7. B-03 明确非目标
 
-B-03 不实现：
+B-03 自身不实现：
 
 - 文件内容读取、文本或二进制提取；
-- 内容 hash、SHA-256、文件大小、mtime 或 scan generation（B-04）；
+- 内容 hash、SHA-256、文件大小、mtime 或 scan generation；这些已由 B-04 在 v2 中实现；
 - 格式、语言和科研角色分类（B-05）；
 - `processing_status`、`read_depth` 或最终原因枚举（B-06）；
 - LLM 调用、MCP、Hook、Web、知识页生成或旧数据迁移。

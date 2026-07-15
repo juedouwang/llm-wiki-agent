@@ -48,4 +48,8 @@ python -B -m unittest discover -s tests -v
 
 ## B-03 project-inventory coverage
 
-`test_project_inventory.py` verifies that inventory starts from a validated B-01 registration, consumes B-02 include/exclude and re-inclusion decisions, records every in-scope regular file regardless of extension, records excluded files and pruned-directory boundaries with reconcilable summaries, applies symbolic-link safety, writes every JSONL row as Schema v1, avoids hash/size/mtime/classification/final-status fields, never reads source-file content, leaves the source tree unchanged, produces byte-stable unchanged output, exposes parseable CLI JSON, and preserves the previous Manifest without temporary-file leaks when traversal fails.
+`test_project_inventory.py` retains the B-03 accountability checks: inventory starts from a validated B-01 registration, consumes B-02 include/exclude and re-inclusion decisions, records every in-scope regular file regardless of extension, records excluded files and pruned-directory boundaries with reconcilable summaries, applies symbolic-link safety, exposes parseable CLI JSON, leaves the source tree unchanged, and preserves the previous Manifest without temporary-file leaks when traversal fails.
+
+## B-04 file-fingerprint coverage
+
+The same test module verifies `project-inventory-v2`, scan-generation increments, SHA-256/size/mtime fields on ordinary files only, local hashing with source-tree zero writes, full fingerprint reuse for unchanged paths, same-size content replacement with restored mtime, mtime-only touches, add/rename/delete refreshes, B-03 v1 upgrade, fail-closed corrupt or future Manifests, and atomic preservation when hashing fails. It also asserts that format/language/research-role classification, final processing states, extracted content, Evidence IDs, and change-classification fields remain absent.

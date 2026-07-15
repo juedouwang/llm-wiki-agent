@@ -1,6 +1,6 @@
 # Project Registration and Storage Layout (Schema v1)
 
-A-03 established the storage boundary for project-scoped research data. B-01 adds deterministic project registration on top of that boundary, and B-03 now writes the first basic project Manifest. Registration still assigns identity and initializes empty storage only; it does not scan project files.
+A-03 established the storage boundary for project-scoped research data. B-01 adds deterministic project registration, B-03 writes the accountable directory ledger, and B-04 adds incremental regular-file fingerprints to that Manifest. Registration still assigns identity and initializes empty storage only; it does not scan project files.
 
 ## Storage contract
 
@@ -13,7 +13,7 @@ llm-wiki-agent/
 |   `-- projects/
 |       `-- <project_id>/
 |           |-- project.yaml
-|           |-- manifest.jsonl      # B-03 inventory; never created by registration
+|           |-- manifest.jsonl      # B-03 ledger + B-04 fingerprints; never created by registration
 |           |-- sources.jsonl       # later task; not created by registration
 |           |-- extracted/
 |           |-- indexes/
@@ -75,13 +75,13 @@ Registration guarantees:
 
 ## Inventory a registered project
 
-B-03 consumes the persisted B-01 registration and B-02 scan policy:
+B-03/B-04 inventory consumes the persisted B-01 registration and B-02 scan policy:
 
 ```powershell
 python tools/project.py inventory <project_id> --json
 ```
 
-The command writes only `.llmwiki/projects/<project_id>/manifest.jsonl`. Every in-scope regular file is recorded without a format whitelist; excluded files and each pruned-directory boundary remain accountable. The source project receives zero writes. See [`project-inventory.md`](project-inventory.md) for the record schema, exclusion reconciliation, symlink behavior, and atomic-failure contract.
+The command writes only `.llmwiki/projects/<project_id>/manifest.jsonl`. Every in-scope regular file is recorded without a format whitelist; excluded files and each pruned-directory boundary remain accountable. B-04 adds scan generation, SHA-256, size, mtime, and conservative fingerprint reuse while preserving source-project zero writes. See [`project-inventory.md`](project-inventory.md) for directory accounting and [`file-fingerprints.md`](file-fingerprints.md) for the current v2 artifact, cache, compatibility, and atomic-failure contract.
 
 ## `project.yaml`
 
@@ -173,7 +173,7 @@ That command and layout remain supported. `resolve_project_layout()` follows the
 
 A later migration task may copy validated legacy evidence into the project-scoped layout. Registration itself never invokes the legacy scanner.
 
-## B-01/B-02/B-03 boundary
+## B-01/B-02/B-03/B-04 boundary
 
 B-01 registration still does not scan a project. B-02 adds the separate, source-read-only policy layer in `tools/scan_policy.py`:
 
@@ -187,8 +187,9 @@ See [`scan-policy.md`](scan-policy.md) for the complete policy contract. Neither
 
 B-03 is the first consumer of both layers. It loads a project only by registered ID, inventories the effective boundary, and writes a versioned basic Manifest outside the source tree. It does not alter B-01 registration data or reinterpret B-02 rule precedence.
 
+B-04 upgrades the artifact to `project-inventory-v2`. It hashes every in-scope ordinary file locally, stores SHA-256/size/mtime plus a conservative local reuse key, increments generation only after a successful atomic replacement, and reads valid B-03 v1 Manifests as generation 0. Hash input is never extracted, persisted as raw content, sent to an LLM, or written back to the source project.
+
 Still isolated in later tasks:
 
-- source content hashes, file size/mtime, scan generations, and incremental reuse (B-04);
-- format/research-role classification and final Manifest states (B-05/B-06);
+- format/language/research-role classification and final Manifest states (B-05/B-06);
 - content extraction, source IDs, Evidence locators, semantic knowledge, retrieval, MCP, web UI, planning, and legacy-data migration.

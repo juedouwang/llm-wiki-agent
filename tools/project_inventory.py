@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Source-read-only directory inventory for registered research projects.
+"""Incremental, source-read-only inventory for registered research projects.
 
 B-03 consumes the B-01 project registration and B-02 scan policy, walks only
-approved directory boundaries, and writes a basic Schema v1 ``manifest.jsonl``.
-It deliberately does not read file contents, calculate content hashes, record
-size/mtime metadata, classify formats or research roles, or call an LLM.
+approved directory boundaries, and writes an accountable Schema v1 Manifest.
+B-04 adds scan generations and deterministic regular-file fingerprints while
+still avoiding content extraction, format/research-role classification, LLMs,
+host integration, and writes to the source research project.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import tempfile
@@ -22,7 +25,11 @@ from typing import Any, TextIO
 
 # Support both ``import tools.project_inventory`` and direct sibling imports.
 if __package__:
-    from .project_layout import LayoutError
+    from .project_layout import (
+        CURRENT_SCHEMA_VERSION,
+        LayoutError,
+        schema_version_of,
+    )
     from .project_registry import load_registered_project
     from .scan_policy import (
         PathDecision,
@@ -31,7 +38,11 @@ if __package__:
         load_scan_policy,
     )
 else:
-    from project_layout import LayoutError  # type: ignore[no-redef]
+    from project_layout import (  # type: ignore[no-redef]
+        CURRENT_SCHEMA_VERSION,
+        LayoutError,
+        schema_version_of,
+    )
     from project_registry import load_registered_project  # type: ignore[no-redef]
     from scan_policy import (  # type: ignore[no-redef]
         PathDecision,
@@ -41,9 +52,56 @@ else:
     )
 
 
-PROJECT_MANIFEST_SCHEMA_VERSION = 1
+PROJECT_MANIFEST_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
 PROJECT_MANIFEST_KIND = "llmwiki-project-manifest"
-PROJECT_MANIFEST_VERSION = "project-inventory-v1"
+LEGACY_PROJECT_MANIFEST_VERSION = "project-inventory-v1"
+PROJECT_MANIFEST_VERSION = "project-inventory-v2"
+CONTENT_HASH_ALGORITHM = "sha256"
+FINGERPRINT_CACHE_STRATEGY = "file-identity-change-v1"
+
+_HASH_CHUNK_BYTES = 1024 * 1024
+_MAX_FINGERPRINT_ATTEMPTS = 3
+_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+
+if os.name == "nt":  # pragma: no cover - exercised on Windows only
+    import ctypes
+    from ctypes import wintypes
+
+    class _WindowsFileBasicInfo(ctypes.Structure):
+        _fields_ = [
+            ("CreationTime", ctypes.c_longlong),
+            ("LastAccessTime", ctypes.c_longlong),
+            ("LastWriteTime", ctypes.c_longlong),
+            ("ChangeTime", ctypes.c_longlong),
+            ("FileAttributes", wintypes.DWORD),
+        ]
+
+    _KERNEL32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _CREATE_FILE_W = _KERNEL32.CreateFileW
+    _CREATE_FILE_W.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    _CREATE_FILE_W.restype = wintypes.HANDLE
+    _GET_FILE_INFORMATION_BY_HANDLE_EX = (
+        _KERNEL32.GetFileInformationByHandleEx
+    )
+    _GET_FILE_INFORMATION_BY_HANDLE_EX.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    _GET_FILE_INFORMATION_BY_HANDLE_EX.restype = wintypes.BOOL
+    _CLOSE_HANDLE = _KERNEL32.CloseHandle
+    _CLOSE_HANDLE.argtypes = [wintypes.HANDLE]
+    _CLOSE_HANDLE.restype = wintypes.BOOL
+    _INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
 
 _RECORD_TYPES = (
     "file",
@@ -63,18 +121,28 @@ class ProjectInventoryTraversalError(ProjectInventoryError):
     """Raised when an in-scope directory cannot be inventoried completely."""
 
 
+class ProjectManifestError(ProjectInventoryError):
+    """Raised when an existing Manifest cannot be safely reused or upgraded."""
+
+
+class _FileChangedDuringFingerprint(OSError):
+    """Internal retry signal for a file that changed during fingerprinting."""
+
+
 @dataclass(frozen=True)
 class ProjectInventoryResult:
-    """Location and accountable counts for one completed basic Manifest."""
+    """Location, generation, and accountable counts for one Manifest."""
 
     project_id: str
     project_root: Path
     manifest_file: Path
+    scan_generation: int
     total_records: int
     record_counts: dict[str, int]
     directories_scanned: int
     exclusion_summary: dict[str, dict[str, int]]
     symlink_summary: dict[str, int]
+    fingerprint_summary: dict[str, Any]
     policy: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
@@ -83,12 +151,76 @@ class ProjectInventoryResult:
             "project_root": str(self.project_root),
             "manifest_file": str(self.manifest_file),
             "manifest_version": PROJECT_MANIFEST_VERSION,
+            "scan_generation": self.scan_generation,
             "total_records": self.total_records,
             "record_counts": dict(self.record_counts),
             "directories_scanned": self.directories_scanned,
             "exclusion_summary": self.exclusion_summary,
             "symlink_summary": dict(self.symlink_summary),
+            "fingerprint_summary": dict(self.fingerprint_summary),
             "policy": self.policy,
+        }
+
+
+@dataclass(frozen=True)
+class _FingerprintCacheKey:
+    identity: str
+    change_token: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "strategy": FINGERPRINT_CACHE_STRATEGY,
+            "identity": self.identity,
+            "change_token": self.change_token,
+        }
+
+
+@dataclass(frozen=True)
+class _FileSnapshot:
+    size_bytes: int
+    mtime_ns: int
+    identity: str | None
+    change_token: str | None
+
+    @property
+    def cache_key(self) -> _FingerprintCacheKey | None:
+        if self.identity is None or self.change_token is None:
+            return None
+        return _FingerprintCacheKey(
+            identity=self.identity,
+            change_token=self.change_token,
+        )
+
+
+@dataclass(frozen=True)
+class _PriorFingerprint:
+    content_sha256: str
+    size_bytes: int
+    mtime_ns: int
+    cache_key: _FingerprintCacheKey | None
+
+
+@dataclass(frozen=True)
+class _PreviousManifest:
+    scan_generation: int
+    fingerprints: dict[str, _PriorFingerprint]
+
+
+@dataclass(frozen=True)
+class _FileFingerprint:
+    content_sha256: str
+    snapshot: _FileSnapshot
+    reused: bool
+
+    def record_fields(self) -> dict[str, Any]:
+        cache_key = self.snapshot.cache_key
+        return {
+            "content_sha256": self.content_sha256,
+            "size_bytes": self.snapshot.size_bytes,
+            "mtime_ns": self.snapshot.mtime_ns,
+            "fingerprint_cache": (
+                cache_key.as_dict() if cache_key is not None else None
+            ),
         }
 
 
@@ -120,12 +252,17 @@ class _SymlinkTask:
 @dataclass
 class _InventoryState:
     project_id: str
+    scan_generation: int
+    previous_fingerprints: dict[str, _PriorFingerprint]
     writer: TextIO
     record_counts: Counter[str] = field(default_factory=Counter)
     excluded_files: Counter[str] = field(default_factory=Counter)
     excluded_directories: Counter[str] = field(default_factory=Counter)
     symlink_reasons: Counter[str] = field(default_factory=Counter)
     directories_scanned: int = 0
+    fingerprinted_files: int = 0
+    hashed_files: int = 0
+    reused_files: int = 0
 
     def write(self, record: dict[str, Any]) -> None:
         self.writer.write(
@@ -147,6 +284,13 @@ class _InventoryState:
 
     def record_symlink_reason(self, reason_code: str) -> None:
         self.symlink_reasons[reason_code] += 1
+
+    def record_fingerprint(self, fingerprint: _FileFingerprint) -> None:
+        self.fingerprinted_files += 1
+        if fingerprint.reused:
+            self.reused_files += 1
+        else:
+            self.hashed_files += 1
 
 
 @dataclass
@@ -184,6 +328,580 @@ def _summary_base(project_id: str) -> dict[str, Any]:
         "record_type": "summary",
         "project_id": project_id,
     }
+
+
+def _is_integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _manifest_error(
+    manifest_file: Path,
+    message: str,
+    *,
+    line_number: int | None = None,
+) -> ProjectManifestError:
+    location = (
+        f"{manifest_file}:{line_number}"
+        if line_number is not None
+        else str(manifest_file)
+    )
+    return ProjectManifestError(f"invalid project Manifest at {location}: {message}")
+
+
+def _validate_manifest_record_base(
+    manifest_file: Path,
+    record: object,
+    *,
+    line_number: int,
+    project_id: str,
+    expected_manifest_version: str | None,
+) -> tuple[dict[str, Any], str]:
+    if not isinstance(record, dict):
+        raise _manifest_error(
+            manifest_file,
+            "each JSONL line must contain an object",
+            line_number=line_number,
+        )
+    try:
+        schema_version_of(
+            record,
+            allow_legacy=False,
+            max_supported=PROJECT_MANIFEST_SCHEMA_VERSION,
+        )
+    except LayoutError as exc:
+        raise _manifest_error(
+            manifest_file,
+            str(exc),
+            line_number=line_number,
+        ) from exc
+    if record.get("kind") != PROJECT_MANIFEST_KIND:
+        raise _manifest_error(
+            manifest_file,
+            f"unexpected kind {record.get('kind')!r}",
+            line_number=line_number,
+        )
+    if record.get("project_id") != project_id:
+        raise _manifest_error(
+            manifest_file,
+            "project_id does not match the registered project",
+            line_number=line_number,
+        )
+    manifest_version = record.get("manifest_version")
+    if manifest_version not in {
+        LEGACY_PROJECT_MANIFEST_VERSION,
+        PROJECT_MANIFEST_VERSION,
+    }:
+        raise _manifest_error(
+            manifest_file,
+            f"unsupported manifest_version {manifest_version!r}",
+            line_number=line_number,
+        )
+    if (
+        expected_manifest_version is not None
+        and manifest_version != expected_manifest_version
+    ):
+        raise _manifest_error(
+            manifest_file,
+            "all rows must use the summary manifest_version",
+            line_number=line_number,
+        )
+    return record, manifest_version
+
+
+def _parse_cache_key(
+    manifest_file: Path,
+    value: object,
+    *,
+    line_number: int,
+) -> _FingerprintCacheKey | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise _manifest_error(
+            manifest_file,
+            "fingerprint_cache must be an object or null",
+            line_number=line_number,
+        )
+    if value.get("strategy") != FINGERPRINT_CACHE_STRATEGY:
+        raise _manifest_error(
+            manifest_file,
+            "fingerprint_cache uses an unsupported strategy",
+            line_number=line_number,
+        )
+    identity = value.get("identity")
+    change_token = value.get("change_token")
+    if not isinstance(identity, str) or not identity:
+        raise _manifest_error(
+            manifest_file,
+            "fingerprint_cache.identity must be a non-empty string",
+            line_number=line_number,
+        )
+    if not isinstance(change_token, str) or not change_token:
+        raise _manifest_error(
+            manifest_file,
+            "fingerprint_cache.change_token must be a non-empty string",
+            line_number=line_number,
+        )
+    return _FingerprintCacheKey(identity=identity, change_token=change_token)
+
+
+def _parse_prior_fingerprint(
+    manifest_file: Path,
+    record: dict[str, Any],
+    *,
+    line_number: int,
+) -> _PriorFingerprint:
+    content_sha256 = record.get("content_sha256")
+    if not isinstance(content_sha256, str) or not _SHA256_PATTERN.fullmatch(
+        content_sha256
+    ):
+        raise _manifest_error(
+            manifest_file,
+            "file content_sha256 must be 64 lowercase hexadecimal characters",
+            line_number=line_number,
+        )
+    size_bytes = record.get("size_bytes")
+    if not _is_integer(size_bytes) or size_bytes < 0:
+        raise _manifest_error(
+            manifest_file,
+            "file size_bytes must be a non-negative integer",
+            line_number=line_number,
+        )
+    mtime_ns = record.get("mtime_ns")
+    if not _is_integer(mtime_ns):
+        raise _manifest_error(
+            manifest_file,
+            "file mtime_ns must be an integer",
+            line_number=line_number,
+        )
+    return _PriorFingerprint(
+        content_sha256=content_sha256,
+        size_bytes=size_bytes,
+        mtime_ns=mtime_ns,
+        cache_key=_parse_cache_key(
+            manifest_file,
+            record.get("fingerprint_cache"),
+            line_number=line_number,
+        ),
+    )
+
+
+def _validate_manifest_summary(
+    manifest_file: Path,
+    summary: dict[str, Any],
+    *,
+    project_root: Path,
+    manifest_version: str,
+    actual_counts: Counter[str],
+    total_records: int,
+) -> int:
+    stored_root = summary.get("project_root")
+    if not isinstance(stored_root, str) or (
+        _canonical_path_key(stored_root) != _canonical_path_key(project_root)
+    ):
+        raise _manifest_error(
+            manifest_file,
+            "project_root does not match the registered project",
+            line_number=1,
+        )
+    record_counts = summary.get("record_counts")
+    if not isinstance(record_counts, dict) or set(record_counts) != set(
+        _RECORD_TYPES
+    ):
+        raise _manifest_error(
+            manifest_file,
+            "record_counts must contain exactly the supported record types",
+            line_number=1,
+        )
+    for record_type in _RECORD_TYPES:
+        value = record_counts[record_type]
+        if not _is_integer(value) or value < 0:
+            raise _manifest_error(
+                manifest_file,
+                f"record_counts.{record_type} must be a non-negative integer",
+                line_number=1,
+            )
+        if value != actual_counts[record_type]:
+            raise _manifest_error(
+                manifest_file,
+                f"record_counts.{record_type} does not match the JSONL rows",
+                line_number=1,
+            )
+    stored_total = summary.get("total_records")
+    if (
+        not _is_integer(stored_total)
+        or stored_total < 0
+        or stored_total != total_records
+    ):
+        raise _manifest_error(
+            manifest_file,
+            "total_records does not match the JSONL rows",
+            line_number=1,
+        )
+
+    if manifest_version == LEGACY_PROJECT_MANIFEST_VERSION:
+        return 0
+
+    scan_generation = summary.get("scan_generation")
+    if not _is_integer(scan_generation) or scan_generation < 1:
+        raise _manifest_error(
+            manifest_file,
+            "scan_generation must be a positive integer",
+            line_number=1,
+        )
+    fingerprint_summary = summary.get("fingerprint_summary")
+    if not isinstance(fingerprint_summary, dict):
+        raise _manifest_error(
+            manifest_file,
+            "fingerprint_summary must be an object",
+            line_number=1,
+        )
+    if fingerprint_summary.get("algorithm") != CONTENT_HASH_ALGORITHM:
+        raise _manifest_error(
+            manifest_file,
+            "fingerprint_summary algorithm is unsupported",
+            line_number=1,
+        )
+    if (
+        fingerprint_summary.get("cache_strategy")
+        != FINGERPRINT_CACHE_STRATEGY
+    ):
+        raise _manifest_error(
+            manifest_file,
+            "fingerprint_summary cache_strategy is unsupported",
+            line_number=1,
+        )
+    hashed_files = fingerprint_summary.get("hashed_files")
+    reused_files = fingerprint_summary.get("reused_files")
+    if (
+        not _is_integer(hashed_files)
+        or hashed_files < 0
+        or not _is_integer(reused_files)
+        or reused_files < 0
+        or hashed_files + reused_files != actual_counts["file"]
+    ):
+        raise _manifest_error(
+            manifest_file,
+            "fingerprint_summary counts do not reconcile with file records",
+            line_number=1,
+        )
+    return scan_generation
+
+
+def _load_previous_manifest(
+    manifest_file: Path,
+    *,
+    project_id: str,
+    project_root: Path,
+) -> _PreviousManifest:
+    if not manifest_file.exists():
+        return _PreviousManifest(scan_generation=0, fingerprints={})
+    if not manifest_file.is_file():
+        raise ProjectManifestError(
+            f"registered project Manifest is not a file: {manifest_file}"
+        )
+
+    summary: dict[str, Any] | None = None
+    manifest_version: str | None = None
+    actual_counts: Counter[str] = Counter()
+    fingerprints: dict[str, _PriorFingerprint] = {}
+    seen_paths: set[str] = set()
+    total_records = 0
+    try:
+        with manifest_file.open("r", encoding="utf-8", newline="") as source:
+            for line_number, raw_line in enumerate(source, start=1):
+                line = raw_line.rstrip("\r\n")
+                if not line:
+                    raise _manifest_error(
+                        manifest_file,
+                        "blank JSONL lines are not allowed",
+                        line_number=line_number,
+                    )
+                try:
+                    decoded = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise _manifest_error(
+                        manifest_file,
+                        f"invalid JSON: {exc.msg}",
+                        line_number=line_number,
+                    ) from exc
+                record, row_version = _validate_manifest_record_base(
+                    manifest_file,
+                    decoded,
+                    line_number=line_number,
+                    project_id=project_id,
+                    expected_manifest_version=manifest_version,
+                )
+                record_type = record.get("record_type")
+                if line_number == 1:
+                    if record_type != "summary":
+                        raise _manifest_error(
+                            manifest_file,
+                            "the first row must be the summary",
+                            line_number=1,
+                        )
+                    summary = record
+                    manifest_version = row_version
+                    continue
+                if record_type not in _RECORD_TYPES:
+                    raise _manifest_error(
+                        manifest_file,
+                        f"unsupported record_type {record_type!r}",
+                        line_number=line_number,
+                    )
+                path_value = record.get("path")
+                if not isinstance(path_value, str) or not path_value:
+                    raise _manifest_error(
+                        manifest_file,
+                        "non-summary rows require a non-empty path",
+                        line_number=line_number,
+                    )
+                if path_value in seen_paths:
+                    raise _manifest_error(
+                        manifest_file,
+                        f"duplicate path {path_value!r}",
+                        line_number=line_number,
+                    )
+                seen_paths.add(path_value)
+                actual_counts[record_type] += 1
+                total_records += 1
+                if (
+                    manifest_version == PROJECT_MANIFEST_VERSION
+                    and record_type == "file"
+                ):
+                    fingerprints[path_value] = _parse_prior_fingerprint(
+                        manifest_file,
+                        record,
+                        line_number=line_number,
+                    )
+    except (OSError, UnicodeError) as exc:
+        raise ProjectManifestError(
+            f"could not read existing project Manifest {manifest_file}: {exc}"
+        ) from exc
+
+    if summary is None or manifest_version is None:
+        raise _manifest_error(manifest_file, "the Manifest is empty")
+    scan_generation = _validate_manifest_summary(
+        manifest_file,
+        summary,
+        project_root=project_root,
+        manifest_version=manifest_version,
+        actual_counts=actual_counts,
+        total_records=total_records,
+    )
+    return _PreviousManifest(
+        scan_generation=scan_generation,
+        fingerprints=(
+            fingerprints
+            if manifest_version == PROJECT_MANIFEST_VERSION
+            else {}
+        ),
+    )
+
+
+def _windows_change_time_token(path: Path) -> str | None:
+    if os.name != "nt":
+        return None
+    file_read_attributes = 0x0080
+    file_share_all = 0x0001 | 0x0002 | 0x0004
+    open_existing = 3
+    file_flag_open_reparse_point = 0x00200000
+    handle = _CREATE_FILE_W(
+        str(path),
+        file_read_attributes,
+        file_share_all,
+        None,
+        open_existing,
+        file_flag_open_reparse_point,
+        None,
+    )
+    if handle == _INVALID_HANDLE_VALUE:
+        return None
+    try:
+        information = _WindowsFileBasicInfo()
+        succeeded = _GET_FILE_INFORMATION_BY_HANDLE_EX(
+            handle,
+            0,
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+        )
+        if not succeeded:
+            return None
+        return f"windows-change-time-100ns:{information.ChangeTime}"
+    finally:
+        _CLOSE_HANDLE(handle)
+
+
+def _stat_identity(metadata: os.stat_result) -> str | None:
+    device = getattr(metadata, "st_dev", None)
+    inode = getattr(metadata, "st_ino", None)
+    if (
+        not _is_integer(device)
+        or not _is_integer(inode)
+        or inode == 0
+    ):
+        return None
+    return f"{device}:{inode}"
+
+
+def _stat_change_token(path: Path, metadata: os.stat_result) -> str | None:
+    if os.name == "nt":
+        return _windows_change_time_token(path)
+    ctime_ns = getattr(metadata, "st_ctime_ns", None)
+    if not _is_integer(ctime_ns):
+        return None
+    return f"stat-ctime-ns:{ctime_ns}"
+
+
+def _stat_signature(metadata: os.stat_result) -> tuple[object, ...]:
+    return (
+        stat.S_IFMT(metadata.st_mode),
+        _stat_identity(metadata),
+        metadata.st_size,
+        metadata.st_mtime_ns,
+    )
+
+
+def _capture_file_snapshot(path: Path) -> _FileSnapshot:
+    first = path.lstat()
+    if not stat.S_ISREG(first.st_mode):
+        raise _FileChangedDuringFingerprint(
+            "entry is no longer a regular file"
+        )
+    first_change = _stat_change_token(path, first)
+    second = path.lstat()
+    if not stat.S_ISREG(second.st_mode):
+        raise _FileChangedDuringFingerprint(
+            "entry is no longer a regular file"
+        )
+    second_change = _stat_change_token(path, second)
+    if _stat_signature(first) != _stat_signature(second):
+        raise _FileChangedDuringFingerprint(
+            "file metadata changed while capturing a fingerprint snapshot"
+        )
+    if first_change != second_change:
+        raise _FileChangedDuringFingerprint(
+            "filesystem change marker changed while capturing a snapshot"
+        )
+    return _FileSnapshot(
+        size_bytes=second.st_size,
+        mtime_ns=second.st_mtime_ns,
+        identity=_stat_identity(second),
+        change_token=second_change,
+    )
+
+
+def _metadata_matches_snapshot(
+    metadata: os.stat_result,
+    snapshot: _FileSnapshot,
+) -> bool:
+    if not stat.S_ISREG(metadata.st_mode):
+        return False
+    if metadata.st_size != snapshot.size_bytes:
+        return False
+    if metadata.st_mtime_ns != snapshot.mtime_ns:
+        return False
+    identity = _stat_identity(metadata)
+    return snapshot.identity is None or identity == snapshot.identity
+
+
+def _snapshots_match(first: _FileSnapshot, second: _FileSnapshot) -> bool:
+    return (
+        first.size_bytes == second.size_bytes
+        and first.mtime_ns == second.mtime_ns
+        and first.identity == second.identity
+        and first.change_token == second.change_token
+    )
+
+
+def _open_regular_file(path: Path) -> int:
+    flags = os.O_RDONLY
+    for optional_flag in ("O_BINARY", "O_CLOEXEC", "O_NOINHERIT", "O_NOFOLLOW"):
+        flags |= getattr(os, optional_flag, 0)
+    return os.open(path, flags)
+
+
+def _hash_file_content(path: Path, snapshot: _FileSnapshot) -> str:
+    descriptor = -1
+    try:
+        descriptor = _open_regular_file(path)
+        opened_metadata = os.fstat(descriptor)
+        path_metadata = path.lstat()
+        if not _metadata_matches_snapshot(opened_metadata, snapshot):
+            raise _FileChangedDuringFingerprint(
+                "opened file no longer matches the inventory snapshot"
+            )
+        if not _metadata_matches_snapshot(path_metadata, snapshot):
+            raise _FileChangedDuringFingerprint(
+                "file path changed before content hashing"
+            )
+
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(descriptor, _HASH_CHUNK_BYTES)
+            if not chunk:
+                break
+            digest.update(chunk)
+
+        if not _metadata_matches_snapshot(os.fstat(descriptor), snapshot):
+            raise _FileChangedDuringFingerprint(
+                "file metadata changed during content hashing"
+            )
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+    after = _capture_file_snapshot(path)
+    if not _snapshots_match(snapshot, after):
+        raise _FileChangedDuringFingerprint(
+            "file changed before its fingerprint could be committed"
+        )
+    return digest.hexdigest()
+
+
+def _can_reuse_fingerprint(
+    previous: _PriorFingerprint | None,
+    snapshot: _FileSnapshot,
+) -> bool:
+    cache_key = snapshot.cache_key
+    return bool(
+        previous is not None
+        and cache_key is not None
+        and previous.cache_key == cache_key
+        and previous.size_bytes == snapshot.size_bytes
+        and previous.mtime_ns == snapshot.mtime_ns
+    )
+
+
+def _fingerprint_regular_file(
+    path: Path,
+    previous: _PriorFingerprint | None,
+) -> _FileFingerprint:
+    last_error: OSError | None = None
+    for _attempt in range(_MAX_FINGERPRINT_ATTEMPTS):
+        try:
+            snapshot = _capture_file_snapshot(path)
+            if _can_reuse_fingerprint(previous, snapshot):
+                assert previous is not None
+                return _FileFingerprint(
+                    content_sha256=previous.content_sha256,
+                    snapshot=snapshot,
+                    reused=True,
+                )
+            content_sha256 = _hash_file_content(path, snapshot)
+            return _FileFingerprint(
+                content_sha256=content_sha256,
+                snapshot=snapshot,
+                reused=False,
+            )
+        except OSError as exc:
+            last_error = exc
+
+    detail = f": {last_error}" if last_error is not None else ""
+    raise ProjectInventoryTraversalError(
+        f"could not fingerprint in-scope regular file {path} after "
+        f"{_MAX_FINGERPRINT_ATTEMPTS} attempts{detail}"
+    ) from last_error
 
 
 def _canonical_path_key(path: str | Path) -> str:
@@ -464,6 +1182,7 @@ def _write_file(
     context: _TraversalContext,
     *,
     logical_path: str,
+    physical_path: Path,
     physical_relative_path: str,
 ) -> None:
     evaluation = _evaluate_boundary(
@@ -479,7 +1198,14 @@ def _write_file(
         evaluation.logical.path,
     )
     record.update(_boundary_fields(evaluation))
-    if not evaluation.included:
+    if evaluation.included:
+        fingerprint = _fingerprint_regular_file(
+            physical_path,
+            context.state.previous_fingerprints.get(evaluation.logical.path),
+        )
+        record.update(fingerprint.record_fields())
+        context.state.record_fingerprint(fingerprint)
+    else:
         record.update(_effective_reason_fields(evaluation))
         context.state.record_excluded_file(evaluation.reason_code)
     context.state.write(record)
@@ -543,6 +1269,7 @@ def _scan_directory(context: _TraversalContext, task: _DirectoryTask) -> None:
             _write_file(
                 context,
                 logical_path=logical_path,
+                physical_path=physical_path,
                 physical_relative_path=physical_relative_path,
             )
         else:
@@ -741,10 +1468,15 @@ def _build_summary_record(
         for record_type in _RECORD_TYPES
     }
     total_records = sum(record_counts.values())
+    if state.fingerprinted_files != record_counts["file"]:
+        raise ProjectInventoryTraversalError(
+            "fingerprint count does not reconcile with in-scope file records"
+        )
     summary = _summary_base(project_id)
     summary.update(
         {
             "project_root": str(project_root),
+            "scan_generation": state.scan_generation,
             "total_records": total_records,
             "record_counts": record_counts,
             "directories_scanned": state.directories_scanned,
@@ -752,6 +1484,12 @@ def _build_summary_record(
             "symlink_summary": {
                 reason: state.symlink_reasons[reason]
                 for reason in sorted(state.symlink_reasons)
+            },
+            "fingerprint_summary": {
+                "algorithm": CONTENT_HASH_ALGORITHM,
+                "cache_strategy": FINGERPRINT_CACHE_STRATEGY,
+                "hashed_files": state.hashed_files,
+                "reused_files": state.reused_files,
             },
             "policy": policy.as_dict(),
         }
@@ -807,22 +1545,29 @@ def inventory_project(
     *,
     policy_config: ScanPolicyConfig | None = None,
 ) -> ProjectInventoryResult:
-    """Inventory one B-01 registered project and atomically replace its Manifest.
+    """Fingerprint one registered project and atomically replace its Manifest.
 
-    The source project is only enumerated and stat'ed. The only write target is
-    the registered machine-state ``manifest.jsonl`` outside the source tree.
+    Source bytes are streamed only into local SHA-256 state; they are never
+    extracted, persisted, sent externally, or written back to the source tree.
+    The only write target is the registered machine-state ``manifest.jsonl``.
     """
 
     registration = load_registered_project(workspace_root, project_id)
-    policy = load_scan_policy(
-        registration.project_root,
-        config=policy_config,
-    )
     manifest_file = registration.layout.manifest_file
     if not manifest_file.parent.is_dir():
         raise ProjectInventoryError(
             f"registered machine-state directory is unavailable: {manifest_file.parent}"
         )
+    previous = _load_previous_manifest(
+        manifest_file,
+        project_id=registration.project_id,
+        project_root=registration.project_root,
+    )
+    scan_generation = previous.scan_generation + 1
+    policy = load_scan_policy(
+        registration.project_root,
+        config=policy_config,
+    )
 
     descriptor = -1
     spool_file: Path | None = None
@@ -840,6 +1585,8 @@ def inventory_project(
             descriptor = -1
             state = _InventoryState(
                 project_id=registration.project_id,
+                scan_generation=scan_generation,
+                previous_fingerprints=previous.fingerprints,
                 writer=writer,
             )
             _walk_project(registration.project_root, policy, state)
@@ -861,10 +1608,12 @@ def inventory_project(
         project_id=registration.project_id,
         project_root=registration.project_root,
         manifest_file=manifest_file,
+        scan_generation=summary["scan_generation"],
         total_records=summary["total_records"],
         record_counts=summary["record_counts"],
         directories_scanned=summary["directories_scanned"],
         exclusion_summary=summary["exclusion_summary"],
         symlink_summary=summary["symlink_summary"],
+        fingerprint_summary=summary["fingerprint_summary"],
         policy=summary["policy"],
     )

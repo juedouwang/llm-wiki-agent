@@ -82,7 +82,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     inventory = subparsers.add_parser(
         "inventory",
-        help="Inventory a registered project into a basic source-read-only Manifest.",
+        help="Inventory and fingerprint a registered project incrementally.",
     )
     inventory.add_argument("project_id", help="B-01 registered project ID")
     inventory.add_argument(
@@ -192,7 +192,10 @@ def _run_inventory(args: argparse.Namespace) -> int:
     print(f"Project inventoried: {result.project_id}")
     print(f"Source root:         {result.project_root}")
     print(f"Manifest:            {result.manifest_file}")
+    print(f"Scan generation:     {result.scan_generation}")
     print(f"In-scope files:      {result.record_counts['file']}")
+    print(f"Fingerprints hashed: {result.fingerprint_summary['hashed_files']}")
+    print(f"Fingerprints reused: {result.fingerprint_summary['reused_files']}")
     print(f"Pruned directories:  {result.record_counts['excluded_directory']}")
     print(f"Total records:       {result.total_records}")
     return 0
