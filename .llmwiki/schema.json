@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "kind": "llmwiki-workspace",
+  "machine_state_root": ".llmwiki/projects",
+  "knowledge_root": "wiki/projects"
+}

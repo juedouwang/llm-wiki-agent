@@ -1,0 +1,3 @@
+# Project machine state can contain local paths, hashes, indexes, and run data.
+projects/*
+!projects/.gitkeep

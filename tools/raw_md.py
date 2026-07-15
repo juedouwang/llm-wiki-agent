@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """
 Create a full-project raw Markdown evidence layer.
 
@@ -14,6 +12,8 @@ Default output:
 
 This command is deterministic and does not call an LLM API.
 """
+
+from __future__ import annotations
 
 import argparse
 import csv
@@ -34,11 +34,18 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
+# Support both ``import tools.raw_md`` and direct ``python tools/raw_md.py`` use.
+if __package__:
+    from .project_layout import CURRENT_SCHEMA_VERSION, LEGACY_SCHEMA_VERSION
+else:
+    from project_layout import CURRENT_SCHEMA_VERSION, LEGACY_SCHEMA_VERSION
+
 
 DEFAULT_MAX_FILE_MB = 20
 
 SKIP_DIR_NAMES = {
     ".git",
+    ".llmwiki",
     ".hg",
     ".svn",
     ".venv",
@@ -750,6 +757,7 @@ class RawMdBuilder:
         file_count = sum(1 for entry in self.entries if entry["kind"] == "file")
         dir_count = sum(1 for entry in self.entries if entry["kind"] == "dir")
         return {
+            "schema_version": CURRENT_SCHEMA_VERSION,
             "version": 1,
             "generated_at": self.generated_at,
             "project_root": str(self.config.project_root),
@@ -845,6 +853,7 @@ def build_raw_md_page(
             "---",
             f"title: {json.dumps(rel_path, ensure_ascii=False)}",
             "type: raw-md",
+            f"schema_version: {CURRENT_SCHEMA_VERSION}",
             f"source_path: {json.dumps(rel_path, ensure_ascii=False)}",
             f"source_hash: {json.dumps(source_hash) if source_hash else 'null'}",
             f"scope: {json.dumps(scope, ensure_ascii=False)}",
@@ -1081,6 +1090,7 @@ def format_report(manifest: dict[str, Any]) -> str:
     lines = [
         f"# Raw Markdown Conversion Report - {manifest['generated_at']}",
         "",
+        f"- Schema version: `{manifest.get('schema_version', LEGACY_SCHEMA_VERSION)}`",
         f"- Project root: `{manifest['project_root']}`",
         f"- Wiki root: `{manifest['wiki_root']}`",
         f"- Raw-md root: `{manifest['raw_md_root']}`",

@@ -43,6 +43,30 @@ tools/        # Standalone Python scripts
 
 ---
 
+## Project-Scoped Storage Contract (Schema v1)
+
+New research-project features must keep machine state and human-readable knowledge separate:
+
+```text
+.llmwiki/projects/<project_id>/   # local machine state and generated evidence
+wiki/projects/<project_id>/       # curated Markdown knowledge for people and agents
+```
+
+The machine-state tree uses `project.yaml`, `manifest.jsonl`, `sources.jsonl`, `extracted/`, `indexes/`, and `runs/`. The curated tree uses `overview.md`, `sources/`, `papers/`, `experiments/`, `claims/`, and `plans/`.
+
+Rules:
+1. New structured machine records, including `project.yaml` and JSON/JSONL files, must carry `schema_version`.
+2. Missing `schema_version` is legacy v0 and may be read only through the compatibility layer.
+3. Future unsupported schema versions must fail closed.
+4. Never silently move, rewrite, or delete legacy `<project-name>-wiki/` data.
+5. Do not place local paths, hashes, indexes, or run state in `wiki/projects/`.
+6. Do not place curated research summaries or plans in `.llmwiki/`.
+7. Use `tools/project_layout.py` for path validation, initialization, version checks, and legacy resolution.
+
+Existing top-level `wiki/` workflows and the current `raw-md` output layout remain compatible during migration. See `docs/project-storage-layout.md`.
+
+---
+
 ## Page Format
 
 Every wiki page uses this frontmatter:

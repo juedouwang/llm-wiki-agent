@@ -109,6 +109,19 @@ The layers have different jobs:
 
 Daily answers should start from the curated `wiki/` layer. For exact values, implementation details, disputed claims, or anything that depends on source fidelity, the agent should trace back to `raw-md/` and use it as the evidence layer. Do not bulk-copy every raw-md page into `wiki/sources/`; `wiki/sources/` remains a curated summary layer.
 
+## Project-Scoped Research Storage
+
+Schema v1 separates local machine state from curated research knowledge:
+
+```text
+.llmwiki/projects/<project_id>/   # manifests, extracted evidence, indexes, runs
+wiki/projects/<project_id>/       # overviews, papers, experiments, claims, plans
+```
+
+Generated project state is ignored by Git by default because it may contain local paths and derived indexes. Human-readable knowledge remains version-controlled. Existing `<project-name>-wiki/` raw-md outputs continue to work through an explicit legacy compatibility layer; A-03 does not silently migrate or delete them. Structured machine records use `schema_version`, with unversioned records treated as legacy v0 and unsupported future versions rejected.
+
+See `docs/project-storage-layout.md` for the full contract and compatibility rules.
+
 ## What You Get
 
 **Persistent wiki** — structured markdown pages that accumulate across sessions. Unlike chat, nothing is lost.

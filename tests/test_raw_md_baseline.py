@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from tools.project_layout import CURRENT_SCHEMA_VERSION
 from tools.raw_md import RawMdBuilder, RawMdConfig, sha256_file
 
 
@@ -79,6 +80,7 @@ class RawMdBaselineTests(unittest.TestCase):
         }
 
         self.assertEqual(set(EXPECTED_FILES), set(entries))
+        self.assertEqual(manifest["schema_version"], CURRENT_SCHEMA_VERSION)
         self.assertEqual(manifest["version"], 1)
         self.assertEqual(manifest["scope"], "primary")
         self.assertEqual(manifest["generated_at"], FIXED_CONVERSION_TIME)
@@ -119,6 +121,10 @@ class RawMdBaselineTests(unittest.TestCase):
                 output_path = self.wiki_root / Path(entries[source_path]["output_path"])
                 self.assertTrue(output_path.is_file())
                 page = output_path.read_text(encoding="utf-8")
+                self.assertIn(
+                    f"schema_version: {CURRENT_SCHEMA_VERSION}",
+                    page,
+                )
                 self.assertIn(f'source_path: "{source_path}"', page)
                 self.assertIn(f"- Source path: `{source_path}`", page)
                 self.assertIn(marker, page)
@@ -133,10 +139,50 @@ class RawMdBaselineTests(unittest.TestCase):
 
         report_path = self.wiki_root / "reports" / "raw-md-report.md"
         report = report_path.read_text(encoding="utf-8")
+        self.assertIn(
+            f"- Schema version: `{CURRENT_SCHEMA_VERSION}`",
+            report,
+        )
         self.assertIn("## Summary", report)
         self.assertIn("## Converted Files", report)
         self.assertIn("`src/model.py`", report)
         self.assertIn("This command does not call an LLM API.", report)
+
+    def test_machine_state_directory_is_excluded_from_source_evidence(self) -> None:
+        private_state = (
+            self.project_root
+            / ".llmwiki"
+            / "projects"
+            / "tiny-study"
+            / "indexes"
+            / "private.json"
+        )
+        private_state.parent.mkdir(parents=True)
+        private_state.write_text(
+            '{"local_path": "do-not-ingest"}\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        manifest = self.build_raw_md()
+        file_paths = {
+            entry["source_path"]
+            for entry in manifest["entries"]
+            if entry["kind"] == "file"
+        }
+        skipped = [
+            entry
+            for entry in manifest["entries"]
+            if entry["kind"] == "dir" and entry["source_path"] == ".llmwiki"
+        ]
+
+        self.assertNotIn(
+            ".llmwiki/projects/tiny-study/indexes/private.json",
+            file_paths,
+        )
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["status"], "skipped")
+        self.assertIn("excluded directory", skipped[0]["reason"])
 
     def test_repeated_build_is_stable_and_does_not_modify_sources(self) -> None:
         source_hashes_before = tree_hashes(self.project_root)
