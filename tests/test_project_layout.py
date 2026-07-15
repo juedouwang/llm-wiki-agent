@@ -59,6 +59,33 @@ class ProjectLayoutBaselineTests(unittest.TestCase):
         self.assertNotIn(layout.machine_root, layout.knowledge_root.parents)
         self.assertNotIn(layout.knowledge_root, layout.machine_root.parents)
 
+    def test_custom_knowledge_projects_root_preserves_machine_workspace(self) -> None:
+        custom_root = self.workspace_root.parent / "personal-knowledge" / "projects"
+        layout = ProjectLayout(
+            self.workspace_root,
+            "tiny-study",
+            custom_knowledge_projects_root=custom_root,
+        )
+
+        layout.ensure_directories()
+
+        self.assertEqual(layout.knowledge_projects_root, custom_root.resolve())
+        self.assertEqual(
+            layout.knowledge_root,
+            custom_root.resolve() / "tiny-study",
+        )
+        self.assertTrue(layout.machine_root.is_dir())
+        self.assertTrue(layout.knowledge_root.is_dir())
+        self.assertFalse(layout.workspace.knowledge_projects_root.exists())
+
+        resolution = resolve_project_layout(
+            self.workspace_root,
+            "tiny-study",
+            knowledge_projects_root=custom_root,
+        )
+        self.assertEqual(resolution.mode, "project")
+        self.assertEqual(resolution.project.knowledge_root, layout.knowledge_root)
+
     def test_ensure_directories_creates_contract_without_fake_records_or_pages(self) -> None:
         layout = ProjectLayout(self.workspace_root, "tiny-study")
         document = layout.ensure_directories()

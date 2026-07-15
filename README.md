@@ -56,7 +56,8 @@ All agents understand natural language and shorthand triggers:
 ingest raw/papers/my-paper.md              # ingest a markdown source
 ingest report.pdf                          # auto-converts in memory, then ingests
 ingest slides.pptx notes.docx              # batch, mixed formats
-python tools/raw_md.py /path/to/project     # build a full-project raw-md evidence layer
+python tools/project.py register /path/to/project --json  # register only; no scan
+python tools/raw_md.py /path/to/project     # legacy full-project raw-md evidence layer
 query: what are the main themes?           # synthesize answer from wiki pages
 lint                                       # find orphans, contradictions, gaps
 build graph                                # build graph.html from all wikilinks
@@ -118,9 +119,17 @@ Schema v1 separates local machine state from curated research knowledge:
 wiki/projects/<project_id>/       # overviews, papers, experiments, claims, plans
 ```
 
-Generated project state is ignored by Git by default because it may contain local paths and derived indexes. Human-readable knowledge remains version-controlled. Existing `<project-name>-wiki/` raw-md outputs continue to work through an explicit legacy compatibility layer; A-03 does not silently migrate or delete them. Structured machine records use `schema_version`, with unversioned records treated as legacy v0 and unsupported future versions rejected.
+Register an external research project without scanning or modifying it:
 
-See `docs/project-storage-layout.md` for the full contract and compatibility rules.
+```bash
+python tools/project.py register /path/to/project --json
+```
+
+The command normalizes the source path, generates a stable path-based `project_id`, writes Schema v1 `project.yaml`, records local Git metadata, and creates empty project-scoped storage. Repeat registration is idempotent. Use `--knowledge-root /path/to/knowledge/projects` to keep curated Markdown in a personal knowledge base; the command appends `<project_id>/` automatically. The machine workspace and knowledge root must remain outside the source project.
+
+Generated project state is ignored by Git by default because it may contain local paths and derived indexes. Human-readable knowledge remains version-controlled. Existing `<project-name>-wiki/` raw-md outputs continue to work through an explicit legacy compatibility layer; no command silently migrates or deletes them. Structured machine records use `schema_version`, with unversioned records treated as legacy v0 and unsupported future versions rejected.
+
+See `docs/project-storage-layout.md` for the registration, storage, and compatibility rules.
 
 ## Research Assistant Evolution (In Development)
 

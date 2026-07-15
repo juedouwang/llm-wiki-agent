@@ -209,15 +209,20 @@ class WorkspaceLayout:
     def schema_file(self) -> Path:
         return self.machine_root / "schema.json"
 
-    def ensure(self) -> VersionedDocument:
-        """Create layout roots and a v1 marker, preserving legacy markers.
+    def ensure(
+        self,
+        *,
+        create_default_knowledge_root: bool = True,
+    ) -> VersionedDocument:
+        """Create machine roots, an optional default knowledge root, and marker.
 
         Existing markers are validated but never rewritten implicitly. A
         separate future migration task must perform any schema upgrade.
         """
 
         self.machine_projects_root.mkdir(parents=True, exist_ok=True)
-        self.knowledge_projects_root.mkdir(parents=True, exist_ok=True)
+        if create_default_knowledge_root:
+            self.knowledge_projects_root.mkdir(parents=True, exist_ok=True)
 
         if not self.schema_file.exists():
             write_versioned_json(
@@ -245,10 +250,15 @@ class WorkspaceLayout:
 
 @dataclass(frozen=True)
 class ProjectLayout:
-    """Paths for one project under the v1 separated storage contract."""
+    """Paths for one project under the v1 separated storage contract.
+
+    ``custom_knowledge_projects_root`` is the parent directory that holds
+    one curated knowledge directory per project.
+    """
 
     workspace_root: Path
     project_id: str
+    custom_knowledge_projects_root: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -257,6 +267,12 @@ class ProjectLayout:
             Path(self.workspace_root).expanduser().resolve(),
         )
         object.__setattr__(self, "project_id", validate_project_id(self.project_id))
+        if self.custom_knowledge_projects_root is not None:
+            object.__setattr__(
+                self,
+                "custom_knowledge_projects_root",
+                Path(self.custom_knowledge_projects_root).expanduser().resolve(),
+            )
 
     @property
     def workspace(self) -> WorkspaceLayout:
@@ -267,8 +283,16 @@ class ProjectLayout:
         return self.workspace.machine_projects_root / self.project_id
 
     @property
+    def knowledge_projects_root(self) -> Path:
+        return (
+            self.custom_knowledge_projects_root
+            if self.custom_knowledge_projects_root is not None
+            else self.workspace.knowledge_projects_root
+        )
+
+    @property
     def knowledge_root(self) -> Path:
-        return self.workspace.knowledge_projects_root / self.project_id
+        return self.knowledge_projects_root / self.project_id
 
     @property
     def project_file(self) -> Path:
@@ -309,7 +333,11 @@ class ProjectLayout:
     def ensure_directories(self) -> VersionedDocument:
         """Initialize only the directory contract, not project records/pages."""
 
-        workspace_document = self.workspace.ensure()
+        workspace_document = self.workspace.ensure(
+            create_default_knowledge_root=(
+                self.custom_knowledge_projects_root is None
+            )
+        )
         self.machine_root.mkdir(parents=True, exist_ok=True)
         self.knowledge_root.mkdir(parents=True, exist_ok=True)
         for directory in self.machine_directories + self.knowledge_directories:
@@ -372,15 +400,21 @@ def resolve_project_layout(
     project_id: str,
     *,
     legacy_wiki_root: Path | None = None,
+    knowledge_projects_root: Path | None = None,
 ) -> LayoutResolution:
     """Prefer v1 project storage, falling back to an existing legacy layout.
 
     Resolution is read-only: it does not create, migrate, rename, or delete
-    anything. When both layouts exist, v1 wins and the legacy manifest remains
-    available as a fallback candidate for explicit migration/inspection.
+    anything. ``knowledge_projects_root`` optionally overrides the default
+    curated-knowledge parent. When both layouts exist, v1 wins and the legacy
+    manifest remains available for explicit migration or inspection.
     """
 
-    project = ProjectLayout(workspace_root=workspace_root, project_id=project_id)
+    project = ProjectLayout(
+        workspace_root=workspace_root,
+        project_id=project_id,
+        custom_knowledge_projects_root=knowledge_projects_root,
+    )
     legacy = LegacyRawMdLayout(legacy_wiki_root) if legacy_wiki_root else None
     project_exists = project.machine_root.exists() or project.knowledge_root.exists()
 

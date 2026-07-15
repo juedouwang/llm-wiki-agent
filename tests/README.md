@@ -37,3 +37,7 @@ python -B -m unittest discover -s tests -v
 ## A-03 storage-layout coverage
 
 `test_project_layout.py` verifies that machine state and human-readable knowledge use disjoint project roots, project IDs cannot escape those roots, directory initialization is idempotent, schema v1 documents are validated, legacy unversioned JSON remains readable without mutation, future schemas fail closed, and existing `<project-name>-wiki` raw-md layouts remain available as an explicit fallback.
+
+## B-01 project-registration coverage
+
+`test_project_registration.py` verifies stable path-based IDs, Schema v1 `project.yaml`, optional onboarding and external `knowledge_root`, read-only local Git metadata, credential redaction, repeated-registration idempotency, source-tree zero writes, path/ID conflicts, fail-closed corrupt records, and direct CLI JSON output. B-01 deliberately creates no file Manifest, extracted content, knowledge page, or LLM output.

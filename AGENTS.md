@@ -61,6 +61,14 @@ Rules:
 6. Do not place curated research summaries or plans in `.llmwiki/`.
 7. Use `tools/project_layout.py` for path validation, initialization, version checks, and legacy resolution.
 
+Register an external research project with:
+
+```bash
+python tools/project.py register <project-path> --json
+```
+
+Registration is deterministic and source-read-only. It creates a stable project identity and empty external storage only; it must not be described as a completed scan. `--knowledge-root` selects the parent directory for curated per-project Markdown.
+
 Existing top-level `wiki/` workflows and the current `raw-md` output layout remain compatible during migration. See `docs/project-storage-layout.md`.
 
 ---
