@@ -122,6 +122,13 @@ Generated project state is ignored by Git by default because it may contain loca
 
 See `docs/project-storage-layout.md` for the full contract and compatibility rules.
 
+## Research Assistant Evolution (In Development)
+
+The `research-assistant` branch is evolving this repository into a local-first, evidence-grounded research workspace that integrates with host agents such as Codex and Claude Code. The target includes one-click project understanding, 15 Markdown research artifacts, source-level evidence, incremental reconciliation, cross-project knowledge, daily planning, and a rebuildable local web dashboard. These are roadmap targets, not claims about the current release.
+
+- [Final product and scan-output contract](docs/research-assistant-product-contract.md)
+- [Minimum-scope implementation roadmap](docs/research-assistant-roadmap.md)
+
 ## What You Get
 
 **Persistent wiki** — structured markdown pages that accumulate across sessions. Unlike chat, nothing is lost.
