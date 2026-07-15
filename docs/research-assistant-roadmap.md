@@ -26,7 +26,9 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | A-01 对齐目标仓库 | 已完成 | `96f43f0` | `checkpoint/a-01-repo-aligned` |
 | A-02 建立基线测试 | 已完成 | `3084d7d` | `checkpoint/a-02-baseline-tests` |
 | A-03 划分机器状态与知识内容 | 已完成 | `da4022c` | `checkpoint/a-03-storage-layout` |
-| P-05 最终产品与 Agent 原生闭环约定 | 本次落库 | 本次提交 | `checkpoint/p-05-product-contract` |
+| P-05 最终产品与 Agent 原生闭环约定 | 已完成 | `272c693` | `checkpoint/p-05-product-contract` |
+| B-01 项目注册 | 已完成 | `15d317a` | `checkpoint/b-01-project-register` |
+| B-02 扫描策略 | 本次落库 | 本次提交 | `checkpoint/b-02-scan-policy` |
 
 ## 3. 后续最小改动计划
 
@@ -310,19 +312,18 @@ git tag checkpoint/b-01-project-register
 
 ## 6. 下一项可执行任务
 
-下一项仍是：
+B-02 完成后的下一项是：
 
-> **B-01：项目注册**
+> **B-03：目录盘点与基础 Manifest**
 
 它的最小范围严格限制为：
 
-- 建立项目注册命令/API；
-- 规范化项目根路径；
-- 生成并持久化稳定 `project_id`；
-- 解析默认或用户配置的 `knowledge_root`，且不写入被扫描项目；
-- 写入 Schema v1 `project.yaml`；
-- 记录基础 Git 信息和可选首次登记字段；
-- 重复注册幂等；
-- 不扫描文件、不实现 ignore、不做内容提取、不调用 LLM、不建立 MCP。
+- 读取已注册项目和 B-02 的有效扫描策略；
+- 只遍历目录并记录扫描范围内的所有文件条目；
+- 不支持的格式也必须进入 Manifest，不能静默消失；
+- 对被剪枝的范围外目录生成可对账的排除摘要；
+- 使用 B-02 的符号链接保护维护祖先链与已访问目标；
+- 保证源项目零写入；
+- 不计算内容 hash、不提取文件内容、不调用 LLM、不建立 MCP。
 
-完成 B-01 后再单独进入 B-02，避免把注册、扫描策略和 Manifest 混成一次大改动。
+完成 B-03 后再进入 B-04，为目录账本增加 scan generation、内容 hash 和幂等复用，避免把盘点正确性与增量识别混为一次改动。

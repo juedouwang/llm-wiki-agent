@@ -131,12 +131,15 @@ Generated project state is ignored by Git by default because it may contain loca
 
 See `docs/project-storage-layout.md` for the registration, storage, and compatibility rules.
 
+B-02 now provides a deterministic, source-read-only scan-policy core. It reads an optional project `.llmwikiignore`, layers explicit include/exclude rules, keeps protected VCS/Core state excluded, applies size and sensitive-path controls, defaults Research Core external sends to `local-only`, and returns explainable path, raw-content, external-send, and symlink decisions. It does not yet inventory files or create a Manifest. See `docs/scan-policy.md`.
+
 ## Research Assistant Evolution (In Development)
 
 The `research-assistant` branch is evolving this repository into a local-first, evidence-grounded research workspace that integrates with host agents such as Codex and Claude Code. The target includes one-click project understanding, 15 Markdown research artifacts, source-level evidence, incremental reconciliation, cross-project knowledge, daily planning, and a rebuildable local web dashboard. These are roadmap targets, not claims about the current release.
 
 - [Final product and scan-output contract](docs/research-assistant-product-contract.md)
 - [Minimum-scope implementation roadmap](docs/research-assistant-roadmap.md)
+- [B-02 explainable scan-policy contract](docs/scan-policy.md)
 
 ## What You Get
 

@@ -41,3 +41,7 @@ python -B -m unittest discover -s tests -v
 ## B-01 project-registration coverage
 
 `test_project_registration.py` verifies stable path-based IDs, Schema v1 `project.yaml`, optional onboarding and external `knowledge_root`, read-only local Git metadata, credential redaction, repeated-registration idempotency, source-tree zero writes, path/ID conflicts, fail-closed corrupt records, and direct CLI JSON output. B-01 deliberately creates no file Manifest, extracted content, knowledge page, or LLM output.
+
+## B-02 scan-policy coverage
+
+`test_scan_policy.py` verifies default and protected exclusions, `.llmwikiignore` ordering and re-inclusion, explicit override precedence, glob behavior, configuration conflicts, invalid UTF-8 fail-closed behavior, file-size and sensitive-path access, three external-send modes, symlink root/cycle/duplicate protection, versioned policy serialization, and source-tree zero writes. B-02 deliberately performs no directory inventory, Manifest write, source hash, extraction, or LLM call.

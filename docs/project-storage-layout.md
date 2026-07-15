@@ -163,16 +163,21 @@ That command and layout remain supported. `resolve_project_layout()` follows the
 
 A later migration task may copy validated legacy evidence into the project-scoped layout. Registration itself never invokes the legacy scanner.
 
-## B-01 non-goals
+## B-01/B-02 boundary
 
-B-01 does not implement:
+B-01 registration still does not scan a project. B-02 adds the separate, source-read-only policy layer in `tools/scan_policy.py`:
 
-- `.llmwikiignore`, include/exclude rules, or scan policy;
-- file inventory or the full Manifest record schema;
-- content hashing or extraction;
-- source IDs or Evidence locators;
-- semantic research knowledge generation;
-- retrieval, MCP, web UI, or task planning;
-- legacy-data migration.
+- optional project-root `.llmwikiignore`;
+- explicit include/exclude precedence;
+- protected VCS/Core paths and overridable noise defaults;
+- content-size, sensitive-path, external-send, and symlink decisions;
+- stable explanations and a versioned machine-readable policy snapshot.
 
-Those features remain isolated in later B/C/D and subsequent roadmap tasks.
+See [`scan-policy.md`](scan-policy.md) for the complete contract. Neither registration nor policy loading performs file inventory or writes `manifest.jsonl`.
+
+Still isolated in later tasks:
+
+- directory inventory and exclusion summaries (B-03);
+- source content hashes and scan generations (B-04);
+- format/research-role classification and final Manifest states (B-05/B-06);
+- content extraction, source IDs, Evidence locators, semantic knowledge, retrieval, MCP, web UI, planning, and legacy-data migration.

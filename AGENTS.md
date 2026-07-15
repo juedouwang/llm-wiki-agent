@@ -69,6 +69,8 @@ python tools/project.py register <project-path> --json
 
 Registration is deterministic and source-read-only. It creates a stable project identity and empty external storage only; it must not be described as a completed scan. `--knowledge-root` selects the parent directory for curated per-project Markdown.
 
+Before any new project inventory or extraction workflow, load `tools/scan_policy.py`. The policy reads an optional root `.llmwikiignore`, applies protected/default and explicit include/exclude rules, and returns explanations for boundary, size, sensitive-path, external-send, and symlink decisions. Protected `.git/`, `.hg/`, `.svn/`, and `.llmwiki/` paths cannot be re-included. Research Core external sends default to `local-only`, and sensitive raw content must never be sent externally. B-02 policy evaluation is not a scan and must not create a Manifest or modify the source. See `docs/scan-policy.md`.
+
 Existing top-level `wiki/` workflows and the current `raw-md` output layout remain compatible during migration. See `docs/project-storage-layout.md`.
 
 ---
