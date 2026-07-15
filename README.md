@@ -131,7 +131,15 @@ Generated project state is ignored by Git by default because it may contain loca
 
 See `docs/project-storage-layout.md` for the registration, storage, and compatibility rules.
 
-B-02 now provides a deterministic, source-read-only scan-policy core. It reads an optional project `.llmwikiignore`, layers explicit include/exclude rules, keeps protected VCS/Core state excluded, applies size and sensitive-path controls, defaults Research Core external sends to `local-only`, and returns explainable path, raw-content, external-send, and symlink decisions. It does not yet inventory files or create a Manifest. See `docs/scan-policy.md`.
+B-02 provides a deterministic, source-read-only scan-policy core. It reads an optional project `.llmwikiignore`, layers explicit include/exclude rules, keeps protected VCS/Core state excluded, applies size and sensitive-path controls, defaults Research Core external sends to `local-only`, and returns explainable path, raw-content, external-send, and symlink decisions. See `docs/scan-policy.md`.
+
+Create the B-03 basic Manifest for an already registered project:
+
+```bash
+python tools/project.py inventory <project_id> --json
+```
+
+The inventory records every in-scope regular file regardless of format, records excluded files and pruned-directory boundaries for reconciliation, applies B-02 symbolic-link safety, and atomically writes `.llmwiki/projects/<project_id>/manifest.jsonl`. It does not read source-file content, hash files, record size/mtime, classify formats or research roles, call an LLM, or modify the source project. See `docs/project-inventory.md`.
 
 ## Research Assistant Evolution (In Development)
 
@@ -140,6 +148,7 @@ The `research-assistant` branch is evolving this repository into a local-first, 
 - [Final product and scan-output contract](docs/research-assistant-product-contract.md)
 - [Minimum-scope implementation roadmap](docs/research-assistant-roadmap.md)
 - [B-02 explainable scan-policy contract](docs/scan-policy.md)
+- [B-03 project inventory and basic Manifest contract](docs/project-inventory.md)
 
 ## What You Get
 

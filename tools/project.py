@@ -11,11 +11,18 @@ from typing import Sequence
 
 # Support both ``python -m tools.project`` and ``python tools/project.py``.
 if __package__:
+    from .project_inventory import inventory_project
     from .project_layout import LayoutError
     from .project_registry import register_project
+    from .scan_policy import ScanPolicyConfig, ScanPolicyError
 else:
+    from project_inventory import inventory_project  # type: ignore[no-redef]
     from project_layout import LayoutError  # type: ignore[no-redef]
     from project_registry import register_project  # type: ignore[no-redef]
+    from scan_policy import (  # type: ignore[no-redef]
+        ScanPolicyConfig,
+        ScanPolicyError,
+    )
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -72,6 +79,41 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print a machine-readable JSON result",
     )
+
+    inventory = subparsers.add_parser(
+        "inventory",
+        help="Inventory a registered project into a basic source-read-only Manifest.",
+    )
+    inventory.add_argument("project_id", help="B-01 registered project ID")
+    inventory.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    inventory.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="Explicit B-02 include pattern; repeat for multiple patterns",
+    )
+    inventory.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="Explicit B-02 exclude pattern; repeat for multiple patterns",
+    )
+    inventory.add_argument(
+        "--follow-symlinks",
+        action="store_true",
+        help="Enable B-02 safe in-project symbolic-link following",
+    )
+    inventory.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
     return parser
 
 
@@ -117,11 +159,52 @@ def _run_register(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_inventory(args: argparse.Namespace) -> int:
+    try:
+        config = ScanPolicyConfig(
+            include_patterns=tuple(args.include),
+            exclude_patterns=tuple(args.exclude),
+            follow_symlinks=args.follow_symlinks,
+        )
+        result = inventory_project(
+            workspace_root=args.workspace_root,
+            project_id=args.project_id,
+            policy_config=config,
+        )
+    except (LayoutError, ScanPolicyError, OSError) as exc:
+        if args.json:
+            print(
+                json.dumps(
+                    {"ok": False, "error": str(exc)},
+                    ensure_ascii=False,
+                ),
+                file=sys.stderr,
+            )
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        payload = {"ok": True, **result.as_dict()}
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+
+    print(f"Project inventoried: {result.project_id}")
+    print(f"Source root:         {result.project_root}")
+    print(f"Manifest:            {result.manifest_file}")
+    print(f"In-scope files:      {result.record_counts['file']}")
+    print(f"Pruned directories:  {result.record_counts['excluded_directory']}")
+    print(f"Total records:       {result.total_records}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.command == "register":
         return _run_register(args)
+    if args.command == "inventory":
+        return _run_inventory(args)
     parser.error(f"unsupported command: {args.command}")
     return 2
 

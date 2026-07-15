@@ -28,7 +28,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | A-03 划分机器状态与知识内容 | 已完成 | `da4022c` | `checkpoint/a-03-storage-layout` |
 | P-05 最终产品与 Agent 原生闭环约定 | 已完成 | `272c693` | `checkpoint/p-05-product-contract` |
 | B-01 项目注册 | 已完成 | `15d317a` | `checkpoint/b-01-project-register` |
-| B-02 扫描策略 | 本次落库 | 本次提交 | `checkpoint/b-02-scan-policy` |
+| B-02 扫描策略 | 已完成 | `07be63d` | `checkpoint/b-02-scan-policy` |
+| B-03 目录盘点与基础 Manifest | 本次落库 | 本次提交 | `checkpoint/b-03-project-inventory` |
 
 ## 3. 后续最小改动计划
 
@@ -312,18 +313,19 @@ git tag checkpoint/b-01-project-register
 
 ## 6. 下一项可执行任务
 
-B-02 完成后的下一项是：
+B-03 完成后的下一项是：
 
-> **B-03：目录盘点与基础 Manifest**
+> **B-04：文件指纹与增量 Manifest**
 
 它的最小范围严格限制为：
 
-- 读取已注册项目和 B-02 的有效扫描策略；
-- 只遍历目录并记录扫描范围内的所有文件条目；
-- 不支持的格式也必须进入 Manifest，不能静默消失；
-- 对被剪枝的范围外目录生成可对账的排除摘要；
-- 使用 B-02 的符号链接保护维护祖先链与已访问目标；
-- 保证源项目零写入；
-- 不计算内容 hash、不提取文件内容、不调用 LLM、不建立 MCP。
+- 在 B-03 基础目录账本上增加 scan generation；
+- 为普通文件记录内容 SHA-256、大小和 mtime；
+- 内容变化必须导致 hash 变化；
+- 仅触碰 mtime 时不能误报内容变化；
+- 重复扫描未变化文件时复用已有指纹结果；
+- 保持源项目零写入；
+- 不提前实现格式、语言或科研角色分类；
+- 不实现最终 `processing_status` / `read_depth`、内容提取、LLM、MCP、Hook 或 Web。
 
-完成 B-03 后再进入 B-04，为目录账本增加 scan generation、内容 hash 和幂等复用，避免把盘点正确性与增量识别混为一次改动。
+B-04 必须复用 B-03 的注册加载、目录边界、排除对账和符号链接安全，不能重新引入格式白名单或静默遗漏文件。

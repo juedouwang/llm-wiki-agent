@@ -45,3 +45,7 @@ python -B -m unittest discover -s tests -v
 ## B-02 scan-policy coverage
 
 `test_scan_policy.py` verifies default and protected exclusions, `.llmwikiignore` ordering and re-inclusion, explicit override precedence, glob behavior, configuration conflicts, invalid UTF-8 fail-closed behavior, file-size and sensitive-path access, three external-send modes, symlink root/cycle/duplicate protection, versioned policy serialization, and source-tree zero writes. B-02 deliberately performs no directory inventory, Manifest write, source hash, extraction, or LLM call.
+
+## B-03 project-inventory coverage
+
+`test_project_inventory.py` verifies that inventory starts from a validated B-01 registration, consumes B-02 include/exclude and re-inclusion decisions, records every in-scope regular file regardless of extension, records excluded files and pruned-directory boundaries with reconcilable summaries, applies symbolic-link safety, writes every JSONL row as Schema v1, avoids hash/size/mtime/classification/final-status fields, never reads source-file content, leaves the source tree unchanged, produces byte-stable unchanged output, exposes parseable CLI JSON, and preserves the previous Manifest without temporary-file leaks when traversal fails.

@@ -1,6 +1,6 @@
 # B-02 项目扫描策略约定
 
-- 状态：已实现扫描策略内核，尚未执行目录盘点
+- 状态：已实现扫描策略内核，并由 B-03 目录盘点消费
 - 实现：`tools/scan_policy.py`
 - 测试：`tests/test_scan_policy.py`
 - Schema：`llmwiki-scan-policy` v1
@@ -9,7 +9,7 @@
 
 B-02 把“哪些路径属于扫描边界、哪些内容可以本地读取、哪些原始内容可以发送给外部模型”变成确定性、可解释、可测试的策略。
 
-它只做策略判断，不遍历项目目录，不生成 `manifest.jsonl`，不计算源文件 hash，不提取内容，也不调用 LLM。B-03 将使用本策略进行全量目录盘点。因此，当前调用 `load_scan_policy()` 不等于完成项目扫描。
+它只做策略判断，不遍历项目目录，不生成 `manifest.jsonl`，不计算源文件 hash，不提取内容，也不调用 LLM。B-03 已使用本策略进行全量目录盘点，但当前单独调用 `load_scan_policy()` 仍不等于完成项目扫描。
 
 策略加载和判断都是源项目只读操作，不会创建、修改或删除被扫描项目中的文件。项目内的 `.llmwikiignore` 只有在用户或项目本身已经提供时才会被读取。
 
@@ -33,7 +33,7 @@ boundary = policy.decide_path("results/ablation.pdf", is_directory=False)
 access = policy.decide_file("models/model.ckpt", size_bytes=900_000_000)
 ```
 
-`policy.as_dict()` 返回带 `schema_version`、`kind`、有效配置和全部规则来源的机器可读快照。B-03/B-04 后续可以把该快照与扫描代次关联，从而判断扫描边界是否发生变化。
+`policy.as_dict()` 返回带 `schema_version`、`kind`、有效配置和全部规则来源的机器可读快照。B-03 把该快照写入基础 Manifest 摘要；B-04 后续再把它与 scan generation 和增量复用关联。
 
 ## 3. `.llmwikiignore` 语法
 
@@ -147,6 +147,8 @@ artifacts/tmp/
 5. 每次拒绝都返回稳定 `reason_code`，而不是静默跳过。
 
 B-02 提供 `assess_symlink_target()` 和 `decide_symlink()`，但不自行遍历目录。B-03 的目录盘点器负责维护祖先集合和全局已访问目标集合。
+
+B-03 还会同时检查符号链接的逻辑路径和规范化项目内目标路径，避免别名绕过 `.git/`、`.llmwiki/` 或用户排除规则。普通真实路径先于链接别名处理；每个链接无论是否跟随都有 Manifest 记录和稳定原因。完整消费约定见 [`project-inventory.md`](project-inventory.md)。
 
 ## 9. B-02 完成前后差异
 

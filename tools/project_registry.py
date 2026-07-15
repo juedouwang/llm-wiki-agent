@@ -592,6 +592,52 @@ def _registration_result(
     )
 
 
+def load_registered_project(
+    workspace_root: str | Path,
+    project_id: str,
+) -> ProjectRegistrationResult:
+    """Load one persisted B-01 registration without changing any storage."""
+
+    workspace = _normalized_output_root(workspace_root)
+    normalized_id = validate_project_id(project_id)
+    project_file = (
+        WorkspaceLayout(workspace).machine_projects_root
+        / normalized_id
+        / "project.yaml"
+    )
+    if not project_file.exists():
+        raise ProjectRecordError(f"project is not registered: {normalized_id}")
+    if not project_file.is_file():
+        raise ProjectRecordError(
+            f"registered project record is not a file: {project_file}"
+        )
+
+    record, stored_root, layout = _load_project_record(project_file, workspace)
+    try:
+        project_root = normalize_project_root(stored_root)
+    except ProjectPathError as exc:
+        raise ProjectRecordError(
+            f"registered project root is unavailable: {stored_root}"
+        ) from exc
+    if _path_key(project_root) != _path_key(stored_root):
+        raise ProjectRecordError(
+            f"registered project root no longer resolves consistently: {stored_root}"
+        )
+
+    _validate_output_boundaries(
+        project_root,
+        workspace,
+        layout.knowledge_projects_root,
+    )
+    _validate_layout_boundaries(project_root, layout)
+    return _registration_result(
+        created=False,
+        project_root=project_root,
+        record=record,
+        layout=layout,
+    )
+
+
 def register_project(
     workspace_root: str | Path,
     project_root: str | Path,

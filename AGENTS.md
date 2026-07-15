@@ -71,6 +71,14 @@ Registration is deterministic and source-read-only. It creates a stable project 
 
 Before any new project inventory or extraction workflow, load `tools/scan_policy.py`. The policy reads an optional root `.llmwikiignore`, applies protected/default and explicit include/exclude rules, and returns explanations for boundary, size, sensitive-path, external-send, and symlink decisions. Protected `.git/`, `.hg/`, `.svn/`, and `.llmwiki/` paths cannot be re-included. Research Core external sends default to `local-only`, and sensitive raw content must never be sent externally. B-02 policy evaluation is not a scan and must not create a Manifest or modify the source. See `docs/scan-policy.md`.
 
+Inventory a B-01 registered project with:
+
+```bash
+python tools/project.py inventory <project_id> --json
+```
+
+B-03 loads the registered source root, consumes the B-02 policy, records every in-scope regular file regardless of format, records excluded files and each pruned-directory boundary, and atomically writes only `.llmwiki/projects/<project_id>/manifest.jsonl`. Symbolic links are always recorded and use B-02 root/cycle/duplicate checks. Inventory must not read source-file content, calculate hashes, sizes or mtimes, classify formats or research roles, call an LLM, or write into the source project. See `docs/project-inventory.md`.
+
 Existing top-level `wiki/` workflows and the current `raw-md` output layout remain compatible during migration. See `docs/project-storage-layout.md`.
 
 ---
