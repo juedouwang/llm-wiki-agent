@@ -1,0 +1,3 @@
+model,validation_accuracy,loss
+baseline,0.80,0.42
+proposed,0.84,0.36
