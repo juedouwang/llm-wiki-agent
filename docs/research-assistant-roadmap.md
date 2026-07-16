@@ -35,7 +35,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | B-06 Manifest 文件状态双轴 | 已完成 | `9c6ba5d` | `checkpoint/b-06-manifest-file-state` |
 | B-08 覆盖率与失败报告 | 已完成 | `5c864a2` | `checkpoint/b-08-coverage-report` |
 | C-01 提取 Schema | 已完成 | `e4b3fed` | `checkpoint/c-01-extraction-schema` |
-| C-02 文本族提取器 | 本次落库 | 本次提交 | `checkpoint/c-02-text-extractors` |
+| C-02 文本族提取器 | 已完成 | `5093f80` | `checkpoint/c-02-text-extractors` |
+| C-03 Notebook extractor | 本次落库 | 本次提交 | `checkpoint/c-03-notebook-extractor` |
 
 ## 3. 后续最小改动计划
 
@@ -319,16 +320,16 @@ git tag checkpoint/b-01-project-register
 
 ## 6. 下一项可执行任务
 
-C-02 完成后的下一项是：
+The next task after C-03 is:
 
-> **C-03：Notebook 提取器**
+> **C-04: deterministic page-level PDF extraction**
 
-它的最小范围严格限制为：
+Its minimum scope is strictly limited to:
 
-- 只为 B-05 已识别的 Jupyter Notebook 实现本地确定性提取；
-- 使用 C-01 Schema 输出带 `NotebookCellLocator` 的 Block，保留 cell ID/index、类型、执行顺序和稳定输出摘要；
-- 使用 fixture 验证修改单个 cell 只影响对应块，大型或二进制输出被安全、可解释地截断；
-- 保留完整文件 hash、Notebook 格式元数据和明确失败理由，不修改源项目，不发送内容到外部服务；
-- 不提前实现 C-04 PDF、C-08 chunking、D 阶段 `source_id`/Evidence/回源、Manifest 状态调度、MCP、Hook、Web 或 LLM 行为。
+- locally and deterministically extract PDF files already classified by B-05;
+- emit C-01 Blocks with `PdfPageLocator`, exact one-based page numbers, and stable page order;
+- detect scanned or low-text pages and mark them for later OCR instead of fabricating page text;
+- retain the full-file hash, basic PDF metadata, and explicit failures without modifying the source project or sending content externally;
+- do not implement C-05 OCR/vision, C-08 chunking, D-stage `source_id`/Evidence/reopening, Manifest scheduling, MCP, Hook, Web, or LLM behavior.
 
-C-03 仍是 Research Core 的本地确定性提取能力，不执行 Notebook、不加载外部资源，也不生成科研结论。
+C-04 remains a local deterministic Research Core extraction capability. It does not run OCR, load external resources, or generate research conclusions.
