@@ -39,10 +39,14 @@ extract a locator unless the bytes still match the source registry's current
 content hash. Optional expected content and excerpt hashes allow direct callers
 to require a particular current version and exact excerpt.
 
-`open_evidence` loads one persisted D-03 Evidence record and requires both:
+`open_evidence` loads one persisted D-03 Evidence record and requires all of:
 
-1. the current source bytes match `Evidence.content_hash`; and
-2. the reopened excerpt matches `Evidence.excerpt_hash`.
+1. the current source version matches `Evidence.source_version`;
+2. the current source bytes match `Evidence.content_hash`; and
+3. the reopened excerpt matches `Evidence.excerpt_hash`.
+
+The version comparison happens before content-hash comparison, so an
+A -> B -> A byte recurrence cannot make old Evidence current again.
 
 A successful `SourceOpenResult` therefore reports
 `content_hash_verified: true`. `excerpt_hash_verified` is `true` when an
@@ -113,6 +117,7 @@ are not opened by D-04.
 | `source-not-registered` | The source or Evidence target is unknown or malformed |
 | `source-current-path-missing` | The current recorded path is absent or is not a regular file |
 | `source-path-outside-project` | The current path resolves beyond the registered source root |
+| `current-source-version-mismatch` | Evidence is bound to a non-current source version, even if the same bytes recur later |
 | `source-content-hash-mismatch` | Current bytes or a requested content hash differ from the recorded current source version |
 | `source-locator-invalid` | Locator JSON, bounds, page, cell, cell ID, or sheet is invalid for current content |
 | `source-locator-format-unsupported` | The source cannot be safely reopened by the locator-specific deterministic extractor |

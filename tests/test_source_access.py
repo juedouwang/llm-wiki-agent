@@ -42,6 +42,7 @@ from tools.source_access import (
     SourceLocatorError,
     SourceMissingError,
     SourceNotFoundError,
+    SourceVersionMismatchError,
     deserialize_locator,
     locate_source,
     open_evidence,
@@ -338,6 +339,58 @@ class SourceAccessTests(unittest.TestCase):
         self.assertEqual(result.evidence_source_version, 1)
         self.assertTrue(result.excerpt_hash_verified)
         self.assertEqual(before, self.source_snapshot())
+
+    def test_open_evidence_rejects_recurrent_content_from_newer_source_version(self) -> None:
+        source = self.source_for("src/model.py")
+        old = register_evidence(
+            self.workspace,
+            self.registration.project_id,
+            source_id=source.source_id,
+            content_hash=source.current_content_hash,
+            locator=LineRangeLocator(1, 1),
+            excerpt="alpha = 1\r\n",
+        ).evidence
+
+        self.code_path.write_bytes(b"changed = True\n")
+        inventory_project(self.workspace, self.registration.project_id)
+        sync_source_registry(self.workspace, self.registration.project_id)
+        self.code_path.write_bytes(self.code_bytes)
+        inventory_project(self.workspace, self.registration.project_id)
+        sync_source_registry(self.workspace, self.registration.project_id)
+
+        current = load_source_registry(
+            self.workspace,
+            self.registration.project_id,
+        ).current_by_path["src/model.py"]
+        self.assertEqual(current.current_version, 3)
+        self.assertEqual(current.current_content_hash, old.content_hash)
+        with self.assertRaises(SourceVersionMismatchError) as raised:
+            open_evidence(
+                self.workspace,
+                self.registration.project_id,
+                old.evidence_id,
+            )
+        self.assertEqual(
+            raised.exception.reason_code,
+            "current-source-version-mismatch",
+        )
+
+        current_evidence = register_evidence(
+            self.workspace,
+            self.registration.project_id,
+            source_id=current.source_id,
+            content_hash=current.current_content_hash,
+            locator=LineRangeLocator(1, 1),
+            excerpt="alpha = 1\r\n",
+        ).evidence
+        self.assertEqual(current_evidence.source_version, 3)
+        self.assertNotEqual(current_evidence.evidence_id, old.evidence_id)
+        reopened = open_evidence(
+            self.workspace,
+            self.registration.project_id,
+            current_evidence.evidence_id,
+        )
+        self.assertEqual(reopened.excerpt, "alpha = 1\r\n")
 
     def test_wrong_persisted_excerpt_changed_bytes_and_deleted_source_fail_explicitly(self) -> None:
         source = self.source_for("src/model.py")

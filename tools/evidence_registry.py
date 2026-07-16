@@ -59,7 +59,7 @@ EVIDENCE_KIND = "llmwiki-evidence"
 EVIDENCE_REGISTRY_KIND = "llmwiki-evidence-registry"
 EVIDENCE_VERSION = "evidence-v1"
 EVIDENCE_REGISTRY_VERSION = "evidence-registry-v1"
-EVIDENCE_IDENTITY_VERSION = "evidence-identity-v1"
+EVIDENCE_IDENTITY_VERSION = "evidence-identity-v2"
 EVIDENCE_HASH_ALGORITHM = "sha256"
 EXCERPT_TEXT_ENCODING = "utf-8"
 
@@ -217,6 +217,7 @@ def _identity_fields(
     *,
     project_id: str,
     source_id: str,
+    source_version: int,
     content_hash: str,
     locator: Locator,
     excerpt_hash: str,
@@ -225,6 +226,7 @@ def _identity_fields(
         "identity_version": EVIDENCE_IDENTITY_VERSION,
         "project_id": validate_project_id(project_id),
         "source_id": _source_id(source_id),
+        "source_version": _positive_integer(source_version, "source_version"),
         "content_hash": _sha256(content_hash, "content_hash"),
         "locator": _normalize_locator(locator).as_dict(),
         "excerpt_hash": _sha256(excerpt_hash, "excerpt_hash"),
@@ -235,6 +237,7 @@ def evidence_id_for(
     *,
     project_id: str,
     source_id: str,
+    source_version: int,
     content_hash: str,
     locator: Locator | dict[str, Any],
     excerpt_hash: str,
@@ -245,6 +248,7 @@ def evidence_id_for(
     payload = _identity_fields(
         project_id=project_id,
         source_id=source_id,
+        source_version=source_version,
         content_hash=content_hash,
         locator=normalized_locator,
         excerpt_hash=excerpt_hash,
@@ -275,6 +279,7 @@ class Evidence:
         expected_id = evidence_id_for(
             project_id=project_id,
             source_id=source_id,
+            source_version=source_version,
             content_hash=content_hash,
             locator=locator,
             excerpt_hash=excerpt_hash,
@@ -316,6 +321,7 @@ class Evidence:
         evidence_id = evidence_id_for(
             project_id=project_id,
             source_id=source_id,
+            source_version=source_version,
             content_hash=content_hash,
             locator=normalized_locator,
             excerpt_hash=digest,
@@ -872,6 +878,13 @@ def validate_evidence(
             False,
             "current-content-hash-mismatch",
             "Current recorded source content differs from Evidence.",
+        )
+    if source.current_version != evidence.source_version:
+        return EvidenceValidationResult(
+            evidence.evidence_id,
+            False,
+            "current-source-version-mismatch",
+            "Current recorded source version differs from Evidence.",
         )
     if observed_content_hash is not None and not evidence.matches_content_hash(
         observed_content_hash

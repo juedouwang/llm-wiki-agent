@@ -81,10 +81,10 @@ evd-<64 lowercase SHA-256 hex digits>
 The digest is derived from canonical JSON containing:
 
 ```text
-identity_version + project_id + source_id + content_hash + locator + excerpt_hash
+identity_version + project_id + source_id + source_version + content_hash + locator + excerpt_hash
 ```
 
-`source_version` is auditable binding metadata rather than an identity field. Re-registering the same exact Evidence is idempotent, including when the same source content hash recurs in later history.
+`source_version` is part of Evidence identity. Re-registering the same excerpt against the same source version is idempotent, but a later A -> B -> A content recurrence creates a distinct Evidence record. The older version remains non-current until that exact current version is reverified.
 
 Artifact constants:
 
@@ -93,7 +93,7 @@ Artifact constants:
 - Evidence version: `evidence-v1`
 - Registry kind: `llmwiki-evidence-registry`
 - Registry version: `evidence-registry-v1`
-- Identity version: `evidence-identity-v1`
+- Identity version: `evidence-identity-v2`
 - Hash algorithm: `sha256`
 - Text encoding: `utf-8`
 - Ordering: one summary row, then Evidence rows by `evidence_id`

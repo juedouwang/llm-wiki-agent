@@ -41,8 +41,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | C-08 定位保真分块 | 已完成 | `1eb64a2`, `6f01136` | `checkpoint/c-08-locator-chunking`, `checkpoint/c-08-locator-chunking-hardening` |
 | D-01 persistent source identity | complete | `a11fe6d` | `checkpoint/d-01-source-identity` |
 | D-02 source versions and path history | complete | `1230ac2` | `checkpoint/d-02-source-versions` |
-| D-03 precise Evidence schema | complete | `00f036c` | `checkpoint/d-03-evidence-schema` |
-| D-04 source locate/open | complete | current commit | `checkpoint/d-04-source-open` |
+| D-03 precise Evidence schema | complete | `00f036c`, current hardening commit | `checkpoint/d-03-evidence-schema`, `checkpoint/d-03-evidence-version-hardening` |
+| D-04 source locate/open | complete | `917475c` | `checkpoint/d-04-source-open` |
 
 ## 3. 后续最小改动计划
 

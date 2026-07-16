@@ -154,6 +154,7 @@ class EvidenceSchemaTests(unittest.TestCase):
                 key=lambda locator: evidence_id_for(
                     project_id=self.registration.project_id,
                     source_id=self.source.source_id,
+                    source_version=1,
                     content_hash=self.content_hash,
                     locator=locator,
                     excerpt_hash=next(
@@ -316,6 +317,50 @@ class EvidenceSchemaTests(unittest.TestCase):
         )
         self.assertEqual(loaded.records, (evidence,))
 
+    def test_recurrent_content_does_not_revalidate_an_old_source_version(self) -> None:
+        old = self.register(LineRangeLocator(1, 1), "VALUE = 1\n").evidence
+        model = self.project / "src" / "model.py"
+        model.write_text("VALUE = 2\n", encoding="utf-8", newline="\n")
+        inventory_project(self.workspace, self.registration.project_id)
+        sync_source_registry(self.workspace, self.registration.project_id)
+        model.write_text(
+            "VALUE = 1\nprint(VALUE)\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        inventory_project(self.workspace, self.registration.project_id)
+        sync_source_registry(self.workspace, self.registration.project_id)
+
+        current_sources = load_source_registry(
+            self.workspace,
+            self.registration.project_id,
+        )
+        current_source = current_sources.by_source_id[self.source.source_id]
+        self.assertEqual(current_source.current_version, 3)
+        self.assertEqual(current_source.current_content_hash, old.content_hash)
+        validation = validate_evidence(
+            old,
+            current_sources,
+            excerpt="VALUE = 1\n",
+        )
+        self.assertFalse(validation.valid)
+        self.assertEqual(
+            validation.reason_code,
+            "current-source-version-mismatch",
+        )
+
+        current = self.register(LineRangeLocator(1, 1), "VALUE = 1\n").evidence
+        self.assertEqual(current.source_version, 3)
+        self.assertNotEqual(current.evidence_id, old.evidence_id)
+        registry = load_evidence_registry(
+            self.workspace,
+            self.registration.project_id,
+        )
+        self.assertEqual(
+            {record.source_version for record in registry.records},
+            {1, 3},
+        )
+
     def test_loader_rejects_bad_versions_hashes_fields_ids_and_bindings(self) -> None:
         self.register()
         baseline = self.rows()
@@ -371,6 +416,7 @@ class EvidenceSchemaTests(unittest.TestCase):
         unknown_source[1]["evidence_id"] = evidence_id_for(
             project_id=self.registration.project_id,
             source_id=unknown_source[1]["source_id"],  # type: ignore[arg-type]
+            source_version=unknown_source[1]["source_version"],  # type: ignore[arg-type]
             content_hash=unknown_source[1]["content_hash"],  # type: ignore[arg-type]
             locator=unknown_source[1]["locator"],  # type: ignore[arg-type]
             excerpt_hash=unknown_source[1]["excerpt_hash"],  # type: ignore[arg-type]

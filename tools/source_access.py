@@ -139,6 +139,12 @@ class SourceContentMismatchError(SourceAccessError):
     reason_code = "source-content-hash-mismatch"
 
 
+class SourceVersionMismatchError(SourceAccessError):
+    """Raised when Evidence belongs to a non-current source version."""
+
+    reason_code = "current-source-version-mismatch"
+
+
 class SourceLocatorError(SourceAccessError):
     """Raised when a locator is invalid or cannot identify current content."""
 
@@ -687,6 +693,16 @@ def open_source(
 
     normalized_locator = _normalize_locator(locator)
     location = locate_source(workspace_root, project_id, source_id)
+    if evidence_source_version is not None:
+        if not _is_integer(evidence_source_version) or evidence_source_version < 1:
+            raise SourceVersionMismatchError(
+                "evidence_source_version must be a positive integer"
+            )
+        if evidence_source_version != location.current_version:
+            raise SourceVersionMismatchError(
+                "Evidence source version is not the current registered version: "
+                f"evidence {evidence_source_version}; current {location.current_version}"
+            )
     if expected_content_hash is not None:
         expected_content = _content_hash(
             expected_content_hash,
