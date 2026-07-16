@@ -37,7 +37,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | C-01 提取 Schema | 已完成 | `e4b3fed` | `checkpoint/c-01-extraction-schema` |
 | C-02 文本族提取器 | 已完成 | `5093f80` | `checkpoint/c-02-text-extractors` |
 | C-03 Notebook extractor | 已完成 | `946d05a`, `daf1330` | `checkpoint/c-03-notebook-extractor`, `checkpoint/c-03-notebook-payload-bounds` |
-| C-04 PDF page extractor | 本次落库 | 本次提交 | `checkpoint/c-04-pdf-extractor` |
+| C-04 PDF page extractor | 已完成 | `66a7ba7` | `checkpoint/c-04-pdf-extractor` |
+| C-08 定位保真分块 | 本次落库 | 本次提交 | `checkpoint/c-08-locator-chunking` |
 
 ## 3. 后续最小改动计划
 
@@ -321,15 +322,15 @@ git tag checkpoint/b-01-project-register
 
 ## 6. 下一项可执行任务
 
-The next task after C-04 is:
+C-08 已完成确定性定位保真分块。下一项任务是：
 
-> **C-08: deterministic locator-preserving chunking**
+> **D-01：持久来源身份**
 
-Its minimum scope is strictly limited to:
+最小范围严格限定为：
 
-- chunk existing C-01 extracted documents along grounded section, symbol, PDF page, Notebook cell, table-range, or line boundaries;
-- retain a reopenable original locator on every chunk and reject arbitrary boundaries that cannot be represented by the C-01 locator union;
-- prove that ordered chunks cover their source blocks without omission or overlap and that boundary snapshots are byte-stable;
-- do not add new format extraction, source identity, Evidence, source reopening/relocation, Manifest scheduling, MCP, Hook, Web, or LLM behavior.
+- 对 B-04/B-06 Manifest 中首次发现的范围内常规文件，由 Core 分配并持久化稳定 `source_id`；
+- 在项目机器状态中使用带 `schema_version` 的来源注册表，保证重复同步幂等、新增文件不改变旧 ID、并发写入不产生重复来源；
+- 保持源科研项目只读，并对损坏、未来版本和冲突注册表失败关闭；
+- 不实现 D-02 source version/路径别名历史，不实现 Evidence、原文重开、移动恢复、来源健康、提取调度、MCP、Hook、Web 或 LLM 行为。
 
-C-08 is deterministic structure preservation, not semantic summarization. D-stage identity and Evidence remain separate later tasks.
+D-01 只建立 Core 拥有的持久来源身份；版本演化和回源语义由后续 D-02～D-06 分别实现。
