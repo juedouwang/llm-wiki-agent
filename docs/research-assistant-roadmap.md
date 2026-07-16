@@ -44,7 +44,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | D-03 precise Evidence schema | complete | `00f036c`, `8e13c6f` | `checkpoint/d-03-evidence-schema`, `checkpoint/d-03-evidence-version-hardening` |
 | D-04 source locate/open | complete | `917475c` | `checkpoint/d-04-source-open` |
 | D-05 source relocation recovery | complete | `a49c6a8` | `checkpoint/d-05-source-relocation` |
-| D-06 source and Evidence health | complete | current task commit | `checkpoint/d-06-source-health` |
+| D-06 source and Evidence health | complete | `9b38353` | `checkpoint/d-06-source-health` |
+| J-01 R1 basic-chain acceptance | complete (R1 slice) | current task commit | `checkpoint/j-01-r1-e2e` |
 
 ## 3. 后续最小改动计划
 
@@ -203,6 +204,12 @@ B-01 → B-02 → B-03 → B-04 → B-05 → B-06 → B-08
 - 文件移动后可找回；
 - 可以用 `source_id` 重开当前原文。
 
+R1 was accepted on 2026-07-16 by the automated chain documented in
+[`r1-basic-chain-acceptance.md`](r1-basic-chain-acceptance.md). This closes only
+the deterministic R1 regression slice of J-01. The full 15-artifact J-01
+expansion covering `understand -> locate -> query -> reconcile -> plan -> render`
+remains scheduled for R3.
+
 ### R2：Core 与 Codex 的最小原生垂直切片
 
 建议顺序：
@@ -328,28 +335,18 @@ git tag checkpoint/b-01-project-register
 
 ## 6. Next executable task
 
-D-06 source and Evidence health is complete. The next task is:
+R1 trusted inventory and source-location acceptance is complete. Its final
+commit, test, limitation, and rollback record will be written after the J-01
+commit in `docs/r1-acceptance-report.md` so that the report can include the real
+commit ID.
 
-> **J-01 (R1 basic chain): repeatable end-to-end acceptance**
+The next executable roadmap task is:
 
-The minimum R1 slice is strictly limited to one deterministic generated fixture
-that runs from a clean temporary directory and proves:
+> **G-01: host-independent Research Core service facade**
 
-- the independent in-scope file set reconciles exactly with the accountable
-  inventory ledger, including every file's processing status, read depth, and
-  reason;
-- code, Notebook, and PDF extraction preserve exact C-01 locators through the
-  current deterministic extraction and chunking layers;
-- source synchronization creates stable source IDs and D-03 Evidence that D-04
-  can reopen from current original bytes;
-- moving one source and refreshing only the deterministic inventory allows D-05
-  and D-06 to recover the same source identity and revalidate its Evidence;
-- source-project file hashes and metadata remain unchanged by Core operations
-  other than the fixture's explicit test-controlled rename; and
-- the acceptance is callable repeatedly by the full test suite without network,
-  LLM, MCP, Hook, Web, query/synthesis, planning, or rendering behavior.
-
-This J-01 slice is an R1 regression harness, not implementation of later
-understand/query/reconcile/plan/render product stages. R1 acceptance is complete
-only after this chain, the full tests, Ruff baseline, wiki health, clean
-`research-assistant` branch, atomic commits, and checkpoint tags all pass.
+Its minimum R2 scope is to expose the already deterministic register, inventory
+(scan), coverage, and source-open capabilities behind one stable Python service
+boundary, then prove that direct service use and the corresponding CLI entry
+points return equivalent structured results without Codex-, Claude-, MCP-, Hook-,
+or Web-specific dependencies. G-07/G-08 and other R2 behavior remain separate
+atomic tasks.
