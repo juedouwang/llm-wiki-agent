@@ -11,17 +11,25 @@ import shutil
 import socket
 import stat
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 import urllib.request
 import webbrowser
 
+from tools import project_orchestrator as project_orchestrator_module
+from tools.advisory_lock import AdvisoryFileLock, AdvisoryLockTimeoutError
+from tools.coverage_report import generate_coverage_report
 from tools.project import main as project_main
-from tools.project_registry import load_registered_project
+from tools.project_inventory import inventory_project
+from tools.project_registry import load_registered_project, register_project
 from tools.project_runs import (
     PROJECT_RUN_RESULT_KIND,
     PROJECT_RUN_SCHEMA_VERSION,
     PROJECT_UNDERSTAND_STAGES,
+    ProjectRunError,
+    StageOutcome,
+    create_project_run,
 )
 from tools.research_core import ResearchCoreService
 
@@ -78,6 +86,56 @@ class ProjectUnderstandTests(unittest.TestCase):
             code = project_main(argv)
         return code, stdout.getvalue(), stderr.getvalue()
 
+    def assert_machine_state_lock_contended(self, lock_file: Path) -> None:
+        started = threading.Event()
+        errors: list[BaseException] = []
+
+        def contend() -> None:
+            started.set()
+            try:
+                with AdvisoryFileLock(lock_file, timeout_seconds=0.05):
+                    errors.append(AssertionError("contender acquired the shared lock"))
+            except BaseException as exc:
+                errors.append(exc)
+
+        contender = threading.Thread(target=contend, name="run-lock-contender")
+        contender.start()
+        self.assertTrue(started.wait(timeout=1.0))
+        contender.join(timeout=2.0)
+        self.assertFalse(contender.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], AdvisoryLockTimeoutError)
+
+    def assert_current_machine_artifact_hashes(self, result: object) -> None:
+        registration = load_registered_project(self.workspace, result.project_id)
+        expected_hashes = {
+            "manifest.jsonl": hashlib.sha256(
+                registration.layout.manifest_file.read_bytes()
+            ).hexdigest(),
+            "indexes/coverage-report.json": hashlib.sha256(
+                (
+                    registration.layout.indexes_dir / "coverage-report.json"
+                ).read_bytes()
+            ).hexdigest(),
+        }
+        artifacts = {
+            artifact["relative_path"]: artifact
+            for artifact in result.record["artifacts"]
+        }
+        self.assertIsNone(artifacts["project.yaml"]["content_hash"])
+        for relative_path, expected_hash in expected_hashes.items():
+            self.assertEqual(artifacts[relative_path]["content_hash"], expected_hash)
+
+        for stage in result.record["stages"][: len(DETERMINISTIC_PREFIX)]:
+            self.assertEqual(stage["artifacts"], stage["attempts"][0]["artifacts"])
+            for artifact in stage["artifacts"]:
+                relative_path = artifact["relative_path"]
+                if relative_path in expected_hashes:
+                    self.assertEqual(
+                        artifact["content_hash"],
+                        expected_hashes[relative_path],
+                    )
+
     def assert_deterministic_prefix(self, result: object) -> None:
         record = result.record
         stages = record["stages"]
@@ -127,6 +185,272 @@ class ProjectUnderstandTests(unittest.TestCase):
                 "manifest.jsonl",
                 "indexes/coverage-report.json",
             ],
+        )
+        self.assertIsNone(record["artifacts"][0]["content_hash"])
+        for artifact in record["artifacts"][1:]:
+            self.assertRegex(artifact["content_hash"], r"^[0-9a-f]{64}$")
+
+    def test_orchestrator_start_and_resume_hold_lock_for_complete_execution(
+        self,
+    ) -> None:
+        registration = register_project(
+            self.workspace,
+            self.source,
+            project_id="orchestrator-lock-study",
+            knowledge_root=self.knowledge_root,
+        )
+        cases = (
+            ("start", "run-20260716t000000000000z-111111111111"),
+            ("resume", "run-20260716t000000000000z-222222222222"),
+        )
+
+        for operation, run_id in cases:
+            with self.subTest(operation=operation):
+                if operation == "resume":
+                    create_project_run(
+                        self.workspace,
+                        registration.project_id,
+                        run_id=run_id,
+                        created_at="2026-07-16T00:00:00.000000Z",
+                        through_stage="register",
+                    )
+
+                initial_entered = threading.Event()
+                initial_release = threading.Event()
+                stage_entered = threading.Event()
+                stage_release = threading.Event()
+                final_write_entered = threading.Event()
+                final_write_release = threading.Event()
+                results: list[object] = []
+                errors: list[BaseException] = []
+
+                def run_registration_stage(_context: object) -> StageOutcome:
+                    stage_entered.set()
+                    if not stage_release.wait(timeout=5.0):
+                        raise AssertionError("orchestrator stage was not released")
+                    return StageOutcome.succeeded()
+
+                orchestrator = project_orchestrator_module.ProjectRunOrchestrator(
+                    self.workspace,
+                    runners={"register": run_registration_stage},
+                    run_id_factory=(
+                        lambda _moment, fixed_run_id=run_id: fixed_run_id
+                    ),
+                    lock_timeout_seconds=0.2,
+                )
+                initial_target = (
+                    "create_project_run" if operation == "start" else "load_project_run"
+                )
+                original_initial = getattr(
+                    project_orchestrator_module,
+                    initial_target,
+                )
+                original_save = project_orchestrator_module.save_project_run
+
+                def blocked_initial(*args: object, **kwargs: object) -> object:
+                    initial_entered.set()
+                    if not initial_release.wait(timeout=5.0):
+                        raise AssertionError("orchestrator initial load was not released")
+                    return original_initial(*args, **kwargs)
+
+                def blocked_save(*args: object, **kwargs: object) -> object:
+                    record = args[3] if len(args) > 3 else kwargs["record"]
+                    if record["status"] == "paused":  # type: ignore[index]
+                        final_write_entered.set()
+                        if not final_write_release.wait(timeout=5.0):
+                            raise AssertionError("orchestrator final write was not released")
+                    return original_save(*args, **kwargs)
+
+                def invoke() -> None:
+                    try:
+                        if operation == "start":
+                            result = orchestrator.start(
+                                registration.project_id,
+                                through_stage="register",
+                            )
+                        else:
+                            result = orchestrator.resume(
+                                registration.project_id,
+                                run_id,
+                                through_stage="register",
+                            )
+                        results.append(result)
+                    except BaseException as exc:
+                        errors.append(exc)
+
+                with (
+                    patch.object(
+                        project_orchestrator_module,
+                        initial_target,
+                        side_effect=blocked_initial,
+                    ),
+                    patch.object(
+                        project_orchestrator_module,
+                        "save_project_run",
+                        side_effect=blocked_save,
+                    ),
+                ):
+                    worker = threading.Thread(
+                        target=invoke,
+                        name=f"orchestrator-{operation}",
+                    )
+                    worker.start()
+                    try:
+                        self.assertTrue(initial_entered.wait(timeout=2.0))
+                        self.assert_machine_state_lock_contended(
+                            registration.layout.machine_state_lock_file
+                        )
+                        initial_release.set()
+
+                        self.assertTrue(stage_entered.wait(timeout=2.0))
+                        self.assert_machine_state_lock_contended(
+                            registration.layout.machine_state_lock_file
+                        )
+                        stage_release.set()
+
+                        self.assertTrue(final_write_entered.wait(timeout=2.0))
+                        self.assert_machine_state_lock_contended(
+                            registration.layout.machine_state_lock_file
+                        )
+                    finally:
+                        initial_release.set()
+                        stage_release.set()
+                        final_write_release.set()
+                        worker.join(timeout=5.0)
+
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(errors, [])
+                self.assertEqual(len(results), 1)
+                self.assertEqual(results[0].status, "paused")
+                with AdvisoryFileLock(
+                    registration.layout.machine_state_lock_file,
+                    timeout_seconds=0.2,
+                ):
+                    pass
+
+    def test_orchestrator_start_and_resume_timeout_use_project_run_error(
+        self,
+    ) -> None:
+        registration = register_project(
+            self.workspace,
+            self.source,
+            project_id="orchestrator-timeout-study",
+            knowledge_root=self.knowledge_root,
+        )
+        resume_run_id = "run-20260716t000000000000z-333333333333"
+        resume_run = create_project_run(
+            self.workspace,
+            registration.project_id,
+            run_id=resume_run_id,
+            created_at="2026-07-16T00:00:00.000000Z",
+            through_stage="register",
+        )
+        resume_bytes = resume_run.run_file.read_bytes()
+        cases = (
+            ("start", "run-20260716t000000000000z-444444444444"),
+            ("resume", resume_run_id),
+        )
+
+        with AdvisoryFileLock(registration.layout.machine_state_lock_file):
+            for operation, run_id in cases:
+                with self.subTest(operation=operation):
+                    started = threading.Event()
+                    errors: list[BaseException] = []
+                    orchestrator = project_orchestrator_module.ProjectRunOrchestrator(
+                        self.workspace,
+                        run_id_factory=(
+                            lambda _moment, fixed_run_id=run_id: fixed_run_id
+                        ),
+                        lock_timeout_seconds=0.05,
+                    )
+
+                    def contend() -> None:
+                        started.set()
+                        try:
+                            if operation == "start":
+                                orchestrator.start(
+                                    registration.project_id,
+                                    through_stage="register",
+                                )
+                            else:
+                                orchestrator.resume(
+                                    registration.project_id,
+                                    run_id,
+                                    through_stage="register",
+                                )
+                        except BaseException as exc:
+                            errors.append(exc)
+
+                    contender = threading.Thread(
+                        target=contend,
+                        name=f"orchestrator-{operation}-contender",
+                    )
+                    contender.start()
+                    self.assertTrue(started.wait(timeout=1.0))
+                    contender.join(timeout=2.0)
+                    self.assertFalse(contender.is_alive())
+                    self.assertEqual(len(errors), 1)
+                    self.assertIsInstance(errors[0], ProjectRunError)
+                    self.assertIsInstance(
+                        errors[0].__cause__,
+                        AdvisoryLockTimeoutError,
+                    )
+                    self.assertIn("machine-state lock", str(errors[0]))
+
+        self.assertEqual(resume_run.run_file.read_bytes(), resume_bytes)
+
+    def test_orchestrator_lock_is_reentrant_for_nested_inventory_and_coverage(
+        self,
+    ) -> None:
+        registration = register_project(
+            self.workspace,
+            self.source,
+            project_id="orchestrator-reentrant-study",
+            knowledge_root=self.knowledge_root,
+        )
+
+        def inventory_stage(_context: object) -> StageOutcome:
+            inventory_project(
+                self.workspace,
+                registration.project_id,
+                lock_timeout_seconds=0.05,
+            )
+            return StageOutcome.succeeded()
+
+        def coverage_stage(_context: object) -> StageOutcome:
+            generate_coverage_report(
+                self.workspace,
+                registration.project_id,
+                lock_timeout_seconds=0.05,
+            )
+            return StageOutcome.succeeded()
+
+        orchestrator = project_orchestrator_module.ProjectRunOrchestrator(
+            self.workspace,
+            runners={
+                "register": lambda _context: StageOutcome.succeeded(),
+                "inventory": inventory_stage,
+                "classify": coverage_stage,
+            },
+            run_id_factory=(
+                lambda _moment: "run-20260716t000000000000z-555555555555"
+            ),
+            lock_timeout_seconds=0.2,
+        )
+
+        result = orchestrator.start(
+            registration.project_id,
+            through_stage="classify",
+        )
+
+        self.assertEqual(result.status, "paused")
+        self.assertEqual(
+            [stage["status"] for stage in result.record["stages"][:3]],
+            ["succeeded", "succeeded", "succeeded"],
+        )
+        self.assertTrue(registration.layout.manifest_file.is_file())
+        self.assertTrue(
+            (registration.layout.indexes_dir / "coverage-report.json").is_file()
         )
 
     def test_core_fresh_delegates_register_then_start_only_through_classify(
@@ -415,6 +739,7 @@ class ProjectUnderstandTests(unittest.TestCase):
             )
             first = service.project_understand(self.source, **options)
             self.assert_deterministic_prefix(first)
+            self.assert_current_machine_artifact_hashes(first)
 
             registration = load_registered_project(
                 self.workspace,
@@ -433,6 +758,7 @@ class ProjectUnderstandTests(unittest.TestCase):
 
         self.assertEqual(resumed.run_id, first.run_id)
         self.assert_deterministic_prefix(resumed)
+        self.assert_current_machine_artifact_hashes(resumed)
         self.assertEqual(
             [len(stage["attempts"]) for stage in resumed.record["stages"][:3]],
             [1, 1, 1],
@@ -485,6 +811,7 @@ class ProjectUnderstandTests(unittest.TestCase):
         }
 
         first = service.project_understand(self.source, **options)
+        self.assert_current_machine_artifact_hashes(first)
         registration = load_registered_project(
             self.workspace,
             "repeated-understand-study",
@@ -495,6 +822,7 @@ class ProjectUnderstandTests(unittest.TestCase):
         self.assertNotEqual(first.run_id, second.run_id)
         self.assert_deterministic_prefix(first)
         self.assert_deterministic_prefix(second)
+        self.assert_current_machine_artifact_hashes(second)
         self.assertEqual(registration.project_file.read_bytes(), project_record_bytes)
         self.assertEqual(
             sorted(path.parent.name for path in registration.layout.runs_dir.glob("*/run.json")),
@@ -555,6 +883,7 @@ class ProjectUnderstandTests(unittest.TestCase):
         )
         self.assertEqual(payload, {"ok": True, **persisted.as_dict()})
         self.assert_deterministic_prefix(persisted)
+        self.assert_current_machine_artifact_hashes(persisted)
 
         registration = load_registered_project(
             self.workspace,

@@ -51,6 +51,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | G-08 budget-bounded Host Context Pack | complete | `3721fb5` | `checkpoint/g-08-host-context-pack` |
 | E-01 resumable staged run orchestration | complete | `146fc0f` | `checkpoint/e-01-run-orchestrator` |
 | E-08 deterministic one-action prefix (R2 slice) | complete | this task commit | `checkpoint/e-08-deterministic-understand` |
+| H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
+| H-07 conservative project reconciliation | complete after validation on 2026-07-16 | this task commit | `checkpoint/h-07-project-reconciliation` |
 
 ## 3. 后续最小改动计划
 
@@ -140,7 +142,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | H-04 `P0/M` | 建立 append-only 宿主事件账本和 `dirty paths` 队列，统一 Codex/Claude 事件模型 | 重复事件幂等；乱序事件可处理；事件不直接篡改知识 | Hook 事件散落 → 有宿主无关增量输入 |
 | H-05 `P1/M` | 选择性 reconciliation：只提取变化文件并刷新受影响产物 | 修改一个配置只触发有限阶段；与全量结果一致 | 每次全量重扫 → 更新更快、更省费用 |
 | H-06 `P1/M` | 删除、移动、多候选和外部大变更处理 | 移动恢复 ID；删除保留历史并标 missing；歧义要求确认 | 文件消失后关系断裂 → 历史和原因可追踪 |
-| H-07 `P0/M` | 定义同步边界：Hooks 提供即时信号，Stop/显式命令做 reconciliation，完整性失败时回退全扫 | 禁用 Hook 仍能闭环；漏事件可由 hash/diff 修复 | 依赖 Hook 可靠性 → 最终一致性可恢复 |
+| H-07 `P0/M` | 定义保守同步边界：Core/CLI/MCP 显式 reconciliation 对起始事件快照执行全量 `register→inventory→classify` correctness fallback，成功后只确认该快照 | Hooks 禁用或 hints 缺失/不一致时仍成功；失败和快照后事件保持 pending；严格 Schema v1 checkpoint 可核验 | 依赖 Hook 可靠性 → 有不依赖 hints 的最终一致性边界 |
 
 ### I. 目标、计划、执行和复盘
 
@@ -234,6 +236,8 @@ G-01 → G-07 → G-08
 - Hook 被禁用时仍可通过 Skill/MCP 显式完成同步。
 
 这是架构防偏门槛：如果这一阶段仍需要两个聊天窗口手工交接，应暂停后续开发修正设计。
+
+As of 2026-07-16, the deterministic R2 Core path through H-07 has been validated. J-05 remains required to package that boundary for Codex, so the broader R2 milestone is not yet complete. H-07 activates explicit reconciliation without requiring Hooks, but does not add Hook wiring, H-05 selective extraction, knowledge refresh, query, or planning.
 
 ### R3：一键完整项目理解与本地网站
 
@@ -362,7 +366,7 @@ durable resume behavior, and explicit capability limits are documented in
 [`project-understand.md`](project-understand.md). The full R3 E-08 contract--15
 Markdown artifacts plus Web rendering and `--open`--remains incomplete.
 
-H-04 is complete in this task commit and is checkpointed as
+H-04 remains complete at commit `5c2a888` and checkpoint
 `checkpoint/h-04-host-event-ledger`. The closed host-neutral Schema v1 ledger,
 contiguous ingestion ordering, canonical duplicate idempotency, collision
 handling, deterministic dirty-path projection, crash-repair ordering,
@@ -370,14 +374,36 @@ source-read-only boundary, and Core/CLI parity are documented in
 [`host-event-ledger.md`](host-event-ledger.md). H-04 records untrusted signals
 only; it does not claim reconciliation, Hook reliability, or selective refresh.
 
+H-07 is complete after validation on 2026-07-16 and is designated by
+`checkpoint/h-07-project-reconciliation`. The implemented Core, CLI, and
+`llmwiki_reconcile` operation snapshot the starting H-04 event boundary and
+always run a fresh full `register -> inventory -> classify` scan as the
+correctness fallback. Hook events and explicit dirty paths are untrusted hints;
+Hooks may be disabled and hints may be absent or inconsistent. The starting
+snapshot is acknowledged only after a completed run with zero coverage failures
+and exact Manifest/coverage artifact hashes and bytes still current at commit.
+Failures and events arriving after that snapshot stay pending. A stable
+project-scoped `indexes/machine-state.lock` serializes Manifest, coverage, run,
+and reconciliation writers; event ingestion uses the separate stable
+`events.jsonl.lock`, with lock order `machine-state.lock -> events.jsonl.lock`.
+The strict Schema v1 checkpoint is stored at
+`.llmwiki/projects/<project_id>/indexes/reconciliation-state.json`, while the
+source project and curated knowledge remain unchanged. See
+[`project-reconciliation.md`](project-reconciliation.md).
+
+This completion activates the previously reserved MCP reconciliation contract;
+only query and plan remain explicit `capability-unavailable` tools in the
+seven-tool catalog. H-07 stops at `classify` and does not claim H-05 selective
+extraction, selective knowledge refresh, or any later knowledge/rendering stage.
+
 The next executable roadmap task is:
 
-> **H-07: project reconciliation boundary and full-scan fallback**
+> **J-05: Codex reference adapter package**
 
-This task must snapshot the queued host-event boundary, run the conservative
-Core inventory/classification path, acknowledge only the successfully covered
-snapshot, and retain events after failure or when they arrive after the
-snapshot. Explicit CLI and the reserved `llmwiki_reconcile` MCP operation must
-work even when Hooks are disabled or hints are absent/inconsistent, with a full
-scan as the correctness fallback. H-07 must not yet claim H-05 selective
-extraction or selective knowledge refresh.
+J-05 should package the Plugin manifest, Skills, MCP configuration, optional
+Hook wiring, and minimal repository guidance around the validated Core boundary.
+Its acceptance must prove that Codex can identify a project, call Core, and
+reconcile after work, while explicit reconciliation remains available when
+Hooks are untrusted, disabled, or unavailable. It must not advertise query,
+planning, extraction, knowledge refresh, or Web capabilities that remain
+incomplete.

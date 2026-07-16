@@ -13,6 +13,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 if __package__:
+    from .advisory_lock import (
+        DEFAULT_LOCK_TIMEOUT_SECONDS,
+        AdvisoryFileLock,
+        AdvisoryLockError,
+        AdvisoryLockTimeoutError,
+    )
     from .file_classification import classification_from_dict
     from .file_state import file_state_from_dict
     from .project_inventory import (
@@ -20,9 +26,19 @@ if __package__:
         ProjectManifestError,
         load_project_manifest,
     )
-    from .project_layout import CURRENT_SCHEMA_VERSION, LayoutError
-    from .project_registry import load_registered_project
+    from .project_layout import (
+        CURRENT_SCHEMA_VERSION,
+        LayoutError,
+        parse_versioned_json_bytes,
+    )
+    from .project_registry import ProjectRegistrationResult, load_registered_project
 else:
+    from advisory_lock import (  # type: ignore[no-redef]
+        DEFAULT_LOCK_TIMEOUT_SECONDS,
+        AdvisoryFileLock,
+        AdvisoryLockError,
+        AdvisoryLockTimeoutError,
+    )
     from file_classification import classification_from_dict  # type: ignore[no-redef]
     from file_state import file_state_from_dict  # type: ignore[no-redef]
     from project_inventory import (  # type: ignore[no-redef]
@@ -33,8 +49,12 @@ else:
     from project_layout import (  # type: ignore[no-redef]
         CURRENT_SCHEMA_VERSION,
         LayoutError,
+        parse_versioned_json_bytes,
     )
-    from project_registry import load_registered_project  # type: ignore[no-redef]
+    from project_registry import (  # type: ignore[no-redef]
+        ProjectRegistrationResult,
+        load_registered_project,
+    )
 
 
 COVERAGE_REPORT_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
@@ -272,13 +292,47 @@ def _write_atomic_json(path: Path, payload: dict[str, Any]) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def generate_coverage_report(
-    workspace_root: str | Path,
-    project_id: str,
-) -> CoverageReportResult:
-    """Validate Manifest v4 and atomically write its deterministic audit report."""
+def _validate_existing_report_schema(path: Path, *, project_id: str) -> None:
+    """Fail closed instead of overwriting legacy, future, or malformed state."""
 
-    registration = load_registered_project(workspace_root, project_id)
+    if path.is_symlink():
+        raise CoverageReportError(f"coverage report must not be a symbolic link: {path}")
+    if not path.exists():
+        return
+    if not path.is_file():
+        raise CoverageReportError(f"coverage report is not a file: {path}")
+    try:
+        payload = path.read_bytes()
+        document = parse_versioned_json_bytes(
+            payload,
+            path=path,
+            allow_legacy=True,
+            max_supported=COVERAGE_REPORT_SCHEMA_VERSION,
+        )
+    except LayoutError:
+        raise
+    except OSError as exc:
+        raise CoverageReportError(f"could not read coverage report {path}: {exc}") from exc
+    if document.is_legacy:
+        raise CoverageReportError(
+            f"coverage report is legacy v0 and will not be rewritten: {path}"
+        )
+    record = document.data
+    if (
+        record.get("kind") != COVERAGE_REPORT_KIND
+        or record.get("report_version") != COVERAGE_REPORT_VERSION
+        or record.get("project_id") != project_id
+    ):
+        raise CoverageReportError(
+            "existing coverage report does not match the current project contract"
+        )
+
+
+def _generate_coverage_report_locked(
+    registration: ProjectRegistrationResult,
+) -> CoverageReportResult:
+    """Build coverage while the shared project machine-state lock is held."""
+
     manifest = load_project_manifest(
         registration.layout.manifest_file,
         project_id=registration.project_id,
@@ -294,6 +348,10 @@ def generate_coverage_report(
         file_records=manifest.file_records,
     )
     report_file = registration.layout.indexes_dir / COVERAGE_REPORT_FILENAME
+    _validate_existing_report_schema(
+        report_file,
+        project_id=registration.project_id,
+    )
     _write_atomic_json(report_file, report)
     return CoverageReportResult(
         project_id=registration.project_id,
@@ -301,3 +359,35 @@ def generate_coverage_report(
         report_file=report_file,
         report=report,
     )
+
+def generate_coverage_report(
+    workspace_root: str | Path,
+    project_id: str,
+    *,
+    lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
+) -> CoverageReportResult:
+    """Validate Manifest v4 and atomically write its deterministic audit report.
+
+    The shared per-project machine-state lock binds the Manifest read, report
+    construction, existing-state validation, and atomic report replacement.
+    """
+
+    registration = load_registered_project(workspace_root, project_id)
+    lock = AdvisoryFileLock(
+        registration.layout.machine_state_lock_file,
+        timeout_seconds=lock_timeout_seconds,
+    )
+    try:
+        lock.acquire()
+    except AdvisoryLockTimeoutError as exc:
+        raise CoverageReportError(
+            "timed out waiting for the project machine-state lock"
+        ) from exc
+    except AdvisoryLockError as exc:
+        raise CoverageReportError(
+            "could not acquire the project machine-state lock"
+        ) from exc
+    try:
+        return _generate_coverage_report_locked(registration)
+    finally:
+        lock.release()

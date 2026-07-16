@@ -13,6 +13,12 @@ from typing import Any, Mapping, Sequence
 import uuid
 
 if __package__:
+    from .advisory_lock import (
+        DEFAULT_LOCK_TIMEOUT_SECONDS,
+        AdvisoryFileLock,
+        AdvisoryLockError,
+        AdvisoryLockTimeoutError,
+    )
     from .project_inventory import PROJECT_MANIFEST_VERSION, load_project_manifest
     from .project_layout import (
         CURRENT_SCHEMA_VERSION,
@@ -22,6 +28,12 @@ if __package__:
     )
     from .project_registry import load_registered_project
 else:
+    from advisory_lock import (  # type: ignore[no-redef]
+        DEFAULT_LOCK_TIMEOUT_SECONDS,
+        AdvisoryFileLock,
+        AdvisoryLockError,
+        AdvisoryLockTimeoutError,
+    )
     from project_inventory import (  # type: ignore[no-redef]
         PROJECT_MANIFEST_VERSION,
         load_project_manifest,
@@ -827,6 +839,29 @@ def new_project_run_record(
     )
 
 
+def _acquire_machine_state_lock(
+    workspace_root: str | Path,
+    project_id: str,
+    *,
+    timeout_seconds: float,
+) -> AdvisoryFileLock:
+    registration = load_registered_project(workspace_root, project_id)
+    lock = AdvisoryFileLock(
+        registration.layout.machine_state_lock_file,
+        timeout_seconds=timeout_seconds,
+    )
+    try:
+        return lock.acquire()
+    except AdvisoryLockTimeoutError as exc:
+        raise ProjectRunError(
+            "timed out waiting for the project machine-state lock"
+        ) from exc
+    except AdvisoryLockError as exc:
+        raise ProjectRunError(
+            "could not acquire the project machine-state lock"
+        ) from exc
+
+
 def create_project_run(
     workspace_root: str | Path,
     project_id: str,
@@ -834,21 +869,32 @@ def create_project_run(
     run_id: str,
     created_at: str,
     through_stage: str | None = None,
+    lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
 ) -> ProjectRunResult:
-    record = new_project_run_record(
+    lock = _acquire_machine_state_lock(
         workspace_root,
         project_id,
-        run_id=run_id,
-        created_at=created_at,
-        through_stage=through_stage,
+        timeout_seconds=lock_timeout_seconds,
     )
-    run_file = project_run_file(workspace_root, project_id, run_id)
     try:
-        run_file.parent.mkdir(parents=True, exist_ok=False)
-    except FileExistsError as exc:
-        raise ProjectRunConflictError(f"project run {run_id!r} already exists") from exc
-    write_versioned_json(run_file, record)
-    return ProjectRunResult(run_file, record)
+        record = new_project_run_record(
+            workspace_root,
+            project_id,
+            run_id=run_id,
+            created_at=created_at,
+            through_stage=through_stage,
+        )
+        run_file = project_run_file(workspace_root, project_id, run_id)
+        try:
+            run_file.parent.mkdir(parents=True, exist_ok=False)
+        except FileExistsError as exc:
+            raise ProjectRunConflictError(
+                f"project run {run_id!r} already exists"
+            ) from exc
+        write_versioned_json(run_file, record)
+        return ProjectRunResult(run_file, record)
+    finally:
+        lock.release()
 
 
 def load_project_run(
@@ -879,21 +925,30 @@ def save_project_run(
     record: Mapping[str, Any],
     *,
     expected_revision: int,
+    lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
 ) -> ProjectRunResult:
-    current = load_project_run(workspace_root, project_id, run_id)
-    if current.record["revision"] != expected_revision:
-        raise ProjectRunConflictError("project run changed; reload before writing")
-    updated = deepcopy(dict(record))
-    if updated.get("revision") != expected_revision:
-        raise ProjectRunStateError("caller run revision is inconsistent")
-    updated["revision"] = expected_revision + 1
-    validated = validate_project_run_record(
-        updated,
-        expected_project_id=project_id,
-        expected_run_id=run_id,
+    lock = _acquire_machine_state_lock(
+        workspace_root,
+        project_id,
+        timeout_seconds=lock_timeout_seconds,
     )
-    write_versioned_json(current.run_file, validated)
-    return ProjectRunResult(current.run_file, validated)
+    try:
+        current = load_project_run(workspace_root, project_id, run_id)
+        if current.record["revision"] != expected_revision:
+            raise ProjectRunConflictError("project run changed; reload before writing")
+        updated = deepcopy(dict(record))
+        if updated.get("revision") != expected_revision:
+            raise ProjectRunStateError("caller run revision is inconsistent")
+        updated["revision"] = expected_revision + 1
+        validated = validate_project_run_record(
+            updated,
+            expected_project_id=project_id,
+            expected_run_id=run_id,
+        )
+        write_versioned_json(current.run_file, validated)
+        return ProjectRunResult(current.run_file, validated)
+    finally:
+        lock.release()
 
 
 def stage_by_id(record: Mapping[str, Any], stage_id: str) -> dict[str, Any]:

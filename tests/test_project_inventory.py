@@ -7,12 +7,15 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 
+from tools import project_inventory as project_inventory_module
+from tools.advisory_lock import AdvisoryFileLock, AdvisoryLockTimeoutError
 from tools.file_classification import (
     FILE_CLASSIFICATION_KIND,
     FILE_CLASSIFICATION_SCHEMA_VERSION,
@@ -35,6 +38,7 @@ from tools.project_inventory import (
     PROJECT_MANIFEST_KIND,
     PROJECT_MANIFEST_SCHEMA_VERSION,
     PROJECT_MANIFEST_VERSION,
+    ProjectInventoryError,
     ProjectInventoryTraversalError,
     ProjectManifestError,
     inventory_project,
@@ -145,6 +149,131 @@ class ProjectInventoryTests(unittest.TestCase):
             link.symlink_to(target, target_is_directory=target_is_directory)
         except (NotImplementedError, OSError) as exc:
             self.skipTest(f"symbolic links are unavailable: {exc}")
+
+    def assert_machine_state_lock_contended(self, lock_file: Path) -> None:
+        started = threading.Event()
+        errors: list[BaseException] = []
+
+        def contend() -> None:
+            started.set()
+            try:
+                with AdvisoryFileLock(lock_file, timeout_seconds=0.05):
+                    errors.append(AssertionError("contender acquired the shared lock"))
+            except BaseException as exc:
+                errors.append(exc)
+
+        contender = threading.Thread(target=contend, name="inventory-lock-contender")
+        contender.start()
+        self.assertTrue(started.wait(timeout=1.0))
+        contender.join(timeout=2.0)
+        self.assertFalse(contender.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], AdvisoryLockTimeoutError)
+
+    def test_inventory_holds_shared_lock_across_load_scan_and_write(self) -> None:
+        registration = self.register()
+        phases = (
+            ("_load_previous_manifest", "manifest-load"),
+            ("_walk_project", "source-scan"),
+            ("_write_atomic_manifest", "manifest-write"),
+        )
+
+        for target_name, phase in phases:
+            with self.subTest(phase=phase):
+                entered = threading.Event()
+                release = threading.Event()
+                results: list[object] = []
+                errors: list[BaseException] = []
+                original = getattr(project_inventory_module, target_name)
+
+                def blocked_phase(
+                    *args: object,
+                    _original: object = original,
+                    **kwargs: object,
+                ) -> object:
+                    entered.set()
+                    if not release.wait(timeout=5.0):
+                        raise AssertionError(f"inventory {phase} was not released")
+                    return _original(*args, **kwargs)  # type: ignore[operator]
+
+                def run_inventory() -> None:
+                    try:
+                        results.append(
+                            inventory_project(
+                                self.workspace,
+                                registration.project_id,
+                            )
+                        )
+                    except BaseException as exc:
+                        errors.append(exc)
+
+                with patch.object(
+                    project_inventory_module,
+                    target_name,
+                    side_effect=blocked_phase,
+                ):
+                    worker = threading.Thread(
+                        target=run_inventory,
+                        name=f"inventory-{phase}",
+                    )
+                    worker.start()
+                    try:
+                        self.assertTrue(entered.wait(timeout=2.0))
+                        self.assert_machine_state_lock_contended(
+                            registration.layout.machine_state_lock_file
+                        )
+                    finally:
+                        release.set()
+                        worker.join(timeout=5.0)
+
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(errors, [])
+                self.assertEqual(len(results), 1)
+
+    def test_inventory_is_reentrant_under_same_thread_machine_state_lock(self) -> None:
+        registration = self.register()
+
+        with AdvisoryFileLock(
+            registration.layout.machine_state_lock_file,
+            timeout_seconds=0.2,
+        ):
+            result = inventory_project(
+                self.workspace,
+                registration.project_id,
+                lock_timeout_seconds=0.05,
+            )
+
+        self.assertEqual(result.scan_generation, 1)
+        self.assertTrue(result.manifest_file.is_file())
+
+    def test_inventory_contender_timeout_uses_inventory_domain_error(self) -> None:
+        registration = self.register()
+        started = threading.Event()
+        errors: list[BaseException] = []
+
+        def contend() -> None:
+            started.set()
+            try:
+                inventory_project(
+                    self.workspace,
+                    registration.project_id,
+                    lock_timeout_seconds=0.05,
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        contender = threading.Thread(target=contend, name="inventory-domain-contender")
+        with AdvisoryFileLock(registration.layout.machine_state_lock_file):
+            contender.start()
+            self.assertTrue(started.wait(timeout=1.0))
+            contender.join(timeout=2.0)
+            self.assertFalse(contender.is_alive())
+
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], ProjectInventoryError)
+        self.assertIsInstance(errors[0].__cause__, AdvisoryLockTimeoutError)
+        self.assertIn("machine-state lock", str(errors[0]))
+        self.assertFalse(registration.layout.manifest_file.exists())
 
     def test_inventory_loads_registration_and_records_every_in_scope_file(
         self,

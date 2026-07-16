@@ -10,6 +10,7 @@
   `python -m tools.project event show ...`
 - Focused validation: `tests/test_host_events.py`
 - Checkpoint: `checkpoint/h-04-host-event-ledger`
+- H-07 consumer: [`project-reconciliation.md`](project-reconciliation.md)
 
 ## Purpose and scope
 
@@ -44,6 +45,11 @@ A project must already be registered. A current Manifest, Source registry, or
 Evidence registry is not required because H-04 records signals rather than
 verifying source state.
 
+As of 2026-07-16, H-07 consumes this ledger through a separate conservative
+reconciliation boundary. That later operation does not change H-04 authority:
+events remain untrusted hints, while a full scan through `classify` and current
+Manifest/hash validation provide correctness.
+
 ## Storage and authority
 
 H-04 writes only under the registered project machine-state directory:
@@ -51,7 +57,7 @@ H-04 writes only under the registered project machine-state directory:
 ```text
 .llmwiki/projects/<project_id>/
 |-- events.jsonl
-|-- events.jsonl.lock          # ephemeral local writer lock
+|-- events.jsonl.lock          # stable descriptor-backed advisory lock
 `-- indexes/
     |-- dirty-paths.json
     `-- .dirty-paths.json.*.tmp # ephemeral atomic-write temporary
@@ -62,8 +68,9 @@ The artifacts have deliberately different authority:
 1. `events.jsonl` is the authoritative append-only ledger.
 2. `indexes/dirty-paths.json` is a disposable projection derived only from the
    complete validated ledger.
-3. A lock file and same-directory temporary projection file may exist briefly
-   during a write or rebuild. They are coordination artifacts, not event data.
+3. `events.jsonl.lock` is a stable descriptor-backed advisory-lock file. It
+   remains on disk after release and is never event data. A same-directory
+   projection temporary exists only during an atomic write or rebuild.
 4. The projection must never be used to repair, reorder, or recreate ledger
    events.
 
@@ -255,10 +262,37 @@ Projection rules are deterministic:
   is included, so replaying the same ledger produces byte-identical JSON.
 
 The queue is coalesced but not consumed in H-04. There is no acknowledge,
-dequeue, clear, or reconciliation watermark operation. A path remains dirty for
-as long as the H-04 ledger contains an event for it. A later H-07/H-05 contract
-may add an explicit reconciliation checkpoint, but H-04 must not invent one or
-silently discard old events.
+dequeue, clear, or reconciliation watermark operation in the H-04 artifact. A
+path remains present for as long as the ledger contains an event for it. H-04
+must not silently discard old events.
+
+## H-07 consumer and separate acknowledgement
+
+H-07 adds a separate checkpoint at:
+
+```text
+.llmwiki/projects/<project_id>/indexes/reconciliation-state.json
+```
+
+The checkpoint does not mutate `events.jsonl` or reinterpret
+`dirty-paths.json` as a dequeue file. Reconciliation loads the prior acknowledged
+sequence, takes one exact starting ledger snapshot, and derives the then-pending
+events from the unacknowledged prefix. It always performs the complete
+`register -> inventory -> classify` path, regardless of whether queued and
+explicit dirty-path hints are absent, equal, or inconsistent.
+
+Only after the deterministic run and current Manifest/coverage validation
+succeed does H-07 acknowledge that starting snapshot. Events appended after the
+snapshot remain pending. If the run, artifact validation, snapshot-prefix check,
+lock, or atomic state write fails, the acknowledgement does not advance and all
+unacknowledged events remain pending.
+
+The H-04 APIs still have no acknowledge or clear method. Consumers that need
+current pending counts must combine the validated append-only ledger with the
+strict H-07 reconciliation checkpoint rather than infer completion from the
+coalesced projection. See
+[`project-reconciliation.md`](project-reconciliation.md) for the full transaction,
+state schema, CLI, and MCP contract.
 
 ## Core APIs
 
@@ -424,21 +458,25 @@ H-04 intentionally does not implement or claim:
 - H-01 Manifest-generation diffing;
 - H-02 source-to-knowledge dependency edges;
 - H-03 stale propagation;
-- H-05 selective reconciliation or selective refresh;
+- H-05 selective reconciliation, selective extraction, or selective knowledge
+  refresh;
 - H-06 deletion/move recovery beyond recording the paths supplied by the host;
-- H-07 Hook installation, Hook reliability, Stop-boundary synchronization,
-  missed-event detection, full-scan fallback, or eventual-consistency policy;
-- filesystem watching, background daemons, polling, or host-native Hook code;
+- reconciliation inside the H-04 event module; H-07 consumes the ledger through
+  its separate full-scan boundary and checkpoint;
+- Hook installation, Hook reliability, automatic Stop wiring, filesystem
+  watching, background daemons, polling, or host-native Hook code;
 - project registration, scanning, inventory, hashing, classification,
   extraction, source sync, Evidence creation, or source-open;
-- dirty-path acknowledgement, clearing, dequeue, or reconciliation checkpoints;
+- dirty-path acknowledgement, clearing, dequeue, or checkpoint writes by H-04;
+  H-07 acknowledgement lives only in `reconciliation-state.json`;
 - curated Markdown mutation, automatic claim updates, plan updates, or Wiki
   synthesis;
 - LLM, Web, browser, network, MCP-tool, or Plugin behavior.
 
-The H-04 queue is therefore an incremental input ledger only. Later
-reconciliation must verify current source truth independently and must not treat
-a host event as a completed refresh.
+The H-04 queue is therefore an incremental input ledger only. The validated
+H-07 consumer verifies current source truth with a full scan and never treats a
+host event as a completed refresh. Selective H-05 extraction and knowledge
+refresh remain later work.
 
 ## Validation
 

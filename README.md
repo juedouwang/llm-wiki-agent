@@ -60,6 +60,7 @@ python tools/project.py register /path/to/project --json  # register only; no sc
 python tools/project.py inventory <project_id> --json       # accountable incremental Manifest
 python -m tools.project event submit <project_id> --event-id evt-1 --producer codex --occurred-at 2026-07-16T09:00:00Z --operation modified --path src/model.py --json
 python -m tools.project event show <project_id> --json       # validate/rebuild the dirty-path projection
+python -m tools.project reconcile <project_id> --json               # H-07 full scan through classify; hints optional
 python tools/raw_md.py /path/to/project     # legacy full-project raw-md evidence layer
 query: what are the main themes?           # synthesize answer from wiki pages
 lint                                       # find orphans, contradictions, gaps
@@ -152,6 +153,7 @@ The `research-assistant` branch is evolving this repository into a local-first, 
 - [Minimum-scope implementation roadmap](docs/research-assistant-roadmap.md)
 - [Host-neutral Research Core service](docs/research-core-service.md)
 - [Deterministic one-action project understanding](docs/project-understand.md)
+- [Conservative H-07 project reconciliation](docs/project-reconciliation.md)
 - [Minimal MCP stdio server](docs/research-mcp-server.md)
 - [B-02 explainable scan-policy contract](docs/scan-policy.md)
 
@@ -180,19 +182,42 @@ and deterministically repairs `indexes/dirty-paths.json`. These signals do not
 scan source files, mutate curated knowledge, or claim reconciliation. See
 [`docs/host-event-ledger.md`](docs/host-event-ledger.md).
 
+Validated on 2026-07-16, H-07 adds an explicit conservative reconciliation
+boundary for registered projects:
+
+```bash
+python -B -m tools.project reconcile <project_id> \
+  --workspace-root /path/to/assistant-workspace --json
+```
+
+Every call snapshots the host-event ledger, runs the full deterministic
+`register -> inventory -> classify` path, validates the current Manifest and
+coverage artifacts with zero failed files, and acknowledges only that starting
+event snapshot in strict Schema v1 machine state at
+`.llmwiki/projects/<project_id>/indexes/reconciliation-state.json`. Dirty paths
+and Hook events are untrusted hints: reconciliation works when Hooks are disabled
+and when hints are absent or inconsistent. Failures and events arriving after
+the snapshot remain pending. The source project and curated knowledge stay
+unchanged. Inventory, coverage, run state, and reconciliation serialize through
+the persistent per-project `indexes/machine-state.lock`; host events use their
+separate persistent ledger lock. This boundary does not claim H-05 selective
+extraction or knowledge refresh. See
+[`docs/project-reconciliation.md`](docs/project-reconciliation.md).
+
 The current R2 transport can be started for any MCP-capable host with:
 
 ```bash
 python -B -m tools.research_mcp --workspace-root /path/to/assistant-workspace
 ```
 
-Project context, coverage, and source-open are real Core calls. MCP results use
-path-free host DTOs; every advertised input/output JSON Schema is enforced;
-coverage persists deterministic machine state and is not marked read-only; and
-source-open denies Manifest-sensitive or otherwise content-restricted files. The
-default `local-only` external-send mode still permits explicit local host access
-to ordinary policy-authorized files. Query, reconciliation, and planning
-advertise stable contracts but fail explicitly as unavailable until their
+Project context, coverage, source-open, and `llmwiki_reconcile` are real Core
+calls. MCP results use path-free host DTOs; every advertised input/output JSON
+Schema is enforced; coverage and reconciliation persist deterministic machine
+state and are not marked read-only; and source-open denies Manifest-sensitive or
+otherwise content-restricted files. The default `local-only` external-send mode
+still permits explicit local host access to ordinary policy-authorized files.
+Reconciliation uses the same full-scan H-07 fallback even without Hook hints.
+Query and planning retain honest `capability-unavailable` contracts until their
 corresponding roadmap slices are implemented.
 
 ## What You Get

@@ -63,6 +63,64 @@ class VersionedDocument:
     path: Path
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise LayoutError(f"duplicate JSON key {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_json_constant(value: str) -> Any:
+    raise LayoutError(f"non-finite JSON constant {value!r} is not supported")
+
+
+def parse_json_bytes_strict(payload: bytes, *, label: str) -> Any:
+    """Decode strict UTF-8 JSON while rejecting duplicate keys and NaN values."""
+
+    if not isinstance(payload, bytes):
+        raise TypeError("payload must be bytes")
+    try:
+        text = payload.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise LayoutError(f"{label} must be strict UTF-8") from exc
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_nonfinite_json_constant,
+        )
+    except json.JSONDecodeError as exc:
+        raise LayoutError(f"invalid JSON in {label}: {exc}") from exc
+
+
+def parse_versioned_json_bytes(
+    payload: bytes,
+    *,
+    path: Path,
+    allow_legacy: bool = True,
+    max_supported: int = CURRENT_SCHEMA_VERSION,
+) -> VersionedDocument:
+    """Validate one already-snapshotted versioned JSON document."""
+
+    resolved = Path(path).expanduser().resolve()
+    data = parse_json_bytes_strict(payload, label=str(resolved))
+    if not isinstance(data, dict):
+        raise SchemaVersionError("versioned JSON must contain an object at the top level")
+    version = schema_version_of(
+        data,
+        allow_legacy=allow_legacy,
+        max_supported=max_supported,
+    )
+    return VersionedDocument(
+        data=data,
+        schema_version=version,
+        is_legacy=version == LEGACY_SCHEMA_VERSION,
+        path=resolved,
+    )
+
+
 def validate_project_id(project_id: str) -> str:
     """Validate a stable, path-safe project id and return it unchanged.
 
@@ -128,23 +186,14 @@ def load_versioned_json(
 
     resolved = Path(path).expanduser().resolve()
     try:
-        data = json.loads(resolved.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise LayoutError(f"invalid JSON in {resolved}: {exc}") from exc
-
-    if not isinstance(data, dict):
-        raise SchemaVersionError("versioned JSON must contain an object at the top level")
-
-    version = schema_version_of(
-        data,
+        payload = resolved.read_bytes()
+    except OSError as exc:
+        raise LayoutError(f"could not read versioned JSON {resolved}: {exc}") from exc
+    return parse_versioned_json_bytes(
+        payload,
+        path=resolved,
         allow_legacy=allow_legacy,
         max_supported=max_supported,
-    )
-    return VersionedDocument(
-        data=data,
-        schema_version=version,
-        is_legacy=version == LEGACY_SCHEMA_VERSION,
-        path=resolved,
     )
 
 
@@ -325,6 +374,22 @@ class ProjectLayout:
     @property
     def dirty_paths_file(self) -> Path:
         return self.indexes_dir / "dirty-paths.json"
+
+    @property
+    def reconciliation_state_file(self) -> Path:
+        return self.indexes_dir / "reconciliation-state.json"
+
+    @property
+    def machine_state_lock_file(self) -> Path:
+        """Stable advisory lock shared by per-project machine-state mutations."""
+
+        return self.indexes_dir / "machine-state.lock"
+
+    @property
+    def reconciliation_lock_file(self) -> Path:
+        """Compatibility alias for the shared machine-state mutation lock."""
+
+        return self.machine_state_lock_file
 
     @property
     def runs_dir(self) -> Path:

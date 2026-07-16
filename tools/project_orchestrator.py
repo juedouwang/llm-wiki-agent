@@ -10,6 +10,13 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 if __package__:
+    from .advisory_lock import (
+        DEFAULT_LOCK_TIMEOUT_SECONDS,
+        AdvisoryFileLock,
+        AdvisoryLockError,
+        AdvisoryLockTimeoutError,
+    )
+    from .project_registry import load_registered_project
     from .project_runs import (
         PROJECT_RUN_SCHEMA_VERSION,
         PROJECT_RUN_VERSION,
@@ -32,6 +39,13 @@ if __package__:
         validate_versions,
     )
 else:
+    from advisory_lock import (  # type: ignore[no-redef]
+        DEFAULT_LOCK_TIMEOUT_SECONDS,
+        AdvisoryFileLock,
+        AdvisoryLockError,
+        AdvisoryLockTimeoutError,
+    )
+    from project_registry import load_registered_project  # type: ignore[no-redef]
     from project_runs import (  # type: ignore[no-redef]
         PROJECT_RUN_SCHEMA_VERSION,
         PROJECT_RUN_VERSION,
@@ -124,10 +138,12 @@ class ProjectRunOrchestrator:
         runners: Mapping[str, StageRunner] | None = None,
         clock: Clock | None = None,
         run_id_factory: RunIdFactory | None = None,
+        lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self._clock = clock or _default_clock
         self._run_id_factory = run_id_factory or _default_run_id_factory
+        self._lock_timeout_seconds = lock_timeout_seconds
         validated_runners: dict[str, StageRunner] = {}
         for stage_id, runner in dict(runners or {}).items():
             validate_stage_id(stage_id)
@@ -146,16 +162,20 @@ class ProjectRunOrchestrator:
 
         if through_stage is not None:
             validate_stage_id(through_stage)
-        moment = self._moment()
-        run_id = validate_run_id(self._run_id_factory(moment))
-        created = create_project_run(
-            self.workspace_root,
-            project_id,
-            run_id=run_id,
-            created_at=utc_timestamp(moment),
-            through_stage=through_stage,
-        )
-        return self._execute(created, through_stage=through_stage)
+        lock = self._acquire_machine_state_lock(project_id)
+        try:
+            moment = self._moment()
+            run_id = validate_run_id(self._run_id_factory(moment))
+            created = create_project_run(
+                self.workspace_root,
+                project_id,
+                run_id=run_id,
+                created_at=utc_timestamp(moment),
+                through_stage=through_stage,
+            )
+            return self._execute(created, through_stage=through_stage)
+        finally:
+            lock.release()
 
     def resume(
         self,
@@ -169,12 +189,33 @@ class ProjectRunOrchestrator:
         validate_run_id(run_id)
         if through_stage is not None:
             validate_stage_id(through_stage)
-        current = load_project_run(self.workspace_root, project_id, run_id)
-        if current.status == "succeeded":
-            return current
-        if current.status == "running":
-            current = self._record_interruption(current)
-        return self._execute(current, through_stage=through_stage)
+        lock = self._acquire_machine_state_lock(project_id)
+        try:
+            current = load_project_run(self.workspace_root, project_id, run_id)
+            if current.status == "succeeded":
+                return current
+            if current.status == "running":
+                current = self._record_interruption(current)
+            return self._execute(current, through_stage=through_stage)
+        finally:
+            lock.release()
+
+    def _acquire_machine_state_lock(self, project_id: str) -> AdvisoryFileLock:
+        registration = load_registered_project(self.workspace_root, project_id)
+        lock = AdvisoryFileLock(
+            registration.layout.machine_state_lock_file,
+            timeout_seconds=self._lock_timeout_seconds,
+        )
+        try:
+            return lock.acquire()
+        except AdvisoryLockTimeoutError as exc:
+            raise ProjectRunError(
+                "timed out waiting for the project machine-state lock"
+            ) from exc
+        except AdvisoryLockError as exc:
+            raise ProjectRunError(
+                "could not acquire the project machine-state lock"
+            ) from exc
 
     def status(self, project_id: str, run_id: str) -> ProjectRunResult:
         """Load a run report without executing or repairing it."""

@@ -8,6 +8,7 @@
 - Durable result: `ProjectRunResult`
 - Validation: `tests/test_project_understand.py` plus E-01/Core regressions
 - Checkpoint: `checkpoint/e-08-deterministic-understand`
+- H-07 reuse: [`project-reconciliation.md`](project-reconciliation.md)
 
 ## Purpose
 
@@ -136,6 +137,32 @@ writing the current Manifest. The separate `classify` stage consumes that
 Manifest through the existing coverage operation; E-08 does not add another
 scanner or classifier.
 
+A complete `ProjectRunOrchestrator.start` or `resume` execution holds the stable
+per-project `indexes/machine-state.lock`. Run creation/save, inventory, and
+coverage acquire the same lock defensively and reenter it on the same thread.
+This serializes same-project writers across every stage while leaving different
+projects independent. The lock file is a persistent coordination artifact.
+
+## Relationship to H-07 reconciliation
+
+Validated on 2026-07-16, H-07 reuses this exact three-stage deterministic prefix
+as the correctness fallback for an already registered project. The two entry
+points have different responsibilities:
+
+| Entry point | Identity input | Event boundary | Durable result |
+|---|---|---|---|
+| `project_understand(project_root, ...)` | source-project path; register or reuse identity | none | resumable E-01 run paused after `classify` |
+| `project_reconcile(project_id, ...)` | existing registered `project_id` | snapshot and later acknowledge only the starting H-04 event prefix | fresh E-01 run plus strict `indexes/reconciliation-state.json` checkpoint |
+
+H-07 calls the full prefix even when Hooks are disabled and dirty-path hints are
+absent or inconsistent. It does not resume an earlier understand run or use hints
+to skip files. If reconciliation fails, its acknowledgement remains unchanged;
+if events arrive after the starting snapshot, they remain pending.
+
+This reuse does not expand E-08 beyond `classify`. Neither operation performs
+H-05 selective extraction or refreshes curated knowledge. See
+[`project-reconciliation.md`](project-reconciliation.md).
+
 ## Result and resume contract
 
 After a successful fresh action:
@@ -179,6 +206,12 @@ corresponding directory below `--knowledge-root`, is only reserved by project
 registration. This slice does not write curated summaries, plans, evidence
 pages, or any of the planned research artifacts there.
 
+When H-07 invokes the same stage prefix, it may additionally write the H-04
+projection repair and strict
+`.llmwiki/projects/<project_id>/indexes/reconciliation-state.json` checkpoint.
+Those are machine-state effects of reconciliation, not effects of the
+`project_understand` entry point, and curated knowledge remains unchanged.
+
 The research source directory remains read-only. The deterministic action may
 read source metadata and policy-authorized file content for inventory and
 classification, but it does not create source-local `.llmwiki/`, `wiki/`, or
@@ -193,7 +226,9 @@ This initial R2 slice is **not** any of the following:
 - synthesis or generation of the planned 15 Markdown artifacts;
 - Evidence, status, planning, or indexing pipeline completion;
 - Web rendering, a local dashboard, browser launch, or `--open` support;
-- Hook or Plugin behavior;
+- Hook or Plugin wiring; explicit H-07 reconciliation exists separately and does
+  not install or trust Hooks;
+- H-05 selective extraction or selective knowledge refresh;
 - model-, provider-, or LLM-driven project understanding.
 
 No later stage is simulated merely to make the run look complete. Those

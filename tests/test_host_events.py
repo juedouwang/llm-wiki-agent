@@ -14,7 +14,7 @@ from unittest.mock import patch
 import urllib.request
 import webbrowser
 
-from tools import host_events
+from tools import advisory_lock, host_events
 from tools.project import main as project_main
 from tools.project_registry import register_project
 from tools.research_core import ResearchCoreService
@@ -512,6 +512,194 @@ class HostEventTests(unittest.TestCase):
         self.assertFalse(stable.projection_rebuilt)
         self.assertEqual(self.layout.events_file.read_bytes(), ledger_before)
 
+    def test_locked_ledger_and_state_snapshot_share_a_consistent_projection(
+        self,
+    ) -> None:
+        self.submit(
+            event_id="evt-a",
+            operation="created",
+            paths=("README.md", "src/model.py"),
+            clock=SequenceClock(datetime(2026, 7, 16, 9, 0, tzinfo=timezone.utc)),
+        )
+        self.submit(
+            event_id="evt-b",
+            producer="claude-code",
+            operation="deleted",
+            paths=("src/model.py", "src/old.py"),
+            clock=SequenceClock(datetime(2026, 7, 16, 9, 1, tzinfo=timezone.utc)),
+        )
+        ledger_bytes = self.layout.events_file.read_bytes()
+        event_lock = self.layout.events_file.with_name(
+            self.layout.events_file.name + ".lock"
+        )
+        stable_lock_stat = event_lock.stat()
+
+        with host_events.locked_host_event_ledger(
+            self.workspace,
+            self.registration.project_id,
+        ) as locked:
+            self.assertTrue(event_lock.is_file())
+            self.assertEqual(locked.project_id, self.registration.project_id)
+            self.assertEqual(locked.event_count, 2)
+            self.assertEqual(locked.last_sequence, 2)
+            self.assertEqual(locked.serialized_bytes, ledger_bytes)
+            self.assertEqual(
+                locked.ledger_sha256,
+                hashlib.sha256(ledger_bytes).hexdigest(),
+            )
+        self.assertTrue(event_lock.is_file())
+        self.assertTrue(os.path.samestat(stable_lock_stat, event_lock.stat()))
+
+        real_write = host_events._write_queue_atomic
+        observed_writes: list[tuple[Path, host_events.DirtyPathQueue]] = []
+
+        def write_while_locked(
+            queue_file: Path,
+            queue: host_events.DirtyPathQueue,
+        ) -> bool:
+            self.assertTrue(event_lock.is_file())
+            observed_writes.append((queue_file, queue))
+            return real_write(queue_file, queue)
+
+        with patch.object(
+            host_events,
+            "_write_queue_atomic",
+            side_effect=write_while_locked,
+        ):
+            state = host_events.snapshot_host_event_state(
+                self.workspace,
+                self.registration.project_id,
+            )
+
+        self.assertTrue(event_lock.is_file())
+        self.assertTrue(os.path.samestat(stable_lock_stat, event_lock.stat()))
+        self.assertFalse(state.projection_rebuilt)
+        self.assertEqual(state.ledger, locked)
+        self.assertEqual(
+            state.queue,
+            host_events.DirtyPathQueue.from_ledger(state.ledger),
+        )
+        self.assertEqual(
+            observed_writes,
+            [(self.layout.dirty_paths_file, state.queue)],
+        )
+        self.assertEqual(
+            (
+                state.queue.project_id,
+                state.queue.ledger_event_count,
+                state.queue.ledger_last_sequence,
+                state.queue.ledger_sha256,
+            ),
+            (
+                state.ledger.project_id,
+                state.ledger.event_count,
+                state.ledger.last_sequence,
+                state.ledger.ledger_sha256,
+            ),
+        )
+
+    def test_advisory_lock_errors_preserve_the_host_event_error_contract(
+        self,
+    ) -> None:
+        event_lock = self.layout.events_file.with_name(
+            self.layout.events_file.name + ".lock"
+        )
+        event_lock.mkdir()
+
+        with self.assertRaises(host_events.HostEventLockError) as raised:
+            self.submit(event_id="evt-lock-error")
+
+        self.assertEqual(raised.exception.reason_code, "host-event-lock-failed")
+        self.assertFalse(self.layout.events_file.exists())
+        self.assertFalse(self.layout.dirty_paths_file.exists())
+
+    def test_release_cleanup_does_not_mask_a_successfully_committed_event(
+        self,
+    ) -> None:
+        event_lock = self.layout.events_file.with_name(
+            self.layout.events_file.name + ".lock"
+        )
+        with patch.object(
+            advisory_lock,
+            "_unlock_descriptor",
+            side_effect=OSError("injected host-event unlock failure"),
+        ) as unlock:
+            committed = self.submit(
+                event_id="evt-release-cleanup",
+                clock=SequenceClock(
+                    datetime(2026, 7, 16, 9, 0, tzinfo=timezone.utc)
+                ),
+            )
+
+        self.assertEqual(committed.disposition, "appended")
+        self.assertEqual(committed.sequence, 1)
+        self.assertEqual(
+            [row["event_id"] for row in self.ledger_rows()],
+            ["evt-release-cleanup"],
+        )
+        self.assertEqual(committed.queue.ledger_event_count, 1)
+        self.assertTrue(event_lock.is_file())
+        unlock.assert_called_once()
+
+        duplicate = self.submit(event_id="evt-release-cleanup")
+        self.assertEqual(duplicate.disposition, "duplicate")
+        self.assertEqual(duplicate.sequence, committed.sequence)
+
+    def test_state_snapshot_repairs_malformed_and_stale_dirty_path_projection(
+        self,
+    ) -> None:
+        self.submit(
+            event_id="evt-repair",
+            operation="moved",
+            paths=("src/model.py", "src/model-v2.py"),
+            clock=SequenceClock(datetime(2026, 7, 16, 9, 0, tzinfo=timezone.utc)),
+        )
+        expected = host_events.snapshot_host_event_state(
+            self.workspace,
+            self.registration.project_id,
+        )
+        self.assertFalse(expected.projection_rebuilt)
+        expected_ledger_bytes = self.layout.events_file.read_bytes()
+        expected_queue_bytes = expected.queue.serialized_bytes()
+        stale_queue = host_events.DirtyPathQueue(
+            project_id=self.registration.project_id,
+            ledger_event_count=0,
+            ledger_last_sequence=0,
+            ledger_sha256=hashlib.sha256(b"").hexdigest(),
+            dirty_paths=(),
+        )
+
+        for label, payload in (
+            ("malformed", b"{not-json\n"),
+            ("stale", stale_queue.serialized_bytes()),
+        ):
+            with self.subTest(projection=label):
+                self.layout.dirty_paths_file.write_bytes(payload)
+                repaired = host_events.snapshot_host_event_state(
+                    self.workspace,
+                    self.registration.project_id,
+                )
+
+                self.assertTrue(repaired.projection_rebuilt)
+                self.assertEqual(repaired.ledger, expected.ledger)
+                self.assertEqual(repaired.queue, expected.queue)
+                self.assertEqual(
+                    self.layout.dirty_paths_file.read_bytes(),
+                    expected_queue_bytes,
+                )
+                self.assertEqual(
+                    self.layout.events_file.read_bytes(),
+                    expected_ledger_bytes,
+                )
+
+                stable = host_events.snapshot_host_event_state(
+                    self.workspace,
+                    self.registration.project_id,
+                )
+                self.assertFalse(stable.projection_rebuilt)
+                self.assertEqual(stable.ledger, repaired.ledger)
+                self.assertEqual(stable.queue, repaired.queue)
+
     def test_legacy_and_future_ledger_or_queue_state_fail_closed(self) -> None:
         self.submit(
             event_id="evt-schema",
@@ -744,13 +932,16 @@ class HostEventTests(unittest.TestCase):
         }
         self.assertEqual(
             machine_files_after - machine_files_before,
-            {"events.jsonl", "indexes/dirty-paths.json"},
+            {"events.jsonl", "events.jsonl.lock", "indexes/dirty-paths.json"},
         )
         self.assertFalse(self.layout.manifest_file.exists())
         self.assertFalse(self.layout.sources_file.exists())
         self.assertFalse(self.layout.evidence_file.exists())
         self.assertFalse(self.layout.overview_file.exists())
-        self.assertEqual(list(self.layout.machine_root.rglob("*.lock")), [])
+        self.assertEqual(
+            list(self.layout.machine_root.rglob("*.lock")),
+            [self.layout.machine_root / "events.jsonl.lock"],
+        )
         self.assertEqual(list(self.layout.machine_root.rglob("*.tmp")), [])
 
 

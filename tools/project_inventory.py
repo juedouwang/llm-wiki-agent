@@ -26,6 +26,12 @@ from typing import Any, TextIO
 
 # Support both ``import tools.project_inventory`` and direct sibling imports.
 if __package__:
+    from .advisory_lock import (
+        DEFAULT_LOCK_TIMEOUT_SECONDS,
+        AdvisoryFileLock,
+        AdvisoryLockError,
+        AdvisoryLockTimeoutError,
+    )
     from .file_classification import (
         CLASSIFICATION_SAMPLE_BYTES,
         FILE_CLASSIFICATION_SCHEMA_VERSION,
@@ -45,7 +51,7 @@ if __package__:
         LayoutError,
         schema_version_of,
     )
-    from .project_registry import load_registered_project
+    from .project_registry import ProjectRegistrationResult, load_registered_project
     from .scan_policy import (
         FilePolicyDecision,
         PathDecision,
@@ -54,6 +60,12 @@ if __package__:
         load_scan_policy,
     )
 else:
+    from advisory_lock import (  # type: ignore[no-redef]
+        DEFAULT_LOCK_TIMEOUT_SECONDS,
+        AdvisoryFileLock,
+        AdvisoryLockError,
+        AdvisoryLockTimeoutError,
+    )
     from file_classification import (  # type: ignore[no-redef]
         CLASSIFICATION_SAMPLE_BYTES,
         FILE_CLASSIFICATION_SCHEMA_VERSION,
@@ -73,7 +85,10 @@ else:
         LayoutError,
         schema_version_of,
     )
-    from project_registry import load_registered_project  # type: ignore[no-redef]
+    from project_registry import (  # type: ignore[no-redef]
+        ProjectRegistrationResult,
+        load_registered_project,
+    )
     from scan_policy import (  # type: ignore[no-redef]
         FilePolicyDecision,
         PathDecision,
@@ -2118,21 +2133,13 @@ def _write_atomic_manifest(
             temporary.unlink(missing_ok=True)
 
 
-def inventory_project(
-    workspace_root: str | Path,
-    project_id: str,
+def _inventory_registered_project(
+    registration: ProjectRegistrationResult,
     *,
     policy_config: ScanPolicyConfig | None = None,
 ) -> ProjectInventoryResult:
-    """Fingerprint one registered project and atomically replace its Manifest.
+    """Inventory one registration while its shared machine-state lock is held."""
 
-    Source bytes are always limited to local SHA-256 state.  B-05 may also read
-    a bounded in-memory prefix only when B-02 grants raw-content access; sensitive
-    and size-limited files are classified from path metadata without opening raw
-    content again.  Nothing is sent externally or written to the source tree.
-    """
-
-    registration = load_registered_project(workspace_root, project_id)
     manifest_file = registration.layout.manifest_file
     if not manifest_file.parent.is_dir():
         raise ProjectInventoryError(
@@ -2199,3 +2206,40 @@ def inventory_project(
         file_state_summary=summary["file_state_summary"],
         policy=summary["policy"],
     )
+
+def inventory_project(
+    workspace_root: str | Path,
+    project_id: str,
+    *,
+    policy_config: ScanPolicyConfig | None = None,
+    lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
+) -> ProjectInventoryResult:
+    """Fingerprint one registered project and atomically replace its Manifest.
+
+    The stable per-project machine-state advisory lock covers the complete prior
+    Manifest read, source scan, and atomic replacement. Source bytes remain local
+    and source-project-read-only under the existing scan policy.
+    """
+
+    registration = load_registered_project(workspace_root, project_id)
+    lock = AdvisoryFileLock(
+        registration.layout.machine_state_lock_file,
+        timeout_seconds=lock_timeout_seconds,
+    )
+    try:
+        lock.acquire()
+    except AdvisoryLockTimeoutError as exc:
+        raise ProjectInventoryError(
+            "timed out waiting for the project machine-state lock"
+        ) from exc
+    except AdvisoryLockError as exc:
+        raise ProjectInventoryError(
+            "could not acquire the project machine-state lock"
+        ) from exc
+    try:
+        return _inventory_registered_project(
+            registration,
+            policy_config=policy_config,
+        )
+    finally:
+        lock.release()

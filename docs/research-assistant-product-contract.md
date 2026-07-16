@@ -4,7 +4,7 @@
 - 决策编号：`P-05 Agent 原生执行闭环`
 - 确认日期：2026-07-15
 - 适用分支：`research-assistant`
-- 当前实现状态：R1 确定性基础链已于 2026-07-16 验收；R2 now includes G-01, G-07, G-08, E-01, and the initial deterministic E-08 one-action prefix. The current `project understand` action only executes `register -> inventory -> classify` and returns a resumable run report. Extraction, 15 Markdown artifacts, Hooks, Verified Query, and Web/`--open` remain incomplete. G-07 query, reconcile, and plan remain explicit unavailable contracts rather than completed later Core capabilities. The remainder of this document is the target product contract, not a claim that all later capabilities are implemented.
+- 当前实现状态：R1 确定性基础链已于 2026-07-16 验收；R2 currently includes G-01, G-07, G-08, E-01, the initial deterministic E-08 one-action prefix, H-04, and H-07 as validated on 2026-07-16. H-07 exposes explicit Core/CLI/`llmwiki_reconcile` synchronization that always runs `register -> inventory -> classify`; Hooks, host events, and dirty paths are optional untrusted hints, and only query and plan remain unavailable in the seven-tool MCP catalog. Extraction, H-05 selective refresh, 15 Markdown artifacts, Hook/Plugin adapter wiring, Verified Query, planning, and Web/`--open` remain incomplete. The remainder of this document is the target product contract, not a claim that all later capabilities are implemented.
 
 ## 1. 产品定义
 
@@ -115,9 +115,11 @@ Hooks 可能被禁用、未信任、配置错误或因宿主版本不同而不�
 ├─ sources.jsonl
 ├─ evidence.jsonl          # 规划项；由后续 D 阶段实现
 ├─ relations.jsonl         # 规划项；可从知识与 Evidence 重建
-├─ events.jsonl            # H-04 implemented: append-only host-event ledger
+├─ events.jsonl            # H-04: append-only host-event ledger
 ├─ extracted/
-├─ indexes/                 # includes rebuildable H-04 dirty-paths.json
+├─ indexes/
+│  ├─ dirty-paths.json      # H-04: rebuildable, untrusted hint projection
+│  └─ reconciliation-state.json  # H-07: strict Schema v1 acknowledgement
 └─ runs/
 ```
 
@@ -319,7 +321,7 @@ models/model.ckpt          → metadata_only / 模型权重，不做语义解析
 
 ## 9. Agent 原生执行闭环
 
-目标交互：
+目标交互（以下是最终产品行为，不表示所有步骤都已实现）：
 
 ```text
 打开项目
@@ -333,6 +335,8 @@ models/model.ckpt          → metadata_only / 模型权重，不做语义解析
 → 增量更新 Markdown、索引和网页
 → 当前宿主继续下一任务
 ```
+
+截至 2026-07-16，当前实现只贯通确定性的 `project understand` 前缀、H-04 事件输入边界和 H-07 保守 reconciliation 边界。H-07 可以由 CLI 或 `llmwiki_reconcile` 显式调用，不要求 Hook 存在或可信；任务核验、选择性提取、知识刷新、规划和网页更新仍是后续能力。
 
 任务执行包保留为 Core 与宿主之间的内部协议：
 
@@ -366,7 +370,7 @@ status:
 
 修改源文件后，技术上仍需重新读取变化内容，但必须在同一工作流内自动完成。
 
-默认行为：
+目标增量行为（这是 H-01 至 H-06 的产品方向，不是当前 H-07 的选择性算法）：
 
 1. Hook 或文件观察信号标记 `dirty paths`；
 2. 在合适边界比较 Git diff、文件 hash 和上一代 Manifest；
@@ -376,16 +380,17 @@ status:
 6. 重新生成并核验受影响内容；
 7. 刷新 Markdown、索引和网页。
 
-Implementation status on 2026-07-16: H-04 completes only the deterministic
-input layer in step 1. Codex, Claude Code, or another host can idempotently
-append a closed file-event record to `events.jsonl`; Core rebuilds
-`indexes/dirty-paths.json` from the complete ledger. Events are unverified
-hints: they do not read source content, mutate curated knowledge, or count as
-reconciliation. Steps 2--7, Stop/explicit synchronization, missed-event
-full-scan fallback, and selective refresh remain H-07, H-01--H-03, and
-H-05--H-06 work. See [`host-event-ledger.md`](host-event-ledger.md).
+截至 2026-07-16 的已验证实现边界是：
 
-只有以下情况需要全量扫描：
+- H-04 provides the append-only `events.jsonl` ledger and rebuildable `indexes/dirty-paths.json` projection. Host events remain untrusted hints; they do not read source content, mutate curated knowledge, or by themselves count as reconciliation.
+- H-07 provides explicit Core, `python -m tools.project reconcile <project_id> --json`, and `llmwiki_reconcile` entry points. Every call uses a fresh full `register -> inventory -> classify` run as the correctness fallback, even when Hooks are disabled or the event/explicit dirty-path hints are absent, incomplete, or inconsistent.
+- A stable project-scoped `indexes/machine-state.lock` serializes Manifest, coverage, run, and reconciliation writers; host-event ingestion uses the separate stable `events.jsonl.lock`, with the fixed order `machine-state.lock -> events.jsonl.lock`. Lock files remain on disk as coordination points.
+- Success requires a completed run, zero coverage failures, and exact SHA-256/byte consistency for the validated Manifest and coverage artifacts through checkpoint commit. A successful call atomically advances strict Schema v1 machine state at `.llmwiki/projects/<project_id>/indexes/reconciliation-state.json` for only the event snapshot captured before scanning. A failed call advances no acknowledgement; events appended after the starting snapshot remain pending for a later reconciliation.
+- H-07 may update Manifest, coverage, run, dirty projection, stable lock files, and reconciliation checkpoint machine state. It leaves the registered source project and curated Markdown knowledge unchanged.
+
+Therefore current H-07 always performs the full scan through `classify`; it does not extract changed files, propagate `stale`, refresh knowledge, or render Markdown/Web output, and it must not be described as H-05 selective extraction or selective knowledge refresh. See [`host-event-ledger.md`](host-event-ledger.md) and [`project-reconciliation.md`](project-reconciliation.md).
+
+After the future H-05 selective path is implemented and proven equivalent to the full-scan result, the target product should require a full scan only when:
 
 - 首次导入；
 - 用户请求完整性检查；

@@ -1,4 +1,4 @@
-# Research Core Service Facade (G-01, extended through H-04)
+# Research Core Service Facade (G-01, extended through H-07)
 
 - G-01 status: implemented and accepted
 - Public module: `tools.research_core`
@@ -9,7 +9,8 @@
 - E-01 run-orchestration validation: `tests/test_project_run_orchestration.py`
 - E-08 deterministic-action validation: `tests/test_project_understand.py`
 - H-04 host-event validation: `tests/test_host_events.py`
-- Existing checkpoints: `checkpoint/g-01-core-service`, `checkpoint/g-07-mcp-server`, `checkpoint/g-08-host-context-pack`, `checkpoint/e-01-run-orchestrator`, `checkpoint/e-08-deterministic-understand`; H-04 is completed by this task commit and checkpointed as `checkpoint/h-04-host-event-ledger`
+- H-07 reconciliation validation: `tests/test_project_reconciliation.py`
+- Existing checkpoints: `checkpoint/g-01-core-service`, `checkpoint/g-07-mcp-server`, `checkpoint/g-08-host-context-pack`, `checkpoint/e-01-run-orchestrator`, `checkpoint/e-08-deterministic-understand`, and `checkpoint/h-04-host-event-ledger`; H-07 is complete after validation on 2026-07-16 and checkpointed as `checkpoint/h-07-project-reconciliation`
 
 ## Purpose
 
@@ -43,6 +44,7 @@ project and does not create state in the research source tree.
 | `project_context(project_id)` | validated `tools.project_registry.load_registered_project` projection | path-free `ProjectContextResult` |
 | `host_event_submit(project_id, ...)` | `tools.host_events.submit_host_event` append plus deterministic projection | path-free `HostEventSubmitResult` |
 | `dirty_path_queue(project_id)` | `tools.host_events.load_dirty_path_queue` ledger validation and projection repair | path-free `DirtyPathQueueResult` |
+| `project_reconcile(project_id, dirty_paths=...)` | `tools.project_reconciliation.reconcile_project` with the E-01 run boundary through `classify` | path-free `ProjectReconciliationResult` |
 | `scan(...)` | `tools.project_inventory.inventory_project` with `ScanPolicyConfig` | `ProjectInventoryResult` |
 | `coverage(project_id)` | `tools.coverage_report.generate_coverage_report` | local/path-bearing `CoverageReportResult` |
 | `coverage_view(project_id)` | `coverage(...)` plus host-safe projection | path-free `HostCoverageResult` |
@@ -108,9 +110,48 @@ are rebuilt from the ledger, while legacy and future schemas fail closed.
 Both results expose only project IDs, project-relative paths, relative artifact
 names, event metadata, and queue aggregates. Submission performs lexical path
 validation only: it does not scan, stat, hash, open, or mutate source files and
-never updates curated knowledge. H-07 reconciliation and Hook reliability remain
-separate. The complete contract is documented in
+never updates curated knowledge. H-04 remains the untrusted input ledger; H-07
+consumes it through a separate full-scan checkpoint. Hook installation and
+reliability remain separate. The complete event contract is documented in
 [`host-event-ledger.md`](host-event-ledger.md).
+
+### Conservative project reconciliation
+
+```python
+result = core.project_reconcile(
+    "study-0123456789ab",
+    dirty_paths=["src/model.py"],  # optional untrusted hints
+)
+payload = result.as_dict()
+```
+
+The validated H-07 method snapshots the current H-04 event ledger, verifies the
+previous acknowledged prefix, and always starts a fresh E-01 run with
+`through_stage="classify"`. `register`, `inventory`, and `classify` must succeed;
+the run pauses after `classify`, and later stages remain pending. Core then
+validates the persisted Manifest and coverage report, requires zero failed files,
+and rechecks their exact run-bound hashes and bytes before atomically advancing
+`.llmwiki/projects/<project_id>/indexes/reconciliation-state.json`.
+
+Dirty paths affect reporting only. Calls with no events or explicit paths, and
+calls whose two hint sets disagree, use the same `mode: full-scan` and
+`source_of_truth: manifest-and-hash`. This makes explicit Core/CLI/MCP
+reconciliation independent of Hook availability.
+
+Only the event prefix captured before the scan is acknowledged. Events appended
+during the scan are returned as remaining and stay pending. Any run, positive
+coverage-failure count, artifact hash/byte, lock, state, or snapshot-prefix
+failure leaves the acknowledgement unchanged.
+The strict Schema v1 state rejects legacy, future, malformed, or path-unsafe
+records without migration.
+
+`ProjectReconciliationResult` contains run/stage status, Manifest and coverage
+hashes, bounded hint counts/status, and previous/current/remaining
+acknowledgement metadata. It contains no absolute paths or dirty-path values. The
+operation may update deterministic machine state, but it leaves the registered
+source and curated knowledge trees unchanged and does not claim H-05 selective
+extraction or knowledge refresh. See
+[`project-reconciliation.md`](project-reconciliation.md).
 
 ### One-action deterministic project understanding
 
@@ -293,27 +334,35 @@ python -m tools.project inventory ... --json     -> core.scan(...)
 python -m tools.project coverage ... --json      -> core.coverage(...)
 python -m tools.project event submit ... --json  -> core.host_event_submit(...)
 python -m tools.project event show ... --json    -> core.dirty_path_queue(...)
+python -m tools.project reconcile ... --json     -> core.project_reconcile(...)
 python -m tools.project source open ... --json   -> core.source_open(...)
 ```
 
 For JSON commands, the CLI adds top-level `ok: true` to the service
 `as_dict()` payload. `context` therefore has exact Core/CLI/MCP data parity.
 After removing the CLI `ok` field and the MCP success envelope, `context-pack`
-has exact direct-builder/Core/CLI/MCP pack parity. Coverage and source-open MCP
-calls use `coverage_view` and `source_open_view`, so
-they have semantic report/excerpt parity while intentionally omitting the local
-CLI's absolute paths.
+has exact direct-builder/Core/CLI/MCP pack parity. Reconciliation also has exact
+Core/CLI/MCP result parity after removing the CLI `ok` field and MCP success
+envelope because its result is already path-free. Coverage and source-open MCP
+calls use `coverage_view` and `source_open_view`, so they have semantic
+report/excerpt parity while intentionally omitting the local CLI's absolute
+paths.
 
 ## Safety and ownership boundaries
 
 - Machine state stays under `.llmwiki/projects/<project_id>/` in the configured
-  workspace.
+  workspace. Inventory, coverage, run mutations/orchestration, and reconciliation
+  serialize through the stable `indexes/machine-state.lock`.
 - Curated knowledge stays under the configured
   `wiki/projects/<project_id>/`-equivalent knowledge root.
 - The registered research source project remains read-only.
 - Host-safe DTOs do not rewrite legacy data; Host Context assembly only triggers
   the existing deterministic coverage-report write. H-04 persists only its
-  append-only event ledger and rebuildable dirty-path projection.
+  append-only event ledger and rebuildable dirty-path projection. H-07 may also
+  persist a fresh run, Manifest/coverage generation, projection repair, and the
+  strict reconciliation checkpoint.
+- H-07 acknowledges only its starting event snapshot; failures and events that
+  arrive after that snapshot remain pending.
 - All schema/version checks continue through `tools.project_layout` and accepted
   R1 modules; future unsupported versions fail closed.
 - No source content is sent externally by this deterministic service path.
@@ -331,23 +380,27 @@ python -B -m pytest -q `
   tests/test_research_mcp_server.py `
   tests/test_host_context_pack.py `
   tests/test_project_understand.py `
-  tests/test_host_events.py
+  tests/test_host_events.py `
+  tests/test_project_reconciliation.py
 ```
 
 They cover direct service operations, real CLI delegation, complete scan-policy
 mapping, host-safe DTO redaction, Manifest source-content authorization, exact
 source/evidence reopening, Host Context byte accounting and deterministic
-truncation, host-event idempotency and projection repair, output-schema
-fail-closed behavior, source-project hash/size/mtime/mode preservation, and the
-absence of LLM/network/Web calls.
+truncation, host-event idempotency and projection repair, reconciliation
+snapshot acknowledgement and failure retention, output-schema fail-closed
+behavior, source-project hash/size/mtime/mode preservation, unchanged curated
+knowledge, and the absence of LLM/network/Web calls.
 
 ## Explicit non-goals
 
-The accepted R2 Core slices now include the H-04 host-event ledger, but do not
-yet implement Hook installation or reliability, H-07 reconciliation, selective
-refresh, full extraction/synthesis, 15-artifact rendering, Web rendering/`--open`,
+The accepted R2 Core slices now include the H-04 host-event ledger and the
+validated H-07 conservative reconciliation boundary. They do not yet implement
+Hook installation or reliability, H-05 selective extraction/knowledge refresh,
+full extraction/synthesis, 15-artifact rendering, Web rendering/`--open`,
 Verified Query, or the I-02 task store and planning pipeline. The initial E-08
-action is only the deterministic
+action and H-07 fallback both stop at the deterministic
 `register -> inventory -> classify` prefix. G-07 supplies the minimal MCP
-adapter documented in [`research-mcp-server.md`](research-mcp-server.md); later
-capabilities remain separate roadmap tasks.
+adapter documented in [`research-mcp-server.md`](research-mcp-server.md); query
+and plan remain honest unavailable contracts, and later capabilities remain
+separate roadmap tasks.

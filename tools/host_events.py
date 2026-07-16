@@ -19,15 +19,23 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import tempfile
-import time
 from typing import Any, Callable, Iterable, Iterator, Literal, Mapping, cast
 import unicodedata
-import uuid
 
 if __package__:
+    from .advisory_lock import (
+        AdvisoryFileLock,
+        AdvisoryLockError,
+        AdvisoryLockTimeoutError,
+    )
     from .project_layout import LayoutError
     from .project_registry import load_registered_project
 else:
+    from advisory_lock import (  # type: ignore[no-redef]
+        AdvisoryFileLock,
+        AdvisoryLockError,
+        AdvisoryLockTimeoutError,
+    )
     from project_layout import LayoutError  # type: ignore[no-redef]
     from project_registry import (  # type: ignore[no-redef]
         load_registered_project,
@@ -754,6 +762,15 @@ class DirtyPathQueueResult:
         }
 
 
+@dataclass(frozen=True)
+class HostEventStateSnapshot:
+    """Consistent ledger snapshot plus its rebuildable dirty-path projection."""
+
+    ledger: HostEventLedgerSnapshot
+    queue: DirtyPathQueue
+    projection_rebuilt: bool
+
+
 def _validate_lock_timeout(value: float) -> float:
     if (
         isinstance(value, bool)
@@ -768,47 +785,28 @@ def _validate_lock_timeout(value: float) -> float:
 @contextmanager
 def _exclusive_event_lock(lock_file: Path, *, timeout_seconds: float) -> Iterator[None]:
     timeout = _validate_lock_timeout(timeout_seconds)
-    if lock_file.is_symlink():
-        raise HostEventLockError(f"event lock must not be a symbolic link: {lock_file}")
-    token = f"{os.getpid()}:{uuid.uuid4().hex}\n".encode("ascii")
-    deadline = time.monotonic() + timeout
-    descriptor: int | None = None
-    while descriptor is None:
-        try:
-            descriptor = os.open(
-                lock_file,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                0o600,
-            )
-        except (FileExistsError, PermissionError) as exc:
-            if time.monotonic() >= deadline:
-                raise HostEventLockError(
-                    f"timed out waiting for host-event lock: {lock_file}"
-                ) from exc
-            time.sleep(_LOCK_RETRY_SECONDS)
-        except OSError as exc:
-            raise HostEventLockError(
-                f"could not create host-event lock {lock_file}: {exc}"
-            ) from exc
     try:
-        with os.fdopen(descriptor, "wb") as target:
-            descriptor = None
-            target.write(token)
-            target.flush()
-            os.fsync(target.fileno())
+        lock = AdvisoryFileLock(
+            lock_file,
+            timeout_seconds=timeout,
+            retry_seconds=_LOCK_RETRY_SECONDS,
+        )
+        lock.acquire()
+    except AdvisoryLockTimeoutError as exc:
+        raise HostEventLockError(
+            f"timed out waiting for host-event lock: {lock_file}"
+        ) from exc
+    except AdvisoryLockError as exc:
+        raise HostEventLockError(
+            f"could not acquire host-event lock {lock_file}: {exc}"
+        ) from exc
+    try:
         yield
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        try:
-            if lock_file.read_bytes() == token:
-                lock_file.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            raise HostEventLockError(
-                f"could not release host-event lock {lock_file}: {exc}"
-            ) from exc
+        # AdvisoryFileLock.release() is deliberately best-effort: once the ledger
+        # or projection commit succeeds, cleanup cannot turn it into a false
+        # failure that callers might retry.
+        lock.release()
 
 
 
@@ -1021,13 +1019,18 @@ def _registration_paths(
     )
 
 
-def load_host_event_ledger(
+@contextmanager
+def locked_host_event_ledger(
     workspace_root: str | Path,
     project_id: str,
     *,
     lock_timeout_seconds: float = _DEFAULT_LOCK_TIMEOUT_SECONDS,
-) -> HostEventLedgerSnapshot:
-    """Load a consistent validated snapshot without reading project sources."""
+) -> Iterator[HostEventLedgerSnapshot]:
+    """Yield a validated ledger snapshot while holding the H-04 writer lock.
+
+    Callers must keep the context short. The lock coordinates exact snapshot-prefix
+    checks and commits, but it must never be held across project scanning.
+    """
 
     normalized_id, events_file, _ = _registration_paths(workspace_root, project_id)
     lock_file = events_file.with_name(events_file.name + ".lock")
@@ -1035,16 +1038,16 @@ def load_host_event_ledger(
         lock_file,
         timeout_seconds=lock_timeout_seconds,
     ):
-        return _load_ledger_unlocked(events_file, project_id=normalized_id)
+        yield _load_ledger_unlocked(events_file, project_id=normalized_id)
 
 
-def load_dirty_path_queue(
+def snapshot_host_event_state(
     workspace_root: str | Path,
     project_id: str,
     *,
     lock_timeout_seconds: float = _DEFAULT_LOCK_TIMEOUT_SECONDS,
-) -> DirtyPathQueueResult:
-    """Load or repair the derived queue from the authoritative ledger."""
+) -> HostEventStateSnapshot:
+    """Snapshot the ledger and atomically repair its derived path projection."""
 
     normalized_id, events_file, queue_file = _registration_paths(
         workspace_root,
@@ -1055,13 +1058,49 @@ def load_dirty_path_queue(
         lock_file,
         timeout_seconds=lock_timeout_seconds,
     ):
-        snapshot = _load_ledger_unlocked(events_file, project_id=normalized_id)
-        queue = DirtyPathQueue.from_ledger(snapshot)
+        ledger = _load_ledger_unlocked(events_file, project_id=normalized_id)
+        queue = DirtyPathQueue.from_ledger(ledger)
         rebuilt = _write_queue_atomic(queue_file, queue)
-    return DirtyPathQueueResult(
-        project_id=normalized_id,
+    return HostEventStateSnapshot(
+        ledger=ledger,
         queue=queue,
         projection_rebuilt=rebuilt,
+    )
+
+
+def load_host_event_ledger(
+    workspace_root: str | Path,
+    project_id: str,
+    *,
+    lock_timeout_seconds: float = _DEFAULT_LOCK_TIMEOUT_SECONDS,
+) -> HostEventLedgerSnapshot:
+    """Load a consistent validated snapshot without reading project sources."""
+
+    with locked_host_event_ledger(
+        workspace_root,
+        project_id,
+        lock_timeout_seconds=lock_timeout_seconds,
+    ) as snapshot:
+        return snapshot
+
+
+def load_dirty_path_queue(
+    workspace_root: str | Path,
+    project_id: str,
+    *,
+    lock_timeout_seconds: float = _DEFAULT_LOCK_TIMEOUT_SECONDS,
+) -> DirtyPathQueueResult:
+    """Load or repair the derived queue from the authoritative ledger."""
+
+    state = snapshot_host_event_state(
+        workspace_root,
+        project_id,
+        lock_timeout_seconds=lock_timeout_seconds,
+    )
+    return DirtyPathQueueResult(
+        project_id=state.ledger.project_id,
+        queue=state.queue,
+        projection_rebuilt=state.projection_rebuilt,
     )
 
 

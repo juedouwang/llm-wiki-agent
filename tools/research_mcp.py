@@ -50,6 +50,16 @@ if __package__:
         SchemaVersionError,
         UnsupportedSchemaVersionError,
     )
+    from .project_inventory import PROJECT_MANIFEST_VERSION
+    from .project_reconciliation import (
+        RECONCILIATION_MODE,
+        RECONCILIATION_RESULT_KIND,
+        RECONCILIATION_SCHEMA_VERSION,
+        RECONCILIATION_SOURCE_OF_TRUTH,
+        RECONCILIATION_THROUGH_STAGE,
+        RECONCILIATION_VERSION,
+        ProjectReconciliationError,
+    )
     from .project_registry import ProjectNotRegisteredError, ProjectRecordError
     from .research_core import (
         HOST_COVERAGE_KIND,
@@ -92,6 +102,18 @@ else:
         SchemaVersionError,
         UnsupportedSchemaVersionError,
     )
+    from project_inventory import (  # type: ignore[no-redef]
+        PROJECT_MANIFEST_VERSION,
+    )
+    from project_reconciliation import (  # type: ignore[no-redef]
+        RECONCILIATION_MODE,
+        RECONCILIATION_RESULT_KIND,
+        RECONCILIATION_SCHEMA_VERSION,
+        RECONCILIATION_SOURCE_OF_TRUTH,
+        RECONCILIATION_THROUGH_STAGE,
+        RECONCILIATION_VERSION,
+        ProjectReconciliationError,
+    )
     from project_registry import (  # type: ignore[no-redef]
         ProjectNotRegisteredError,
         ProjectRecordError,
@@ -113,7 +135,7 @@ else:
 
 MCP_ENVELOPE_SCHEMA_VERSION = 1
 MCP_SERVER_NAME = "llmwiki-research-core"
-MCP_SERVER_VERSION = "0.2.0"
+MCP_SERVER_VERSION = "0.3.0"
 
 PROJECT_CONTEXT_TOOL = "llmwiki_project_context"
 HOST_CONTEXT_TOOL = "llmwiki_host_context"
@@ -135,7 +157,6 @@ _TOOL_CAPABILITIES = {
 
 _UNAVAILABLE_MILESTONES = {
     QUERY_TOOL: "G-04",
-    RECONCILE_TOOL: "H-07",
     PLAN_TOOL: "I-04",
 }
 
@@ -153,6 +174,12 @@ _SAFE_ERROR_MESSAGES = {
     "schema-version-invalid": "A required structured record has an invalid schema version.",
     "schema-version-unsupported": "A structured record uses a future unsupported schema version.",
     "coverage-unavailable": "Coverage could not be generated from the current project state.",
+    "reconciliation-failed": "Project reconciliation could not be completed safely.",
+    "reconciliation-hint-invalid": "A supplied reconciliation hint is invalid.",
+    "reconciliation-state-invalid": "The reconciliation checkpoint could not be trusted.",
+    "reconciliation-lock-failed": "The project reconciliation lock is unavailable.",
+    "reconciliation-run-failed": "The required full reconciliation scan failed.",
+    "reconciliation-snapshot-invalid": "The host-event snapshot boundary changed unexpectedly.",
     "core-layout-invalid": "The requested operation violates the Research Core storage contract.",
     "local-io-failed": "A required local operation failed.",
     "internal-error": "The MCP adapter could not complete the request safely.",
@@ -393,7 +420,7 @@ def _host_context_result_schema() -> dict[str, Any]:
             ),
             "inventory": _object_schema(
                 {
-                    "manifest_version": {"type": "string", "minLength": 1},
+                    "manifest_version": {"const": PROJECT_MANIFEST_VERSION},
                     "scan_generation": positive,
                     "file_count": nonnegative,
                     "byte_count": nonnegative,
@@ -787,6 +814,126 @@ def _source_open_result_schema() -> dict[str, Any]:
     )
 
 
+def _reconciliation_result_schema() -> dict[str, Any]:
+    sha256 = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    stage_statuses = _object_schema(
+        {
+            "register": {"const": "succeeded"},
+            "inventory": {"const": "succeeded"},
+            "classify": {"const": "succeeded"},
+        },
+        required=("register", "inventory", "classify"),
+    )
+    run = _object_schema(
+        {
+            "run_id": {"type": "string", "minLength": 1},
+            "status": {"const": "paused"},
+            "through_stage": {"const": RECONCILIATION_THROUGH_STAGE},
+            "stages": stage_statuses,
+        },
+        required=("run_id", "status", "through_stage", "stages"),
+    )
+    manifest = _object_schema(
+        {
+            "manifest_version": {"type": "string", "minLength": 1},
+            "scan_generation": {"type": "integer", "minimum": 1},
+            "sha256": sha256,
+        },
+        required=("manifest_version", "scan_generation", "sha256"),
+    )
+    coverage = _object_schema(
+        {
+            "report_version": {"const": COVERAGE_REPORT_VERSION},
+            "sha256": sha256,
+            "failed_file_count": {"type": "integer", "minimum": 0},
+        },
+        required=("report_version", "sha256", "failed_file_count"),
+    )
+    hints = _object_schema(
+        {
+            "status": {
+                "type": "string",
+                "enum": [
+                    "absent",
+                    "ledger-only",
+                    "explicit-only",
+                    "consistent",
+                    "inconsistent",
+                ],
+            },
+            "snapshot_event_count": {"type": "integer", "minimum": 0},
+            "snapshot_last_sequence": {"type": "integer", "minimum": 0},
+            "snapshot_ledger_sha256": sha256,
+            "pending_event_count": {"type": "integer", "minimum": 0},
+            "queued_dirty_path_count": {"type": "integer", "minimum": 0},
+            "explicit_dirty_path_count": {"type": "integer", "minimum": 0},
+            "combined_dirty_path_count": {"type": "integer", "minimum": 0},
+            "projection_rebuilt": {"type": "boolean"},
+        },
+        required=(
+            "status",
+            "snapshot_event_count",
+            "snapshot_last_sequence",
+            "snapshot_ledger_sha256",
+            "pending_event_count",
+            "queued_dirty_path_count",
+            "explicit_dirty_path_count",
+            "combined_dirty_path_count",
+            "projection_rebuilt",
+        ),
+    )
+    acknowledgement = _object_schema(
+        {
+            "previous_through_sequence": {"type": "integer", "minimum": 0},
+            "current_through_sequence": {"type": "integer", "minimum": 0},
+            "newly_acknowledged_event_count": {"type": "integer", "minimum": 0},
+            "remaining_event_count": {"type": "integer", "minimum": 0},
+            "remaining_dirty_path_count": {"type": "integer", "minimum": 0},
+            "state_revision": {"type": "integer", "minimum": 1},
+            "acknowledged_ledger_sha256": sha256,
+        },
+        required=(
+            "previous_through_sequence",
+            "current_through_sequence",
+            "newly_acknowledged_event_count",
+            "remaining_event_count",
+            "remaining_dirty_path_count",
+            "state_revision",
+            "acknowledged_ledger_sha256",
+        ),
+    )
+    return _object_schema(
+        {
+            "schema_version": {"const": RECONCILIATION_SCHEMA_VERSION},
+            "kind": {"const": RECONCILIATION_RESULT_KIND},
+            "reconciliation_version": {"const": RECONCILIATION_VERSION},
+            "project_id": {"type": "string", "minLength": 1},
+            "status": {"const": "reconciled"},
+            "mode": {"const": RECONCILIATION_MODE},
+            "source_of_truth": {"const": RECONCILIATION_SOURCE_OF_TRUTH},
+            "run": run,
+            "manifest": manifest,
+            "coverage": coverage,
+            "hints": hints,
+            "acknowledgement": acknowledgement,
+        },
+        required=(
+            "schema_version",
+            "kind",
+            "reconciliation_version",
+            "project_id",
+            "status",
+            "mode",
+            "source_of_truth",
+            "run",
+            "manifest",
+            "coverage",
+            "hints",
+            "acknowledgement",
+        ),
+    )
+
+
 def _output_schema(
     capability: str,
     result_schema: dict[str, Any] | None = None,
@@ -981,22 +1128,22 @@ def tool_contracts() -> tuple[Tool, ...]:
             name=RECONCILE_TOOL,
             title="Reconcile research project",
             description=(
-                "Reserved Core reconciliation contract. G-07 returns "
-                "capability-unavailable until the real H-07 synchronization boundary "
-                "exists."
+                "Run the H-07 conservative synchronization boundary. Dirty paths are "
+                "untrusted hints; Core always performs the correctness full scan."
             ),
             inputSchema=_object_schema(
                 {
                     "project_id": project_id,
                     "dirty_paths": {
                         "type": "array",
-                        "items": {"type": "string"},
+                        "items": _relative_path_schema(),
+                        "maxItems": 256,
                         "uniqueItems": True,
                     },
                 },
                 required=("project_id",),
             ),
-            outputSchema=_output_schema("reconcile"),
+            outputSchema=_output_schema("reconcile", _reconciliation_result_schema()),
             annotations=ToolAnnotations(
                 title="Reconcile research project",
                 readOnlyHint=False,
@@ -1207,9 +1354,13 @@ def _validate_reconcile(arguments: object) -> dict[str, Any]:
     dirty_paths = values.get("dirty_paths", [])
     if (
         not isinstance(dirty_paths, list)
+        or len(dirty_paths) > 256
+        or len(set(dirty_paths)) != len(dirty_paths)
         or any(not isinstance(path, str) or not path for path in dirty_paths)
     ):
-        raise MCPArgumentError("dirty_paths must be an array of non-empty strings")
+        raise MCPArgumentError(
+            "dirty_paths must be at most 256 unique non-empty strings"
+        )
     return {
         "project_id": _required_text(values, "project_id"),
         "dirty_paths": tuple(dirty_paths),
@@ -1260,6 +1411,9 @@ def _domain_error_code(exc: BaseException) -> str:
         reason_code = getattr(item, "reason_code", None)
         if isinstance(item, SourceAccessError) and isinstance(reason_code, str):
             return reason_code
+    for item in chain:
+        if isinstance(item, ProjectReconciliationError):
+            return item.reason_code
     for item in chain:
         if isinstance(item, ProjectRecordError):
             return "project-record-invalid"
@@ -1363,7 +1517,9 @@ class ResearchMCPAdapter:
         if name == QUERY_TOOL:
             _validate_query(arguments)
         elif name == RECONCILE_TOOL:
-            _validate_reconcile(arguments)
+            values = _validate_reconcile(arguments)
+            project_id = values.pop("project_id")
+            return self.service.project_reconcile(project_id, **values).as_dict()
         elif name == PLAN_TOOL:
             _validate_plan(arguments)
         else:  # Guarded by call_tool; retained as a fail-closed invariant.
@@ -1383,9 +1539,9 @@ def create_mcp_server(adapter: ResearchMCPAdapter) -> Server:
         instructions=(
             "Use host-context for a budget-bounded project handoff, and use "
             "project-context or coverage for focused metadata. Call source-open "
-            "only when exact current-source evidence is needed. Query, reconcile, "
-            "and plan return explicit capability-unavailable errors until their "
-            "Core slices land."
+            "only when exact current-source evidence is needed. Reconcile performs "
+            "a conservative full scan even when Hook hints are absent. Query and plan "
+            "remain explicit capability-unavailable contracts."
         ),
     )
 

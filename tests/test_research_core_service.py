@@ -18,6 +18,7 @@ from unittest.mock import Mock, patch
 from tools.evidence_registry import register_evidence
 from tools.extraction_schema import LineRangeLocator
 from tools.project import main as project_main
+from tools.project_reconciliation import ProjectReconciliationResult
 from tools.research_core import (
     HostCoverageResult,
     HostSourceOpenResult,
@@ -238,6 +239,93 @@ class ResearchCoreServiceTests(unittest.TestCase):
                 policy_config=policy,
                 exclude_patterns=("other/**",),
             )
+
+    def test_project_reconcile_delegates_path_bearing_core_to_path_free_boundary(
+        self,
+    ) -> None:
+        project_id = "h-07-delegation"
+        empty_ledger_sha = hashlib.sha256(b"").hexdigest()
+        expected = ProjectReconciliationResult(
+            project_id=project_id,
+            run_id="run-h-07",
+            run_status="paused",
+            stage_statuses={
+                "register": "succeeded",
+                "inventory": "succeeded",
+                "classify": "succeeded",
+            },
+            manifest_version="project-inventory-v4",
+            manifest_scan_generation=1,
+            manifest_sha256="a" * 64,
+            coverage_report_version="coverage-report-v1",
+            coverage_sha256="b" * 64,
+            coverage_failure_count=0,
+            hint_status="explicit-only",
+            snapshot_event_count=0,
+            snapshot_last_sequence=0,
+            snapshot_ledger_sha256=empty_ledger_sha,
+            pending_event_count=0,
+            queued_dirty_path_count=0,
+            explicit_dirty_path_count=2,
+            combined_dirty_path_count=2,
+            projection_rebuilt=False,
+            previous_acknowledged_through_sequence=0,
+            acknowledged_through_sequence=0,
+            newly_acknowledged_event_count=0,
+            remaining_event_count=0,
+            remaining_dirty_path_count=0,
+            state_revision=1,
+            acknowledged_ledger_sha256=empty_ledger_sha,
+        )
+        dirty_paths = (Path("src/model.py"), "README.md")
+        clock = Mock(name="reconciliation_clock")
+
+        with patch(
+            "tools.research_core.reconcile_project",
+            return_value=expected,
+        ) as delegate:
+            actual = self.service.project_reconcile(
+                project_id,
+                dirty_paths=dirty_paths,
+                clock=clock,
+                lock_timeout_seconds=1.25,
+            )
+
+        self.assertIs(actual, expected)
+        delegate.assert_called_once_with(
+            self.workspace.resolve(),
+            project_id,
+            dirty_paths=dirty_paths,
+            run_factory=self.service.project_run_start,
+            coverage_factory=self.service.coverage,
+            clock=clock,
+            lock_timeout_seconds=1.25,
+        )
+        call = delegate.call_args
+        self.assertIs(
+            call.kwargs["run_factory"].__func__,
+            ResearchCoreService.project_run_start,
+        )
+        self.assertIs(
+            call.kwargs["coverage_factory"].__func__,
+            ResearchCoreService.coverage,
+        )
+        self.assertIsNot(
+            call.kwargs["coverage_factory"].__func__,
+            ResearchCoreService.coverage_view,
+        )
+
+        serialized = json.dumps(actual.as_dict(), ensure_ascii=False, sort_keys=True)
+        for forbidden in (
+            str(self.workspace.resolve()),
+            str(self.project.resolve()),
+            "src/model.py",
+            "README.md",
+            "run_file",
+            "manifest_file",
+            "report_file",
+        ):
+            self.assertNotIn(forbidden, serialized)
 
     def test_real_script_and_module_cli_match_direct_service_results(self) -> None:
         registration = self.service.register(

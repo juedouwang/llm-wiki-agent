@@ -6,14 +6,19 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from collections import Counter
 from pathlib import Path
+from unittest.mock import patch
 
+from tools import coverage_report as coverage_report_module
+from tools.advisory_lock import AdvisoryFileLock, AdvisoryLockTimeoutError
 from tools.coverage_report import (
     COVERAGE_REPORT_KIND,
     COVERAGE_REPORT_SCHEMA_VERSION,
     COVERAGE_REPORT_VERSION,
+    CoverageReportError,
     generate_coverage_report,
 )
 from tools.file_state import FILE_STATE_KIND, FILE_STATE_SCHEMA_VERSION
@@ -23,6 +28,7 @@ from tools.project_inventory import (
     ProjectManifestError,
     inventory_project,
 )
+from tools.project_layout import LayoutError, UnsupportedSchemaVersionError
 from tools.project_registry import register_project
 
 
@@ -132,6 +138,136 @@ class CoverageReportTests(unittest.TestCase):
         summary["read_depths"] = dict(sorted(depth_counts.items()))
         summary["reasons"] = dict(sorted(reason_counts.items()))
         self.write_manifest_rows(rows)
+
+    def assert_machine_state_lock_contended(self, lock_file: Path) -> None:
+        started = threading.Event()
+        errors: list[BaseException] = []
+
+        def contend() -> None:
+            started.set()
+            try:
+                with AdvisoryFileLock(lock_file, timeout_seconds=0.05):
+                    errors.append(AssertionError("contender acquired the shared lock"))
+            except BaseException as exc:
+                errors.append(exc)
+
+        contender = threading.Thread(target=contend, name="coverage-lock-contender")
+        contender.start()
+        self.assertTrue(started.wait(timeout=1.0))
+        contender.join(timeout=2.0)
+        self.assertFalse(contender.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], AdvisoryLockTimeoutError)
+
+    def test_coverage_holds_shared_lock_across_manifest_read_and_report_write(
+        self,
+    ) -> None:
+        phases = (
+            ("load_project_manifest", "manifest-read"),
+            ("_write_atomic_json", "report-write"),
+        )
+
+        for target_name, phase in phases:
+            with self.subTest(phase=phase):
+                entered = threading.Event()
+                release = threading.Event()
+                results: list[object] = []
+                errors: list[BaseException] = []
+                original = getattr(coverage_report_module, target_name)
+
+                def blocked_phase(
+                    *args: object,
+                    _original: object = original,
+                    **kwargs: object,
+                ) -> object:
+                    entered.set()
+                    if not release.wait(timeout=5.0):
+                        raise AssertionError(f"coverage {phase} was not released")
+                    return _original(*args, **kwargs)  # type: ignore[operator]
+
+                def run_coverage() -> None:
+                    try:
+                        results.append(
+                            generate_coverage_report(
+                                self.workspace,
+                                self.registration.project_id,
+                            )
+                        )
+                    except BaseException as exc:
+                        errors.append(exc)
+
+                with patch.object(
+                    coverage_report_module,
+                    target_name,
+                    side_effect=blocked_phase,
+                ):
+                    worker = threading.Thread(
+                        target=run_coverage,
+                        name=f"coverage-{phase}",
+                    )
+                    worker.start()
+                    try:
+                        self.assertTrue(entered.wait(timeout=2.0))
+                        self.assert_machine_state_lock_contended(
+                            self.registration.layout.machine_state_lock_file
+                        )
+                    finally:
+                        release.set()
+                        worker.join(timeout=5.0)
+
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(errors, [])
+                self.assertEqual(len(results), 1)
+
+    def test_coverage_is_reentrant_under_same_thread_machine_state_lock(self) -> None:
+        with AdvisoryFileLock(
+            self.registration.layout.machine_state_lock_file,
+            timeout_seconds=0.2,
+        ):
+            result = generate_coverage_report(
+                self.workspace,
+                self.registration.project_id,
+                lock_timeout_seconds=0.05,
+            )
+
+        self.assertTrue(result.report_file.is_file())
+        self.assertEqual(
+            result.report["manifest"]["scan_generation"],
+            self.inventory.scan_generation,
+        )
+
+    def test_coverage_contender_timeout_uses_coverage_domain_error(self) -> None:
+        started = threading.Event()
+        errors: list[BaseException] = []
+
+        def contend() -> None:
+            started.set()
+            try:
+                generate_coverage_report(
+                    self.workspace,
+                    self.registration.project_id,
+                    lock_timeout_seconds=0.05,
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        contender = threading.Thread(target=contend, name="coverage-domain-contender")
+        with AdvisoryFileLock(self.registration.layout.machine_state_lock_file):
+            contender.start()
+            self.assertTrue(started.wait(timeout=1.0))
+            contender.join(timeout=2.0)
+            self.assertFalse(contender.is_alive())
+
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], CoverageReportError)
+        self.assertIsInstance(errors[0].__cause__, AdvisoryLockTimeoutError)
+        self.assertIn("machine-state lock", str(errors[0]))
+        self.assertFalse(
+            (
+                self.registration.layout.indexes_dir
+                / coverage_report_module.COVERAGE_REPORT_FILENAME
+            ).exists()
+        )
 
     def test_report_reconciles_every_axis_and_is_byte_stable(self) -> None:
         source_before = self.source_snapshot()
@@ -284,6 +420,53 @@ class CoverageReportTests(unittest.TestCase):
                 / "coverage-report.json"
             ).exists()
         )
+
+    def test_existing_report_schema_fails_closed_without_rewrite(self) -> None:
+        valid = generate_coverage_report(
+            self.workspace,
+            self.registration.project_id,
+        )
+        report_file = valid.report_file
+
+        future = {
+            "schema_version": COVERAGE_REPORT_SCHEMA_VERSION + 1,
+            "kind": COVERAGE_REPORT_KIND,
+            "report_version": COVERAGE_REPORT_VERSION,
+            "project_id": self.registration.project_id,
+        }
+        future_bytes = (json.dumps(future) + "\n").encode("utf-8")
+        report_file.write_bytes(future_bytes)
+        with self.assertRaises(UnsupportedSchemaVersionError):
+            generate_coverage_report(self.workspace, self.registration.project_id)
+        self.assertEqual(report_file.read_bytes(), future_bytes)
+
+        malformed_cases = (
+            b'{"schema_version":1,"schema_version":1}\n',
+            b'{"schema_version":1,"value":NaN}\n',
+            b'{"schema_version":1,"value":"\xff"}\n',
+            b'{"kind":"legacy-coverage"}\n',
+        )
+        for payload in malformed_cases:
+            with self.subTest(payload=payload):
+                report_file.write_bytes(payload)
+                with self.assertRaises(LayoutError):
+                    generate_coverage_report(
+                        self.workspace,
+                        self.registration.project_id,
+                    )
+                self.assertEqual(report_file.read_bytes(), payload)
+
+        wrong_current = {
+            "schema_version": COVERAGE_REPORT_SCHEMA_VERSION,
+            "kind": "other-record",
+            "report_version": COVERAGE_REPORT_VERSION,
+            "project_id": self.registration.project_id,
+        }
+        wrong_bytes = (json.dumps(wrong_current) + "\n").encode("utf-8")
+        report_file.write_bytes(wrong_bytes)
+        with self.assertRaises(CoverageReportError):
+            generate_coverage_report(self.workspace, self.registration.project_id)
+        self.assertEqual(report_file.read_bytes(), wrong_bytes)
 
     def test_project_cli_emits_json_and_writes_only_machine_state(self) -> None:
         source_before = self.source_snapshot()

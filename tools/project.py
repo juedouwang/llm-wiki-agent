@@ -247,6 +247,30 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print a machine-readable JSON result",
     )
 
+    reconcile = subparsers.add_parser(
+        "reconcile",
+        help="Run conservative full-scan reconciliation and acknowledge its event snapshot.",
+    )
+    reconcile.add_argument("project_id", help="B-01 registered project ID")
+    reconcile.add_argument(
+        "--dirty-path",
+        action="append",
+        default=[],
+        dest="dirty_paths",
+        metavar="PROJECT_RELATIVE_PATH",
+        help="Optional untrusted dirty-path hint; repeat for multiple paths",
+    )
+    reconcile.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    reconcile.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+
     event = subparsers.add_parser(
         "event",
         help="Record or inspect host-neutral dirty-path events.",
@@ -692,6 +716,33 @@ def _run_coverage(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_reconcile(args: argparse.Namespace) -> int:
+    try:
+        result = ResearchCoreService(args.workspace_root).project_reconcile(
+            project_id=args.project_id,
+            dirty_paths=args.dirty_paths,
+        )
+    except (LayoutError, OSError, ValueError) as exc:
+        return _print_command_error(exc, as_json=args.json)
+
+    payload = result.as_dict()
+    if args.json:
+        print(json.dumps({"ok": True, **payload}, indent=2, ensure_ascii=False))
+        return 0
+
+    acknowledgement = payload["acknowledgement"]
+    hints = payload["hints"]
+    manifest = payload["manifest"]
+    print(f"Project reconciled:       {result.project_id}")
+    print(f"Mode:                     {payload['mode']}")
+    print(f"Run:                      {result.run_id} ({result.run_status})")
+    print(f"Manifest generation:      {manifest['scan_generation']}")
+    print(f"Hint status:              {hints['status']}")
+    print(f"Acknowledged through:     {acknowledgement['current_through_sequence']}")
+    print(f"Remaining events:         {acknowledgement['remaining_event_count']}")
+    return 0
+
+
 def _run_event_submit(args: argparse.Namespace) -> int:
     try:
         result = ResearchCoreService(args.workspace_root).host_event_submit(
@@ -1040,6 +1091,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_inventory(args)
     if args.command == "coverage":
         return _run_coverage(args)
+    if args.command == "reconcile":
+        return _run_reconcile(args)
     if args.command == "event" and args.event_command == "submit":
         return _run_event_submit(args)
     if args.command == "event" and args.event_command == "show":

@@ -16,6 +16,7 @@ from tools.project_layout import (
     UnsupportedSchemaVersionError,
     WorkspaceLayout,
     load_versioned_json,
+    parse_json_bytes_strict,
     resolve_project_layout,
     schema_version_of,
     validate_project_id,
@@ -59,6 +60,22 @@ class ProjectLayoutBaselineTests(unittest.TestCase):
         self.assertNotEqual(layout.machine_root, layout.knowledge_root)
         self.assertNotIn(layout.machine_root, layout.knowledge_root.parents)
         self.assertNotIn(layout.knowledge_root, layout.machine_root.parents)
+
+    def test_reconciliation_paths_are_machine_state_under_indexes(self) -> None:
+        layout = ProjectLayout(self.workspace_root, "tiny-study")
+
+        self.assertEqual(
+            layout.reconciliation_state_file,
+            layout.indexes_dir / "reconciliation-state.json",
+        )
+        self.assertEqual(
+            layout.machine_state_lock_file,
+            layout.indexes_dir / "machine-state.lock",
+        )
+        self.assertEqual(
+            layout.reconciliation_lock_file,
+            layout.machine_state_lock_file,
+        )
 
     def test_custom_knowledge_projects_root_preserves_machine_workspace(self) -> None:
         custom_root = self.workspace_root.parent / "personal-knowledge" / "projects"
@@ -160,6 +177,23 @@ class ProjectLayoutBaselineTests(unittest.TestCase):
 
         with self.assertRaises(SchemaVersionError):
             load_versioned_json(legacy_path, allow_legacy=False)
+
+    def test_strict_json_rejects_duplicate_keys_nonfinite_values_and_invalid_utf8(self) -> None:
+        for payload in (
+            b'{"schema_version":2,"schema_version":1}',
+            b'{"schema_version":1,"value":NaN}',
+            b'{"schema_version":1,"value":Infinity}',
+            b'{"schema_version":1,"value":-Infinity}',
+            b'{"schema_version":1,"value":"\xff"}',
+        ):
+            with self.subTest(payload=payload):
+                with self.assertRaises(LayoutError):
+                    parse_json_bytes_strict(payload, label="test payload")
+
+        path = self.workspace_root / "duplicate-schema.json"
+        path.write_bytes(b'{"schema_version":2,"schema_version":1}\n')
+        with self.assertRaises(LayoutError):
+            load_versioned_json(path)
 
     def test_schema_validation_fails_closed_for_invalid_or_future_versions(self) -> None:
         self.assertEqual(schema_version_of({"schema_version": 1}), 1)

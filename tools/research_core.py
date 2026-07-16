@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import hashlib
 from pathlib import Path, PurePosixPath
 import re
 import unicodedata
@@ -45,6 +46,10 @@ if __package__:
         ProjectRunOrchestrator,
         StageContext,
         StageRunner,
+    )
+    from .project_reconciliation import (
+        ProjectReconciliationResult,
+        reconcile_project,
     )
     from .project_registry import (
         ProjectRegistrationResult,
@@ -93,6 +98,10 @@ else:
         StageContext,
         StageRunner,
     )
+    from project_reconciliation import (  # type: ignore[no-redef]
+        ProjectReconciliationResult,
+        reconcile_project,
+    )
     from project_registry import (  # type: ignore[no-redef]
         ProjectRegistrationResult,
         load_registered_project,
@@ -113,6 +122,10 @@ else:
         open_evidence,
         open_source,
     )
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 HOST_RESULT_SCHEMA_VERSION = 1
@@ -606,6 +619,26 @@ class ResearchCoreService:
             lock_timeout_seconds=lock_timeout_seconds,
         )
 
+    def project_reconcile(
+        self,
+        project_id: str,
+        *,
+        dirty_paths: Iterable[str | Path] | str | Path = (),
+        clock: Callable[[], datetime] | None = None,
+        lock_timeout_seconds: float = 5.0,
+    ) -> ProjectReconciliationResult:
+        """Full-scan reconciliation that treats host paths only as hints."""
+
+        return reconcile_project(
+            self.workspace_root,
+            project_id,
+            dirty_paths=dirty_paths,
+            run_factory=self.project_run_start,
+            coverage_factory=self.coverage,
+            clock=clock,
+            lock_timeout_seconds=lock_timeout_seconds,
+        )
+
     def _project_run_stage_runners(self) -> dict[str, StageRunner]:
         return {
             "register": self._run_registration_stage,
@@ -629,6 +662,7 @@ class ResearchCoreService:
 
     def _run_inventory_stage(self, context: StageContext) -> StageOutcome:
         inventory = self.scan(context.project_id)
+        manifest_sha256 = _sha256_file(inventory.manifest_file)
         return StageOutcome.succeeded(
             input_versions={"inventory_contract": PROJECT_MANIFEST_VERSION},
             artifacts=(
@@ -636,7 +670,7 @@ class ResearchCoreService:
                     "artifact_type": "project-manifest",
                     "artifact_id": f"manifest-generation-{inventory.scan_generation}",
                     "relative_path": "manifest.jsonl",
-                    "content_hash": None,
+                    "content_hash": manifest_sha256,
                 },
             ),
         )
@@ -644,6 +678,7 @@ class ResearchCoreService:
     def _run_classification_stage(self, context: StageContext) -> StageOutcome:
         coverage = self.coverage(context.project_id)
         manifest = coverage.report["manifest"]
+        coverage_sha256 = _sha256_file(coverage.report_file)
         return StageOutcome.succeeded(
             input_versions={
                 "manifest_version": manifest["manifest_version"],
@@ -657,7 +692,7 @@ class ResearchCoreService:
                         f"coverage-generation-{manifest['scan_generation']}"
                     ),
                     "relative_path": "indexes/coverage-report.json",
-                    "content_hash": None,
+                    "content_hash": coverage_sha256,
                 },
             ),
         )

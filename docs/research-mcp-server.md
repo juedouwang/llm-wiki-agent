@@ -1,13 +1,13 @@
-# Minimal Research Core MCP Server (G-07, extended by G-08)
+# Minimal Research Core MCP Server (G-07, extended by G-08 and H-07)
 
-- Status: implemented for the R2 G-07 transport scope and G-08 Host Context Pack
+- Status: implemented for the R2 G-07 transport scope, G-08 Host Context Pack, and validated H-07 reconciliation boundary on 2026-07-16
 - Server module: `tools.research_mcp`
 - Core boundary: `tools.research_core.ResearchCoreService`
 - Transport: MCP stdio, official Python SDK `mcp>=1.28.1,<2`
 - JSON Schema validation: `jsonschema>=4.25,<5`
 - Validation: `tests/test_research_mcp_server.py`, `tests/test_source_access.py`,
-  and `tests/test_host_context_pack.py`
-- Existing checkpoint: `checkpoint/g-07-mcp-server`
+  `tests/test_host_context_pack.py`, and `tests/test_project_reconciliation.py`
+- Existing checkpoints: `checkpoint/g-07-mcp-server` and `checkpoint/h-07-project-reconciliation`
 
 ## Purpose and boundary
 
@@ -36,9 +36,10 @@ The adapter is deliberately transport-only:
   Manifest content-access authorization;
 - no LLM, external network service, browser, or host-specific API is used.
 
-G-07 and G-08 do **not** pretend that later Core query, reconciliation, or planning
-pipelines exist. Their contracts are discoverable so adapters can stabilize,
-but calls return `capability-unavailable` until the corresponding roadmap slices
+G-07 and G-08 originally reserved later query, reconciliation, and planning
+contracts so adapters could stabilize without successful placeholders. Validated
+H-07 now activates `llmwiki_reconcile` as a real Core call. Verified Query and
+planning remain honest `capability-unavailable` contracts until G-04 and I-04
 land.
 
 ## Installation and startup
@@ -90,13 +91,13 @@ or Claude-specific import.
 | `llmwiki_coverage` | Available, writes deterministic machine state | `ResearchCoreService.coverage_view(project_id)` persists `indexes/coverage-report.json` and returns a path-free `HostCoverageResult`; `readOnlyHint=false` |
 | `llmwiki_source_open` | Available, read-only source access | `ResearchCoreService.source_open_view(...)` enforces current Manifest content policy and returns a path-free `HostSourceOpenResult` |
 | `llmwiki_query` | Contract only | Returns `capability-unavailable`, `available_after: G-04` |
-| `llmwiki_reconcile` | Contract only | Returns `capability-unavailable`, `available_after: H-07` |
+| `llmwiki_reconcile` | Available, writes deterministic machine state | `ResearchCoreService.project_reconcile(project_id, dirty_paths=...)` snapshots H-04 events, always runs the full `register -> inventory -> classify` fallback, and advances only the starting snapshot checkpoint; `readOnlyHint=false` |
 | `llmwiki_plan` | Contract only | Returns `capability-unavailable`, `available_after: I-04` |
 
-The catalog contains exactly seven tools. The three unavailable tools are
-negative capability contracts, not successful
-placeholders: `isError` is true, `ok` is false, no `result` exists, and no
-project state changes.
+The catalog contains exactly seven tools. Query and plan are the two remaining
+negative capability contracts, not successful placeholders: `isError` is true,
+`ok` is false, no `result` exists, and no project state changes. Reconciliation
+is a real non-read-only operation and must not be grouped with them.
 
 ## Host-safe result DTOs
 
@@ -133,6 +134,26 @@ IDs, hashes, and typed Locators for eligible Evidence, but no raw excerpts or
 source/storage/wiki paths. Full semantics are documented in
 [`host-context-pack.md`](host-context-pack.md).
 
+Reconciliation returns the same closed, already path-free result as direct Core
+and JSON CLI calls after their transport wrappers are removed. Its optional
+`dirty_paths` array accepts at most 256 unique normalized project-relative paths,
+but those values are untrusted hints and are not returned. The result reports:
+
+- `mode: full-scan` and `source_of_truth: manifest-and-hash`;
+- the paused run and three succeeded stages through `classify`;
+- Manifest and coverage versions, generations, hashes, and failed-file count;
+- hint status and bounded counts for the starting event snapshot;
+- the previous/current acknowledgement, newly acknowledged count, remaining
+  post-snapshot event/path counts, state revision, and prefix hash.
+
+Calls with no dirty paths or with hints inconsistent with the event ledger still
+perform the same full scan. Only the starting event snapshot is acknowledged;
+a positive failed-file count, artifact mismatch, other failures, and events
+arriving during the scan remain pending. The tool advertises
+`readOnlyHint=false` because it may write Manifest, coverage, run, projection,
+and strict `indexes/reconciliation-state.json` machine state. See
+[`project-reconciliation.md`](project-reconciliation.md).
+
 Coverage and source-open have **semantic Core parity**, not byte-for-byte parity
 with the older path-bearing local CLI wrappers:
 
@@ -150,8 +171,8 @@ All tool input schemas are closed with `additionalProperties: false`. The server
 uses Draft 2020-12 validators even though low-level SDK validation is disabled,
 so behavior does not depend on a host or SDK validation path. Required fields,
 types, enums, unique arrays, lowercase 64-character SHA-256 values, normalized
-project-relative paths, exact Locator union members, and extra fields are checked
-before Core invocation.
+project-relative paths, exact Locator union members, reconciliation hint bounds,
+and extra fields are checked before Core invocation.
 
 Output schemas are recursively closed for all currently published DTO fields,
 including coverage maps and Locator variants, and require exactly one branch:
@@ -196,6 +217,7 @@ content are not echoed through errors or stderr.
 | MCP contract | `invalid-arguments`, `mcp-tool-not-found`, `capability-unavailable` |
 | Project/schema | `project-id-invalid`, `project-not-registered`, `project-record-invalid`, `schema-version-invalid`, `schema-version-unsupported` |
 | Coverage/layout/I/O | `coverage-unavailable`, `core-layout-invalid`, `local-io-failed`, `internal-error` |
+| Reconciliation | `reconciliation-failed`, `reconciliation-hint-invalid`, `reconciliation-state-invalid`, `reconciliation-lock-failed`, `reconciliation-run-failed`, `reconciliation-snapshot-invalid` |
 | Host Context | `context-budget-too-small`, `host-context-invalid` |
 | Source/Evidence | Existing D-04 codes plus `source-content-policy-denied`, including `source-not-registered`, `source-locator-invalid`, `source-content-hash-mismatch`, `current-source-version-mismatch`, `source-current-path-missing`, and `source-excerpt-hash-mismatch` |
 
@@ -235,9 +257,13 @@ withheld and represented only by stable reason counts.
 
 Coverage persists deterministic machine state under
 `.llmwiki/projects/<project_id>/indexes/` and is therefore correctly advertised as
-non-read-only. `llmwiki_host_context` uses that same coverage path and also has
-`readOnlyHint=false`, while the registered source project stays unchanged. Tests
-verify no `.llmwiki/` or `wiki/` directory is created inside the source project.
+non-read-only. Same-project inventory, coverage, run, and reconciliation writers
+share the stable `indexes/machine-state.lock`. `llmwiki_host_context` uses that same coverage path and also has
+`readOnlyHint=false`. `llmwiki_reconcile` additionally persists the conservative
+run/checkpoint boundary, but returns no dirty-path values, absolute paths, raw
+source content, or curated Markdown. The registered source project and configured
+curated knowledge tree stay unchanged. Tests verify no `.llmwiki/` or `wiki/`
+directory is created inside the source project.
 
 ## Automated contract evidence
 
@@ -245,13 +271,17 @@ verify no `.llmwiki/` or `wiki/` directory is created inside the source project.
 uses the official MCP `ClientSession` and stdio client to verify:
 
 1. protocol initialization, module/direct-script startup, and the exact seven-tool
-   catalog;
+   catalog with reconciliation available and only query/plan unavailable;
 2. explicit input and output JSON Schema enforcement, including malformed types,
-   duplicate arrays, malformed hashes, missing fields, and extra fields;
-3. exact Core/CLI/MCP project-context and Host Context Pack parity, plus semantic
-   coverage/source parity;
-4. omission of absolute paths, storage records, Git root, and Git origin URL;
-5. coverage report persistence with `readOnlyHint=false` and no source writes;
+   duplicate arrays, reconciliation hint bounds, malformed hashes, missing fields,
+   and extra fields;
+3. exact Core/CLI/MCP project-context, Host Context Pack, and reconciliation
+   parity, plus semantic coverage/source parity;
+4. omission of absolute paths, dirty-path values, storage records, Git root, and
+   Git origin URL;
+5. coverage and reconciliation persistence with `readOnlyHint=false`, exact
+   starting-snapshot acknowledgement, post-snapshot retention, and no source or
+   curated-knowledge writes;
 6. Manifest denial of a real `.env` secret, every policy-limit reason, and any
    `read_depth: ignored` state while ordinary default `local-only` source access
    succeeds;
@@ -259,9 +289,11 @@ uses the official MCP `ClientSession` and stdio client to verify:
    future-schema rejection;
 8. malformed or nested path-injected Core DTO fallback to a schema-valid redacted
    `internal-error`;
-9. honest unavailable capability results with no state change or input echo;
-10. no raw-content leakage outside explicit policy-authorized source-open;
-11. clean server stderr and no duplicated filesystem workflow in the adapter.
+9. stable redacted reconciliation failures without dirty-path or exception-text
+   echo;
+10. honest query/plan unavailable results with no state change or input echo;
+11. no raw-content leakage outside explicit policy-authorized source-open;
+12. clean server stderr and no duplicated filesystem workflow in the adapter.
 
 `tests/test_host_context_pack.py` additionally verifies the closed G-08 payload,
 exact canonical UTF-8 byte accounting, deterministic truncation, omission counts,
@@ -273,9 +305,12 @@ typed too-small-budget failure, and fail-closed future schemas.
 
 ## Non-goals and rollback
 
-G-07 and G-08 do not implement Verified Query (G-02 through G-06), event-ledger
-reconciliation (H-04/H-07), the I-02 task store or planning pipeline (I-01 through
-I-04), Hooks, Plugins, Web rendering, or one-click project understanding.
+G-07, G-08, and H-07 do not implement Verified Query (G-02 through G-06),
+H-05 selective extraction or knowledge refresh, the I-02 task store or planning
+pipeline (I-01 through I-04), Hook/Plugin installation, Web rendering, or the full
+15-artifact one-click project-understanding contract. H-07 reconciliation stops
+at `classify`, leaves later run stages pending, and does not mutate curated
+knowledge.
 
 To roll back after dependent work has been reverted, use non-destructive Git
 history operations:

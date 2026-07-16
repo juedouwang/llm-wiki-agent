@@ -218,13 +218,15 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         return json.loads(completed.stdout)
 
     async def test_stdio_client_lists_seven_honest_tool_contracts(self) -> None:
+        self.assertEqual(MCP_SERVER_VERSION, "0.3.0")
         async with self.mcp_session() as session:
             initialized = await session.initialize()
             self.assertEqual(initialized.serverInfo.name, MCP_SERVER_NAME)
-            self.assertEqual(initialized.serverInfo.version, MCP_SERVER_VERSION)
+            self.assertEqual(initialized.serverInfo.version, "0.3.0")
             self.assertIsNotNone(initialized.capabilities.tools)
 
             listed = await session.list_tools()
+            self.assertEqual(len(listed.tools), 7)
             self.assertEqual(tuple(tool.name for tool in listed.tools), EXPECTED_TOOLS)
             by_name = {tool.name: tool for tool in listed.tools}
             for name in EXPECTED_TOOLS:
@@ -238,9 +240,105 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(by_name[HOST_CONTEXT_TOOL].annotations.readOnlyHint)
             self.assertTrue(by_name[PROJECT_CONTEXT_TOOL].annotations.readOnlyHint)
             self.assertTrue(by_name[SOURCE_OPEN_TOOL].annotations.readOnlyHint)
+
+            reconcile_tool = by_name[RECONCILE_TOOL]
+            self.assertIn("H-07", reconcile_tool.description)
+            self.assertIn("full scan", reconcile_tool.description)
+            self.assertNotIn("capability-unavailable", reconcile_tool.description)
+            self.assertFalse(reconcile_tool.annotations.readOnlyHint)
+            self.assertFalse(reconcile_tool.annotations.destructiveHint)
+            self.assertTrue(reconcile_tool.annotations.idempotentHint)
+            self.assertFalse(reconcile_tool.annotations.openWorldHint)
+            self.assertEqual(reconcile_tool.inputSchema["required"], ["project_id"])
+            self.assertEqual(
+                set(reconcile_tool.inputSchema["properties"]),
+                {"project_id", "dirty_paths"},
+            )
+            dirty_paths_schema = reconcile_tool.inputSchema["properties"]["dirty_paths"]
+            self.assertEqual(dirty_paths_schema["maxItems"], 256)
+            self.assertTrue(dirty_paths_schema["uniqueItems"])
+            path_pattern = dirty_paths_schema["items"]["pattern"]
+            self.assertRegex("src/model.py", path_pattern)
+            for unsafe_path in (
+                "../outside.py",
+                "/absolute.py",
+                "C:/absolute.py",
+                r"src\model.py",
+            ):
+                self.assertNotRegex(unsafe_path, path_pattern)
+
+            reconcile_output = reconcile_tool.outputSchema
+            self.assertEqual(
+                reconcile_output["properties"]["capability"]["const"],
+                "reconcile",
+            )
+            reconcile_schema = reconcile_output["properties"]["result"]
+            self.assertFalse(reconcile_schema["additionalProperties"])
+            self.assertEqual(
+                set(reconcile_schema["required"]),
+                {
+                    "schema_version",
+                    "kind",
+                    "reconciliation_version",
+                    "project_id",
+                    "status",
+                    "mode",
+                    "source_of_truth",
+                    "run",
+                    "manifest",
+                    "coverage",
+                    "hints",
+                    "acknowledgement",
+                },
+            )
+            reconcile_properties = reconcile_schema["properties"]
+            self.assertEqual(
+                {
+                    key: reconcile_properties[key]["const"]
+                    for key in (
+                        "schema_version",
+                        "kind",
+                        "reconciliation_version",
+                        "status",
+                        "mode",
+                        "source_of_truth",
+                    )
+                },
+                {
+                    "schema_version": 1,
+                    "kind": "llmwiki-project-reconciliation-result",
+                    "reconciliation_version": "project-reconciliation-v1",
+                    "status": "reconciled",
+                    "mode": "full-scan",
+                    "source_of_truth": "manifest-and-hash",
+                },
+            )
+            run_properties = reconcile_properties["run"]["properties"]
+            self.assertEqual(run_properties["status"]["const"], "paused")
+            self.assertEqual(run_properties["through_stage"]["const"], "classify")
+            self.assertEqual(
+                run_properties["stages"]["properties"],
+                {
+                    "register": {"const": "succeeded"},
+                    "inventory": {"const": "succeeded"},
+                    "classify": {"const": "succeeded"},
+                },
+            )
+            self.assertTrue(
+                self.nested_keys(reconcile_schema).isdisjoint(
+                    {
+                        "absolute_path",
+                        "dirty_paths",
+                        "path",
+                        "paths",
+                        "project_root",
+                        "storage",
+                    }
+                )
+            )
+
             for name, milestone in (
                 (QUERY_TOOL, "G-04"),
-                (RECONCILE_TOOL, "H-07"),
                 (PLAN_TOOL, "I-04"),
             ):
                 self.assertIn("capability-unavailable", by_name[name].description)
@@ -251,10 +349,12 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             initialized = await session.initialize()
             listed = await session.list_tools()
         self.assertEqual(initialized.serverInfo.name, MCP_SERVER_NAME)
-        self.assertEqual(initialized.serverInfo.version, MCP_SERVER_VERSION)
+        self.assertEqual(initialized.serverInfo.version, "0.3.0")
         self.assertEqual(tuple(tool.name for tool in listed.tools), EXPECTED_TOOLS)
 
-    async def test_real_tools_match_core_and_cli_semantics_without_path_leaks(self) -> None:
+    async def test_real_tools_match_core_and_cli_semantics_without_path_leaks(
+        self,
+    ) -> None:
         before = self.source_snapshot()
         context_direct = self.service.project_context(
             self.registration.project_id
@@ -392,9 +492,113 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "current_version",
             "content_hash",
         ):
-            self.assertEqual(source_result["source"][field], source_cli["source"][field])
+            self.assertEqual(
+                source_result["source"][field], source_cli["source"][field]
+            )
 
         self.assertEqual(self.source_snapshot(), before)
+        self.assertFalse((self.project / ".llmwiki").exists())
+        self.assertFalse((self.project / "wiki").exists())
+
+    async def test_real_mcp_reconcile_full_scan_is_path_safe_and_source_immutable(
+        self,
+    ) -> None:
+        unhinted_path = self.project / "src" / "unhinted.py"
+        unhinted_path.write_text("gamma = 3\n", encoding="utf-8")
+        source_before = self.source_snapshot()
+        workspace_before = self.workspace_snapshot()
+        checkpoint_file = self.registration.layout.reconciliation_state_file
+        self.assertFalse(checkpoint_file.exists())
+        explicit_hint = f"private/{self.secret}.txt"
+
+        async with self.mcp_session() as session:
+            await session.initialize()
+            result = await session.call_tool(
+                RECONCILE_TOOL,
+                {
+                    "project_id": self.registration.project_id,
+                    "dirty_paths": [explicit_hint],
+                },
+            )
+
+        self.assertFalse(result.isError)
+        payload = self.payload(result)
+        self.assertEqual(
+            set(payload) & {"result", "error"},
+            {"result"},
+        )
+        self.assertEqual(payload["capability"], "reconcile")
+        reconciliation = payload["result"]
+        self.assertEqual(reconciliation["schema_version"], 1)
+        self.assertEqual(
+            reconciliation["kind"],
+            "llmwiki-project-reconciliation-result",
+        )
+        self.assertEqual(
+            reconciliation["reconciliation_version"],
+            "project-reconciliation-v1",
+        )
+        self.assertEqual(reconciliation["status"], "reconciled")
+        self.assertEqual(reconciliation["mode"], "full-scan")
+        self.assertEqual(reconciliation["source_of_truth"], "manifest-and-hash")
+        self.assertEqual(reconciliation["run"]["status"], "paused")
+        self.assertEqual(reconciliation["run"]["through_stage"], "classify")
+        self.assertEqual(
+            reconciliation["run"]["stages"],
+            {
+                "register": "succeeded",
+                "inventory": "succeeded",
+                "classify": "succeeded",
+            },
+        )
+        self.assertEqual(
+            reconciliation["manifest"]["scan_generation"],
+            self.inventory.scan_generation + 1,
+        )
+        self.assertEqual(reconciliation["hints"]["status"], "explicit-only")
+        self.assertEqual(reconciliation["hints"]["queued_dirty_path_count"], 0)
+        self.assertEqual(reconciliation["hints"]["explicit_dirty_path_count"], 1)
+        self.assertEqual(reconciliation["hints"]["combined_dirty_path_count"], 1)
+        self.assertEqual(
+            reconciliation["acknowledgement"]["state_revision"],
+            1,
+        )
+        self.assert_host_safe(reconciliation)
+
+        serialized = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn(explicit_hint, serialized)
+        self.assertNotIn(self.secret, serialized)
+        self.assertNotIn("src/unhinted.py", serialized)
+
+        manifest_rows = [
+            json.loads(line)
+            for line in self.registration.layout.manifest_file.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        self.assertIn(
+            "src/unhinted.py",
+            {row.get("path") for row in manifest_rows},
+        )
+        self.assertTrue(checkpoint_file.is_file())
+        checkpoint = json.loads(checkpoint_file.read_text(encoding="utf-8"))
+        self.assertEqual(
+            checkpoint["revision"],
+            reconciliation["acknowledgement"]["state_revision"],
+        )
+        self.assertEqual(
+            checkpoint["acknowledged_through_sequence"],
+            reconciliation["acknowledgement"]["current_through_sequence"],
+        )
+        self.assertEqual(
+            checkpoint["last_success"]["manifest_scan_generation"],
+            reconciliation["manifest"]["scan_generation"],
+        )
+        self.assertEqual(checkpoint["last_success"]["hint_status"], "explicit-only")
+
+        self.assertNotEqual(self.workspace_snapshot(), workspace_before)
+        self.assertEqual(self.source_snapshot(), source_before)
         self.assertFalse((self.project / ".llmwiki").exists())
         self.assertFalse((self.project / "wiki").exists())
 
@@ -463,6 +667,72 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(payload["error"]["retryable"])
                     self.assertNotIn("result", payload)
 
+    async def test_reconcile_errors_have_stable_redacted_codes(self) -> None:
+        checkpoint_file = self.registration.layout.reconciliation_state_file
+        checkpoint_file.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "kind": "llmwiki-reconciliation-state",
+                    "reconciliation_version": "project-reconciliation-v1",
+                    "project_id": self.registration.project_id,
+                    "revision": 0,
+                    "acknowledged_through_sequence": 0,
+                    "acknowledged_ledger_sha256": hashlib.sha256(b"").hexdigest(),
+                    "last_success": None,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        checkpoint_before = checkpoint_file.read_bytes()
+        source_before = self.source_snapshot()
+        workspace_before = self.workspace_snapshot()
+        invalid_hint = f".llmwiki/private/{self.secret}.json"
+        calls = (
+            (
+                {"project_id": "valid-but-absent"},
+                "project-not-registered",
+            ),
+            (
+                {
+                    "project_id": self.registration.project_id,
+                    "dirty_paths": [invalid_hint],
+                },
+                "reconciliation-hint-invalid",
+            ),
+            (
+                {"project_id": self.registration.project_id},
+                "reconciliation-state-invalid",
+            ),
+        )
+
+        async with self.mcp_session() as session:
+            await session.initialize()
+            for arguments, expected_code in calls:
+                with self.subTest(expected_code=expected_code):
+                    result = await session.call_tool(RECONCILE_TOOL, arguments)
+                    payload = self.payload(result)
+                    self.assertTrue(result.isError)
+                    self.assertFalse(payload["ok"])
+                    self.assertEqual(payload["capability"], "reconcile")
+                    self.assertEqual(payload["error"]["code"], expected_code)
+                    self.assertFalse(payload["error"]["retryable"])
+                    self.assertEqual(
+                        set(payload) & {"result", "error"},
+                        {"error"},
+                    )
+                    self.assertNotIn(
+                        self.secret,
+                        json.dumps(payload, ensure_ascii=False),
+                    )
+
+        self.assertEqual(checkpoint_file.read_bytes(), checkpoint_before)
+        self.assertEqual(self.workspace_snapshot(), workspace_before)
+        self.assertEqual(self.source_snapshot(), source_before)
+
     async def test_published_json_schemas_reject_malformed_arguments(self) -> None:
         invalid_calls = (
             (HOST_CONTEXT_TOOL, {"project_id": "p", "max_bytes": True}),
@@ -471,6 +741,18 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             (
                 RECONCILE_TOOL,
                 {"project_id": "p", "dirty_paths": ["a.py", "a.py"]},
+            ),
+            (
+                RECONCILE_TOOL,
+                {"project_id": "p", "dirty_paths": ["../outside.py"]},
+            ),
+            (
+                RECONCILE_TOOL,
+                {"project_id": "p", "dirty_paths": ["C:/outside.py"]},
+            ),
+            (
+                RECONCILE_TOOL,
+                {"project_id": "p", "dirty_paths": [r"src\model.py"]},
             ),
             (
                 SOURCE_OPEN_TOOL,
@@ -555,9 +837,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             self.source.source_id,
             locator=LineRangeLocator(1, 1),
         ).as_dict()
-        source_payload["locator"]["absolute_path"] = str(
-            self.project / "source.py"
-        )
+        source_payload["locator"]["absolute_path"] = str(self.project / "source.py")
 
         cases = (
             (COVERAGE_TOOL, "coverage_view", coverage_payload),
@@ -566,10 +846,13 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         for tool_name, method_name, malformed_payload in cases:
             malformed = Mock()
             malformed.as_dict.return_value = malformed_payload
-            with self.subTest(tool=tool_name), patch.object(
-                ResearchCoreService,
-                method_name,
-                return_value=malformed,
+            with (
+                self.subTest(tool=tool_name),
+                patch.object(
+                    ResearchCoreService,
+                    method_name,
+                    return_value=malformed,
+                ),
             ):
                 arguments = {"project_id": self.registration.project_id}
                 if tool_name == SOURCE_OPEN_TOOL:
@@ -622,9 +905,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["error"]["code"], "project-not-registered")
 
     async def test_coverage_persists_machine_report_without_source_writes(self) -> None:
-        report_file = (
-            self.registration.layout.indexes_dir / COVERAGE_REPORT_FILENAME
-        )
+        report_file = self.registration.layout.indexes_dir / COVERAGE_REPORT_FILENAME
         self.assertFalse(report_file.exists())
         before = self.source_snapshot()
 
@@ -646,7 +927,9 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.payload(result)["result"]["report"], persisted)
         self.assertEqual(self.source_snapshot(), before)
 
-    async def test_manifest_policy_denies_sensitive_source_but_allows_local_only(self) -> None:
+    async def test_manifest_policy_denies_sensitive_source_but_allows_local_only(
+        self,
+    ) -> None:
         self.assertEqual(
             self.inventory.policy["config"]["external_send_mode"],
             "local-only",
@@ -690,7 +973,9 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.payload(ordinary)["result"]["excerpt"], "alpha = 1\r\n")
         self.assertEqual(self.source_snapshot(), before)
 
-    async def test_future_project_schema_maps_to_unsupported_and_is_not_read(self) -> None:
+    async def test_future_project_schema_maps_to_unsupported_and_is_not_read(
+        self,
+    ) -> None:
         project_file = self.registration.project_file
         record = json.loads(project_file.read_text(encoding="utf-8"))
         record["schema_version"] = 999
@@ -711,7 +996,9 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "schema-version-unsupported",
         )
 
-    async def test_future_manifest_schema_blocks_source_open_before_content_read(self) -> None:
+    async def test_future_manifest_schema_blocks_source_open_before_content_read(
+        self,
+    ) -> None:
         manifest_file = self.registration.layout.manifest_file
         records = [
             json.loads(line)
@@ -743,7 +1030,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["error"]["code"], "schema-version-unsupported")
         self.assertNotIn(self.secret, json.dumps(payload, ensure_ascii=False))
 
-    async def test_unavailable_tools_are_honest_and_do_not_echo_inputs(self) -> None:
+    async def test_query_and_plan_are_unavailable_without_echoing_inputs(self) -> None:
         before_source = self.source_snapshot()
         before_workspace = self.workspace_snapshot()
         sensitive_inputs = (
@@ -755,14 +1042,6 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                     "mode": "verified",
                 },
                 "G-04",
-            ),
-            (
-                RECONCILE_TOOL,
-                {
-                    "project_id": self.registration.project_id,
-                    "dirty_paths": [f"private/{self.secret}.txt"],
-                },
-                "H-07",
             ),
             (
                 PLAN_TOOL,
@@ -833,7 +1112,9 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(explicit.isError)
         self.assertIn(self.secret, self.payload(explicit)["result"]["excerpt"])
 
-    def test_adapter_delegates_real_operations_without_filesystem_workflows(self) -> None:
+    def test_adapter_delegates_real_operations_without_filesystem_workflows(
+        self,
+    ) -> None:
         adapter = ResearchMCPAdapter(self.workspace)
         context = Mock()
         context.as_dict.return_value = self.service.project_context(
@@ -852,6 +1133,11 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             self.registration.project_id,
             self.source.source_id,
             locator=LineRangeLocator(1, 1),
+        ).as_dict()
+        reconciled = Mock()
+        reconciled.as_dict.return_value = self.service.project_reconcile(
+            self.registration.project_id,
+            dirty_paths=("src/model.py",),
         ).as_dict()
         locator = LineRangeLocator(1, 1).as_dict()
 
@@ -876,8 +1162,15 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 "source_open_view",
                 return_value=opened,
             ) as source_open,
+            patch.object(
+                ResearchCoreService,
+                "project_reconcile",
+                return_value=reconciled,
+            ) as project_reconcile,
         ):
-            context_result = adapter.call_tool(PROJECT_CONTEXT_TOOL, {"project_id": "p"})
+            context_result = adapter.call_tool(
+                PROJECT_CONTEXT_TOOL, {"project_id": "p"}
+            )
             host_context_result = adapter.call_tool(
                 HOST_CONTEXT_TOOL,
                 {"project_id": "p", "max_bytes": 4096},
@@ -891,11 +1184,19 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                     "locator": locator,
                 },
             )
+            reconcile_result = adapter.call_tool(
+                RECONCILE_TOOL,
+                {
+                    "project_id": "p",
+                    "dirty_paths": ["src/model.py"],
+                },
+            )
 
         self.assertFalse(context_result.isError)
         self.assertFalse(host_context_result.isError)
         self.assertFalse(coverage_result.isError)
         self.assertFalse(source_result.isError)
+        self.assertFalse(reconcile_result.isError)
         project_context.assert_called_once_with("p")
         host_context_call.assert_called_once_with("p", max_bytes=4096)
         coverage_call.assert_called_once_with("p")
@@ -905,6 +1206,10 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             locator=locator,
             expected_content_hash=None,
             expected_excerpt_hash=None,
+        )
+        project_reconcile.assert_called_once_with(
+            "p",
+            dirty_paths=("src/model.py",),
         )
 
         tree = ast.parse(
@@ -930,7 +1235,9 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 observed.add(node.func.id)
             elif isinstance(node.func, ast.Attribute):
                 observed.add(node.func.attr)
-        self.assertTrue(observed.isdisjoint(forbidden_calls), observed & forbidden_calls)
+        self.assertTrue(
+            observed.isdisjoint(forbidden_calls), observed & forbidden_calls
+        )
 
 
 if __name__ == "__main__":

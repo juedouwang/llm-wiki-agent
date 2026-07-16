@@ -10,12 +10,15 @@ from pathlib import Path
 import re
 import socket
 import tempfile
+import threading
 import unittest
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from unittest.mock import Mock, patch
 import urllib.request
 import webbrowser
 
+from tools import project_runs
+from tools.advisory_lock import AdvisoryFileLock, AdvisoryLockTimeoutError
 from tools.project import main as project_main
 from tools.project_layout import UnsupportedSchemaVersionError
 from tools.project_orchestrator import ProjectRunOrchestrator
@@ -26,6 +29,7 @@ from tools.project_runs import (
     ProjectRunError,
     ProjectRunStateError,
     StageOutcome,
+    create_project_run,
     elapsed_ms,
     load_project_run,
     project_run_file,
@@ -36,6 +40,7 @@ from tools.research_core import ResearchCoreService
 
 
 _RUN_ID_RE = re.compile(r"^run-[0-9]{8}t[0-9]{12}z-[a-f0-9]{12}$")
+_SYNC_TIMEOUT_SECONDS = 5.0
 
 
 class StepClock:
@@ -381,6 +386,281 @@ class ProjectRunOrchestrationTests(unittest.TestCase):
                 result.record,
                 expected_revision=first_revision,
             )
+
+    def test_concurrent_direct_saves_serialize_stale_revision_writers(self) -> None:
+        created = create_project_run(
+            self.workspace,
+            self.registration.project_id,
+            run_id="run-20260716t010000000000z-111111111111",
+            created_at="2026-07-16T01:00:00.000000Z",
+        )
+        expected_revision = created.record["revision"]
+        acquire_barrier = threading.Barrier(2)
+        write_entered = threading.Event()
+        release_write = threading.Event()
+        outcomes: list[object] = []
+        outcomes_lock = threading.Lock()
+        real_acquire = project_runs._acquire_machine_state_lock
+        real_write = project_runs.write_versioned_json
+
+        def synchronized_acquire(
+            workspace_root: str | Path,
+            project_id: str,
+            *,
+            timeout_seconds: float,
+        ) -> AdvisoryFileLock:
+            acquire_barrier.wait(timeout=_SYNC_TIMEOUT_SECONDS)
+            return real_acquire(
+                workspace_root,
+                project_id,
+                timeout_seconds=timeout_seconds,
+            )
+
+        def blocking_write(path: Path, payload: dict[str, object]) -> Path:
+            write_entered.set()
+            if not release_write.wait(timeout=_SYNC_TIMEOUT_SECONDS):
+                raise AssertionError("test did not release the first run writer")
+            return real_write(path, payload)
+
+        def save_stale_copy() -> None:
+            try:
+                outcome: object = save_project_run(
+                    self.workspace,
+                    self.registration.project_id,
+                    created.run_id,
+                    created.record,
+                    expected_revision=expected_revision,
+                )
+            except BaseException as exc:
+                outcome = exc
+            with outcomes_lock:
+                outcomes.append(outcome)
+
+        with (
+            patch.object(
+                project_runs,
+                "_acquire_machine_state_lock",
+                side_effect=synchronized_acquire,
+            ),
+            patch.object(
+                project_runs,
+                "write_versioned_json",
+                side_effect=blocking_write,
+            ) as write_run,
+        ):
+            threads = [
+                threading.Thread(target=save_stale_copy, name=f"run-save-{index}")
+                for index in range(2)
+            ]
+            for thread in threads:
+                thread.start()
+
+            writer_reached_checkpoint = write_entered.wait(
+                timeout=_SYNC_TIMEOUT_SECONDS
+            )
+            release_write.set()
+            for thread in threads:
+                thread.join(timeout=_SYNC_TIMEOUT_SECONDS)
+
+        self.assertTrue(writer_reached_checkpoint)
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(len(outcomes), 2)
+        successes = [
+            outcome for outcome in outcomes if not isinstance(outcome, BaseException)
+        ]
+        failures = [
+            outcome for outcome in outcomes if isinstance(outcome, BaseException)
+        ]
+        self.assertEqual(len(successes), 1, outcomes)
+        self.assertEqual(len(failures), 1, outcomes)
+        self.assertIsInstance(failures[0], ProjectRunConflictError)
+        self.assertEqual(write_run.call_count, 1)
+
+        persisted = load_project_run(
+            self.workspace,
+            self.registration.project_id,
+            created.run_id,
+        )
+        on_disk = json.loads(created.run_file.read_text(encoding="utf-8"))
+        self.assertEqual(on_disk, persisted.record)
+        self.assertEqual(on_disk, successes[0].record)
+        self.assertEqual(on_disk["revision"], expected_revision + 1)
+        validate_project_run_record(on_disk)
+        self.assertFalse(created.run_file.with_name("run.json.tmp").exists())
+
+    def test_direct_mutators_are_reentrant_under_orchestrator_outer_lock(
+        self,
+    ) -> None:
+        main_run_id = "run-20260716t020000000000z-222222222222"
+        nested_run_id = "run-20260716t020000000001z-333333333333"
+        caller_thread = threading.get_ident()
+        nested_results: list[object] = []
+        nested_threads: list[int] = []
+
+        def exercise_direct_mutators(_context):
+            nested_threads.append(threading.get_ident())
+            created = create_project_run(
+                self.workspace,
+                self.registration.project_id,
+                run_id=nested_run_id,
+                created_at="2026-07-16T02:00:00.000000Z",
+                lock_timeout_seconds=0.05,
+            )
+            saved = save_project_run(
+                self.workspace,
+                self.registration.project_id,
+                nested_run_id,
+                created.record,
+                expected_revision=created.record["revision"],
+                lock_timeout_seconds=0.05,
+            )
+            nested_results.extend((created, saved))
+            return StageOutcome.succeeded()
+
+        result = ProjectRunOrchestrator(
+            self.workspace,
+            runners={"register": exercise_direct_mutators},
+            clock=StepClock(),
+            run_id_factory=lambda _moment: main_run_id,
+            lock_timeout_seconds=0.05,
+        ).start(
+            self.registration.project_id,
+            through_stage="register",
+        )
+
+        self.assertEqual(result.status, "paused")
+        self.assertEqual(nested_threads, [caller_thread])
+        self.assertEqual(len(nested_results), 2)
+        nested = load_project_run(
+            self.workspace,
+            self.registration.project_id,
+            nested_run_id,
+        )
+        self.assertEqual(nested.record["revision"], 2)
+        self.assertEqual(nested.record, nested_results[-1].record)
+        self.assertFalse(nested.run_file.with_name("run.json.tmp").exists())
+
+    def test_direct_save_timeout_is_project_scoped(self) -> None:
+        other_source = self.root / "other-source"
+        other_source.mkdir()
+        (other_source / "README.md").write_text("# Other study\n", encoding="utf-8")
+        other_registration = register_project(
+            self.workspace,
+            other_source,
+            project_id="run-study-other",
+        )
+        same_project_run = create_project_run(
+            self.workspace,
+            self.registration.project_id,
+            run_id="run-20260716t030000000000z-444444444444",
+            created_at="2026-07-16T03:00:00.000000Z",
+        )
+        other_project_run = create_project_run(
+            self.workspace,
+            other_registration.project_id,
+            run_id="run-20260716t030000000001z-555555555555",
+            created_at="2026-07-16T03:00:00.000001Z",
+        )
+        start_barrier = threading.Barrier(3)
+        same_done = threading.Event()
+        other_done = threading.Event()
+        outcomes: dict[str, object] = {}
+        outcomes_lock = threading.Lock()
+
+        def save_contender(
+            label: str,
+            project_id: str,
+            run_id: str,
+            record: dict[str, object],
+            timeout_seconds: float,
+            done: threading.Event,
+        ) -> None:
+            try:
+                start_barrier.wait(timeout=_SYNC_TIMEOUT_SECONDS)
+                outcome: object = save_project_run(
+                    self.workspace,
+                    project_id,
+                    run_id,
+                    record,
+                    expected_revision=record["revision"],
+                    lock_timeout_seconds=timeout_seconds,
+                )
+            except BaseException as exc:
+                outcome = exc
+            with outcomes_lock:
+                outcomes[label] = outcome
+            done.set()
+
+        same_thread = threading.Thread(
+            target=save_contender,
+            args=(
+                "same",
+                self.registration.project_id,
+                same_project_run.run_id,
+                same_project_run.record,
+                0.1,
+                same_done,
+            ),
+            name="same-project-save",
+        )
+        other_thread = threading.Thread(
+            target=save_contender,
+            args=(
+                "other",
+                other_registration.project_id,
+                other_project_run.run_id,
+                other_project_run.record,
+                _SYNC_TIMEOUT_SECONDS,
+                other_done,
+            ),
+            name="other-project-save",
+        )
+        held_lock = AdvisoryFileLock(
+            self.registration.layout.machine_state_lock_file,
+            timeout_seconds=_SYNC_TIMEOUT_SECONDS,
+        ).acquire()
+        same_finished = False
+        other_finished = False
+        try:
+            same_thread.start()
+            other_thread.start()
+            start_barrier.wait(timeout=_SYNC_TIMEOUT_SECONDS)
+            same_finished = same_done.wait(timeout=_SYNC_TIMEOUT_SECONDS)
+            other_finished = other_done.wait(timeout=_SYNC_TIMEOUT_SECONDS)
+        finally:
+            held_lock.release()
+            same_thread.join(timeout=_SYNC_TIMEOUT_SECONDS)
+            other_thread.join(timeout=_SYNC_TIMEOUT_SECONDS)
+
+        self.assertTrue(same_finished)
+        self.assertTrue(other_finished)
+        self.assertFalse(same_thread.is_alive())
+        self.assertFalse(other_thread.is_alive())
+        same_outcome = outcomes["same"]
+        other_outcome = outcomes["other"]
+        self.assertIsInstance(same_outcome, ProjectRunError)
+        self.assertIsInstance(same_outcome.__cause__, AdvisoryLockTimeoutError)
+        self.assertNotIsInstance(other_outcome, BaseException)
+        self.assertEqual(other_outcome.record["revision"], 2)
+
+        same_persisted = load_project_run(
+            self.workspace,
+            self.registration.project_id,
+            same_project_run.run_id,
+        )
+        other_persisted = load_project_run(
+            self.workspace,
+            other_registration.project_id,
+            other_project_run.run_id,
+        )
+        self.assertEqual(same_persisted.record["revision"], 1)
+        self.assertEqual(other_persisted.record, other_outcome.record)
+        self.assertFalse(
+            same_project_run.run_file.with_name("run.json.tmp").exists()
+        )
+        self.assertFalse(
+            other_project_run.run_file.with_name("run.json.tmp").exists()
+        )
 
     def test_core_default_stages_delegate_and_leave_source_read_only(self) -> None:
         before = self.source_snapshot()
