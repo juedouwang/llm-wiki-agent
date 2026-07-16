@@ -1,6 +1,6 @@
 # Persistent Source Identity (D-01)
 
-D-01 assigns one stable, Research Core-generated `source_id` to every in-scope regular file in the current `project-inventory-v4` Manifest. The registry is project machine state. This task does not define source versions, path aliases, Evidence, or source reopening.
+D-01 assigns one stable, Research Core-generated `source_id` to every in-scope regular file in the current `project-inventory-v4` Manifest. The registry is project machine state. D-01 itself does not define source versions, path aliases, Evidence, or source reopening. D-02 now evolves live registries to `source-registry-v2`; see [`source-versions.md`](source-versions.md).
 
 ## Command
 
@@ -24,7 +24,7 @@ It does not open, modify, or create files in the source research project. It doe
 
 - Machine-record Schema: `schema_version: 1`
 - `kind`: `llmwiki-source-registry`
-- Artifact version: `source-registry-v1`
+- Original D-01 artifact version: `source-registry-v1`
 - Identity strategy: `core-uuid4-v1`
 - `source_id`: `src-` followed by 32 lowercase hexadecimal characters
 
@@ -57,7 +57,7 @@ Each subsequent row is one source assignment:
 }
 ```
 
-Rows are sorted by normalized project-relative POSIX path. Every `source_id` and `manifest_path` must be unique, and the summary count must equal the number of source rows.
+Rows are sorted by normalized project-relative POSIX path. Every `source_id` and `manifest_path` must be unique, and the summary count must equal the number of source rows. This v1 shape remains a strict read-compatible migration input; the next `source sync` upgrades it atomically to v2 while preserving IDs.
 
 ## Synchronization semantics
 
@@ -83,4 +83,4 @@ The following state is rejected without replacing the existing registry:
 
 ## Explicit D-01 non-goals
 
-`source-registry-v1` stores no content hash, source version, historical path alias, Evidence, locator, excerpt hash, extraction result, processing state, source health, MCP, Hook, Web, or LLM state. D-02 through D-06 and later roadmap tasks introduce those capabilities separately.
+`source-registry-v1` stores no content hash, source version, historical path alias, Evidence, locator, excerpt hash, extraction result, processing state, source health, MCP, Hook, Web, or LLM state. D-02 adds content versions and explicit path history in `source-registry-v2`; D-03 through D-06 add Evidence, reopening, relocation recovery, and health separately.

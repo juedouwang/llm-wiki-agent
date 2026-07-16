@@ -16,6 +16,7 @@ from tools.source_registry import (
     SOURCE_REGISTRY_KIND,
     SOURCE_REGISTRY_SCHEMA_VERSION,
     SOURCE_REGISTRY_VERSION,
+    SOURCE_VERSION_HASH_ALGORITHM,
     SourceRegistryError,
     SourceRegistryLockError,
     load_source_registry,
@@ -108,6 +109,12 @@ class SourceRegistryTests(unittest.TestCase):
         self.assertTrue(result.wrote_registry)
         self.assertEqual(result.assigned_count, self.inventory.record_counts["file"])
         self.assertEqual(result.existing_count, 0)
+        self.assertEqual(result.version_count, self.inventory.record_counts["file"])
+        self.assertEqual(
+            result.versions_added_count,
+            self.inventory.record_counts["file"],
+        )
+        self.assertFalse(result.upgraded_registry)
         registry = load_source_registry(
             self.workspace,
             self.registration.project_id,
@@ -123,7 +130,7 @@ class SourceRegistryTests(unittest.TestCase):
             if row.get("record_type") == "file"
         )
         self.assertEqual(
-            [record.manifest_path for record in registry.records],
+            sorted(record.manifest_path for record in registry.records),
             manifest_paths,
         )
         self.assertEqual(len(registry.by_source_id), len(manifest_paths))
@@ -144,18 +151,20 @@ class SourceRegistryTests(unittest.TestCase):
                 "record_type": "summary",
                 "project_id": self.registration.project_id,
                 "identity_strategy": SOURCE_ID_STRATEGY,
+                "hash_algorithm": SOURCE_VERSION_HASH_ALGORITHM,
                 "source_count": len(manifest_paths),
+                "version_count": len(manifest_paths),
             },
         )
+        source_rows = [row for row in rows if row.get("record_type") == "source"]
+        version_rows = [row for row in rows if row.get("record_type") == "version"]
+        self.assertEqual(len(source_rows), len(manifest_paths))
+        self.assertEqual(len(version_rows), len(manifest_paths))
         forbidden = {
-            "content_hash",
-            "content_sha256",
-            "versions",
-            "version",
-            "aliases",
-            "path_aliases",
             "evidence",
+            "evidence_id",
             "locator",
+            "excerpt",
             "excerpt_hash",
             "extracted",
             "processing_status",
@@ -179,6 +188,8 @@ class SourceRegistryTests(unittest.TestCase):
         self.assertFalse(second.wrote_registry)
         self.assertEqual(second.assigned_count, 0)
         self.assertEqual(second.existing_count, len(manifest_paths))
+        self.assertEqual(second.versions_added_count, 0)
+        self.assertEqual(second.version_count, len(manifest_paths))
         self.assertEqual(result.sources_file.read_bytes(), first_bytes)
         self.assertEqual(result.sources_file.stat().st_mtime_ns, first_mtime)
         self.assertEqual(before_source, self.source_snapshot())
@@ -298,6 +309,10 @@ class SourceRegistryTests(unittest.TestCase):
             sum(int(payload["assigned_count"]) for payload in payloads),
             self.inventory.record_counts["file"],
         )
+        self.assertEqual(
+            sum(int(payload["versions_added_count"]) for payload in payloads),
+            self.inventory.record_counts["file"],
+        )
         registry = load_source_registry(
             self.workspace,
             self.registration.project_id,
@@ -316,7 +331,8 @@ class SourceRegistryTests(unittest.TestCase):
         sync_source_registry(self.workspace, self.registration.project_id)
         valid_rows = self.registry_rows()
         summary = valid_rows[0]
-        sources = valid_rows[1:]
+        sources = [row for row in valid_rows if row.get("record_type") == "source"]
+        versions = [row for row in valid_rows if row.get("record_type") == "version"]
         self.assertGreaterEqual(len(sources), 2)
 
         invalid_payloads: dict[str, bytes] = {
@@ -328,68 +344,88 @@ class SourceRegistryTests(unittest.TestCase):
 
         legacy = dict(summary)
         legacy.pop("schema_version")
-        invalid_payloads["legacy-missing-version"] = self.encode_rows([legacy, *sources])
+        invalid_payloads["legacy-missing-version"] = self.encode_rows(
+            [legacy, *sources, *versions]
+        )
 
         future = dict(summary)
         future["schema_version"] = SOURCE_REGISTRY_SCHEMA_VERSION + 1
-        invalid_payloads["future-version"] = self.encode_rows([future, *sources])
+        invalid_payloads["future-version"] = self.encode_rows(
+            [future, *sources, *versions]
+        )
 
         boolean_version = dict(summary)
         boolean_version["schema_version"] = True
         invalid_payloads["boolean-version"] = self.encode_rows(
-            [boolean_version, *sources]
+            [boolean_version, *sources, *versions]
         )
 
         extra = dict(summary)
         extra["unexpected"] = "field"
-        invalid_payloads["extra-field"] = self.encode_rows([extra, *sources])
+        invalid_payloads["extra-field"] = self.encode_rows(
+            [extra, *sources, *versions]
+        )
 
         wrong_project = dict(summary)
         wrong_project["project_id"] = "different-project"
         invalid_payloads["wrong-project"] = self.encode_rows(
-            [wrong_project, *sources]
+            [wrong_project, *sources, *versions]
         )
 
         wrong_strategy = dict(summary)
         wrong_strategy["identity_strategy"] = "path-derived-v1"
         invalid_payloads["wrong-strategy"] = self.encode_rows(
-            [wrong_strategy, *sources]
+            [wrong_strategy, *sources, *versions]
         )
 
         count_mismatch = dict(summary)
         count_mismatch["source_count"] = len(sources) + 1
         invalid_payloads["count-mismatch"] = self.encode_rows(
-            [count_mismatch, *sources]
+            [count_mismatch, *sources, *versions]
         )
 
         duplicate_id = [dict(row) for row in sources]
         duplicate_id[1]["source_id"] = duplicate_id[0]["source_id"]
         invalid_payloads["duplicate-source-id"] = self.encode_rows(
-            [summary, *duplicate_id]
+            [summary, *duplicate_id, *versions]
         )
 
         duplicate_path = [dict(row) for row in sources]
-        duplicate_path[1]["manifest_path"] = duplicate_path[0]["manifest_path"]
+        duplicate_path[1]["current_path"] = duplicate_path[0]["current_path"]
+        duplicate_path[1]["path_history"] = [
+            dict(duplicate_path[0]["path_history"][0])
+        ]
+        duplicate_versions = [dict(row) for row in versions]
+        second_id = sources[1]["source_id"]
+        for row in duplicate_versions:
+            if row["source_id"] == second_id:
+                row["manifest_path"] = duplicate_path[0]["current_path"]
         invalid_payloads["duplicate-path"] = self.encode_rows(
-            [summary, *duplicate_path]
+            [summary, *duplicate_path, *duplicate_versions]
         )
 
         invalid_payloads["unsorted-records"] = self.encode_rows(
-            [summary, *reversed(sources)]
+            [summary, *reversed(sources), *versions]
         )
 
         future_assignment = [dict(row) for row in sources]
-        future_assignment[0]["first_seen_scan_generation"] = (
+        future_assignment[0]["last_seen_scan_generation"] = (
             self.inventory.scan_generation + 1
         )
+        future_assignment[0]["path_history"] = [
+            {
+                **future_assignment[0]["path_history"][0],
+                "last_seen_scan_generation": self.inventory.scan_generation + 1,
+            }
+        ]
         invalid_payloads["future-assignment-generation"] = self.encode_rows(
-            [summary, *future_assignment]
+            [summary, *future_assignment, *versions]
         )
 
         bad_source_id = [dict(row) for row in sources]
         bad_source_id[0]["source_id"] = "src-ABC"
         invalid_payloads["invalid-source-id"] = self.encode_rows(
-            [summary, *bad_source_id]
+            [summary, *bad_source_id, *versions]
         )
 
         sources_file = self.registration.layout.sources_file
@@ -411,7 +447,13 @@ class SourceRegistryTests(unittest.TestCase):
         sync_source_registry(self.workspace, self.registration.project_id)
         rows = self.registry_rows()
         source = dict(rows[1])
-        source["first_seen_scan_generation"] = self.inventory.scan_generation + 1
+        source["last_seen_scan_generation"] = self.inventory.scan_generation + 1
+        source["path_history"] = [
+            {
+                **source["path_history"][0],
+                "last_seen_scan_generation": self.inventory.scan_generation + 1,
+            }
+        ]
         rows[1] = source
         payload = self.encode_rows(rows)
         self.registration.layout.sources_file.write_bytes(payload)
@@ -472,6 +514,12 @@ class SourceRegistryTests(unittest.TestCase):
             payload["manifest_file_count"],
             self.inventory.record_counts["file"],
         )
+        self.assertEqual(payload["version_count"], self.inventory.record_counts["file"])
+        self.assertEqual(
+            payload["versions_added_count"],
+            self.inventory.record_counts["file"],
+        )
+        self.assertFalse(payload["upgraded_registry"])
         self.assertTrue(Path(payload["sources_file"]).is_file())
 
 

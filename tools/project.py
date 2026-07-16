@@ -16,7 +16,7 @@ if __package__:
     from .project_layout import LayoutError
     from .project_registry import register_project
     from .scan_policy import ScanPolicyConfig, ScanPolicyError
-    from .source_registry import sync_source_registry
+    from .source_registry import get_source_history, sync_source_registry
 else:
     from coverage_report import generate_coverage_report  # type: ignore[no-redef]
     from project_inventory import inventory_project  # type: ignore[no-redef]
@@ -26,7 +26,10 @@ else:
         ScanPolicyConfig,
         ScanPolicyError,
     )
-    from source_registry import sync_source_registry  # type: ignore[no-redef]
+    from source_registry import (  # type: ignore[no-redef]
+        get_source_history,
+        sync_source_registry,
+    )
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -154,6 +157,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Research Core workspace (default: this repository)",
     )
     source_sync.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+    source_history = source_subparsers.add_parser(
+        "history",
+        help="Read deterministic path and content-version history for one source.",
+    )
+    source_history.add_argument("project_id", help="B-01 registered project ID")
+    source_history.add_argument("source_id", help="Core-generated persistent source ID")
+    source_history.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    source_history.add_argument(
         "--json",
         action="store_true",
         help="Print a machine-readable JSON result",
@@ -314,6 +333,45 @@ def _run_source_sync(args: argparse.Namespace) -> int:
     print(f"Manifest files:      {result.manifest_file_count}")
     print(f"New source IDs:      {result.assigned_count}")
     print(f"Registry sources:    {result.source_count}")
+    print(f"Registry versions:   {result.version_count}")
+    print(f"Versions added:      {result.versions_added_count}")
+    print(f"Registry upgraded:   {result.upgraded_registry}")
+    return 0
+
+
+def _run_source_history(args: argparse.Namespace) -> int:
+    try:
+        result = get_source_history(
+            workspace_root=args.workspace_root,
+            project_id=args.project_id,
+            source_id=args.source_id,
+        )
+    except (LayoutError, OSError) as exc:
+        if args.json:
+            print(
+                json.dumps(
+                    {"ok": False, "error": str(exc)},
+                    ensure_ascii=False,
+                ),
+                file=sys.stderr,
+            )
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    payload = result.as_dict()
+    if args.json:
+        print(json.dumps({"ok": True, **payload}, indent=2, ensure_ascii=False))
+        return 0
+
+    source = payload["source"]
+    print(f"Source history:      {source['source_id']}")
+    print(f"Project:             {result.project_id}")
+    print(f"Source registry:     {result.sources_file}")
+    print(f"Current path:        {source['current_path']}")
+    print(f"Current version:     {source['current_version']}")
+    print(f"Known paths:         {len(source['path_history'])}")
+    print(f"Recorded versions:   {len(source['versions'])}")
     return 0
 
 
@@ -328,6 +386,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_coverage(args)
     if args.command == "source" and args.source_command == "sync":
         return _run_source_sync(args)
+    if args.command == "source" and args.source_command == "history":
+        return _run_source_history(args)
     parser.error(f"unsupported command: {args.command}")
     return 2
 

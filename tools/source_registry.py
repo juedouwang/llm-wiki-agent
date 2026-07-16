@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Persistent D-01 source identities for inventoried project files.
+"""Persistent source identities and auditable source versions.
 
-The registry is Core-owned machine state.  It assigns one opaque source ID to
-an in-scope Manifest path, retains past assignments, and never opens or writes
-the registered research project.  Source versions, path aliases, Evidence,
-reopening, relocation, and health semantics belong to D-02 through D-06.
+D-01 assigns opaque Core-owned source IDs. D-02 evolves that registry with
+content-hash versions and known path history while keeping research projects
+read-only. Evidence, source reopening, relocation recovery, and health remain
+separate D-03 through D-06 concerns.
 """
 
 from __future__ import annotations
@@ -18,12 +18,13 @@ import time
 import unicodedata
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 
 if __package__:
     from .project_inventory import (
+        CONTENT_HASH_ALGORITHM,
         PROJECT_MANIFEST_VERSION,
         ProjectManifest,
         load_project_manifest,
@@ -32,6 +33,7 @@ if __package__:
     from .project_registry import load_registered_project
 else:
     from project_inventory import (  # type: ignore[no-redef]
+        CONTENT_HASH_ALGORITHM,
         PROJECT_MANIFEST_VERSION,
         ProjectManifest,
         load_project_manifest,
@@ -46,14 +48,18 @@ else:
 
 SOURCE_REGISTRY_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
 SOURCE_REGISTRY_KIND = "llmwiki-source-registry"
-SOURCE_REGISTRY_VERSION = "source-registry-v1"
+LEGACY_SOURCE_REGISTRY_VERSION = "source-registry-v1"
+SOURCE_REGISTRY_VERSION = "source-registry-v2"
 SOURCE_ID_STRATEGY = "core-uuid4-v1"
+SOURCE_PATH_KIND = "llmwiki-source-path"
+SOURCE_VERSION_HASH_ALGORITHM = CONTENT_HASH_ALGORITHM
 _SOURCE_ID_PATTERN = re.compile(r"src-[0-9a-f]{32}")
+_CONTENT_HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 _DEFAULT_LOCK_TIMEOUT_SECONDS = 10.0
 _LOCK_RETRY_SECONDS = 0.01
 _MAX_ID_ATTEMPTS = 128
 
-_SUMMARY_FIELDS = {
+_V1_SUMMARY_FIELDS = {
     "schema_version",
     "kind",
     "registry_version",
@@ -62,7 +68,7 @@ _SUMMARY_FIELDS = {
     "identity_strategy",
     "source_count",
 }
-_SOURCE_FIELDS = {
+_V1_SOURCE_FIELDS = {
     "schema_version",
     "kind",
     "registry_version",
@@ -72,10 +78,53 @@ _SOURCE_FIELDS = {
     "manifest_path",
     "first_seen_scan_generation",
 }
+_V2_SUMMARY_FIELDS = {
+    "schema_version",
+    "kind",
+    "registry_version",
+    "record_type",
+    "project_id",
+    "identity_strategy",
+    "hash_algorithm",
+    "source_count",
+    "version_count",
+}
+_V2_SOURCE_FIELDS = {
+    "schema_version",
+    "kind",
+    "registry_version",
+    "record_type",
+    "project_id",
+    "source_id",
+    "current_path",
+    "path_history",
+    "first_seen_scan_generation",
+    "last_seen_scan_generation",
+    "current_version",
+}
+_V2_VERSION_FIELDS = {
+    "schema_version",
+    "kind",
+    "registry_version",
+    "record_type",
+    "project_id",
+    "source_id",
+    "version",
+    "content_hash",
+    "manifest_path",
+    "observed_scan_generation",
+}
+_SOURCE_PATH_FIELDS = {
+    "schema_version",
+    "kind",
+    "path",
+    "first_seen_scan_generation",
+    "last_seen_scan_generation",
+}
 
 
 class SourceRegistryError(LayoutError):
-    """Base error for unsafe, corrupt, or conflicting source identity state."""
+    """Base error for unsafe, corrupt, or conflicting source state."""
 
 
 class SourceRegistryLockError(SourceRegistryError):
@@ -83,11 +132,17 @@ class SourceRegistryLockError(SourceRegistryError):
 
 
 class SourceRegistryConflictError(SourceRegistryError):
-    """Raised when persisted identities cannot be reconciled safely."""
+    """Raised when persisted source state cannot be reconciled safely."""
 
 
 def _is_integer(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _positive_integer(value: object, field_name: str) -> int:
+    if not _is_integer(value) or value < 1:
+        raise SourceRegistryError(f"{field_name} must be a positive integer")
+    return value
 
 
 def _source_id(value: object) -> str:
@@ -98,9 +153,15 @@ def _source_id(value: object) -> str:
     return value
 
 
+def _content_hash(value: object) -> str:
+    if not isinstance(value, str) or _CONTENT_HASH_PATTERN.fullmatch(value) is None:
+        raise SourceRegistryError("content_hash must be a lowercase SHA-256 digest")
+    return value
+
+
 def _manifest_path(value: object) -> str:
     if not isinstance(value, str) or not value:
-        raise SourceRegistryError("manifest_path must be a non-empty string")
+        raise SourceRegistryError("source path must be a non-empty string")
     path = PurePosixPath(value)
     if (
         "\\" in value
@@ -110,7 +171,7 @@ def _manifest_path(value: object) -> str:
         or unicodedata.normalize("NFC", value) != value
     ):
         raise SourceRegistryError(
-            "manifest_path must be normalized project-relative POSIX form"
+            "source path must be normalized project-relative POSIX form"
         )
     return value
 
@@ -143,8 +204,6 @@ def _reject_json_constant(value: str) -> Any:
 
 
 def _normalize_json_value(value: object) -> object:
-    """Reject non-finite values before persisted dictionaries are compared."""
-
     if value is None or isinstance(value, (str, bool)) or _is_integer(value):
         return value
     if isinstance(value, float):
@@ -159,25 +218,184 @@ def _normalize_json_value(value: object) -> object:
 
 
 @dataclass(frozen=True)
+class SourcePathRecord:
+    """One known project-relative path and its observed generation range."""
+
+    path: str
+    first_seen_scan_generation: int
+    last_seen_scan_generation: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "path", _manifest_path(self.path))
+        first = _positive_integer(
+            self.first_seen_scan_generation,
+            "path first_seen_scan_generation",
+        )
+        last = _positive_integer(
+            self.last_seen_scan_generation,
+            "path last_seen_scan_generation",
+        )
+        if last < first:
+            raise SourceRegistryError(
+                "path last_seen_scan_generation must not precede first_seen_scan_generation"
+            )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": SOURCE_REGISTRY_SCHEMA_VERSION,
+            "kind": SOURCE_PATH_KIND,
+            "path": self.path,
+            "first_seen_scan_generation": self.first_seen_scan_generation,
+            "last_seen_scan_generation": self.last_seen_scan_generation,
+        }
+
+
+@dataclass(frozen=True)
+class SourceVersion:
+    """One content transition observed for a stable source identity."""
+
+    version: int
+    content_hash: str
+    manifest_path: str
+    observed_scan_generation: int
+
+    def __post_init__(self) -> None:
+        _positive_integer(self.version, "version")
+        object.__setattr__(self, "content_hash", _content_hash(self.content_hash))
+        object.__setattr__(self, "manifest_path", _manifest_path(self.manifest_path))
+        _positive_integer(
+            self.observed_scan_generation,
+            "observed_scan_generation",
+        )
+
+    def as_dict(self, *, project_id: str, source_id: str) -> dict[str, Any]:
+        return {
+            "schema_version": SOURCE_REGISTRY_SCHEMA_VERSION,
+            "kind": SOURCE_REGISTRY_KIND,
+            "registry_version": SOURCE_REGISTRY_VERSION,
+            "record_type": "version",
+            "project_id": project_id,
+            "source_id": source_id,
+            "version": self.version,
+            "content_hash": self.content_hash,
+            "manifest_path": self.manifest_path,
+            "observed_scan_generation": self.observed_scan_generation,
+        }
+
+
+@dataclass(frozen=True)
 class SourceRecord:
-    """One immutable D-01 assignment from a Manifest path to a source ID."""
+    """One stable source identity with known paths and content versions."""
 
     source_id: str
-    manifest_path: str
+    current_path: str
+    path_history: tuple[SourcePathRecord, ...]
     first_seen_scan_generation: int
+    last_seen_scan_generation: int
+    current_version: int | None = None
+    versions: tuple[SourceVersion, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source_id", _source_id(self.source_id))
-        object.__setattr__(self, "manifest_path", _manifest_path(self.manifest_path))
-        if (
-            not _is_integer(self.first_seen_scan_generation)
-            or self.first_seen_scan_generation < 1
-        ):
+        object.__setattr__(self, "current_path", _manifest_path(self.current_path))
+        first = _positive_integer(
+            self.first_seen_scan_generation,
+            "first_seen_scan_generation",
+        )
+        last = _positive_integer(
+            self.last_seen_scan_generation,
+            "last_seen_scan_generation",
+        )
+        if last < first:
             raise SourceRegistryError(
-                "first_seen_scan_generation must be a positive integer"
+                "last_seen_scan_generation must not precede first_seen_scan_generation"
             )
 
-    def as_dict(self, *, project_id: str) -> dict[str, Any]:
+        history = tuple(self.path_history)
+        if not history or not all(isinstance(item, SourcePathRecord) for item in history):
+            raise SourceRegistryError(
+                "path_history must contain at least one SourcePathRecord"
+            )
+        if tuple(
+            sorted(
+                history,
+                key=lambda item: (item.first_seen_scan_generation, item.path),
+            )
+        ) != history:
+            raise SourceRegistryError(
+                "path_history must be sorted by first-seen generation and path"
+            )
+        paths = [item.path for item in history]
+        if len(set(paths)) != len(paths):
+            raise SourceRegistryConflictError("path_history contains duplicate paths")
+        if self.current_path not in set(paths):
+            raise SourceRegistryError("current_path must appear in path_history")
+        if first != min(item.first_seen_scan_generation for item in history):
+            raise SourceRegistryError(
+                "source first_seen_scan_generation must match path history"
+            )
+        if last != max(item.last_seen_scan_generation for item in history):
+            raise SourceRegistryError(
+                "source last_seen_scan_generation must match path history"
+            )
+        history_by_path = {item.path: item for item in history}
+        if history_by_path[self.current_path].last_seen_scan_generation != last:
+            raise SourceRegistryError(
+                "current_path must be the path observed at the source last-seen generation"
+            )
+
+        versions = tuple(self.versions)
+        if not all(isinstance(item, SourceVersion) for item in versions):
+            raise SourceRegistryError("versions must contain only SourceVersion objects")
+        if [item.version for item in versions] != list(range(1, len(versions) + 1)):
+            raise SourceRegistryError("source versions must be contiguous starting at 1")
+        observed = [item.observed_scan_generation for item in versions]
+        if observed != sorted(observed) or len(set(observed)) != len(observed):
+            raise SourceRegistryError(
+                "source version observation generations must be strictly increasing"
+            )
+        path_set = set(paths)
+        for version in versions:
+            if version.manifest_path not in path_set:
+                raise SourceRegistryError(
+                    "version manifest_path must appear in source path_history"
+                )
+            if version.observed_scan_generation < first:
+                raise SourceRegistryError(
+                    "version observation cannot precede source discovery"
+                )
+            if version.observed_scan_generation > last:
+                raise SourceRegistryError(
+                    "version observation cannot exceed source last-seen generation"
+                )
+            version_path = history_by_path[version.manifest_path]
+            if not (
+                version_path.first_seen_scan_generation
+                <= version.observed_scan_generation
+                <= version_path.last_seen_scan_generation
+            ):
+                raise SourceRegistryError(
+                    "version observation must fall within its path history range"
+                )
+        expected_current = len(versions) if versions else None
+        if self.current_version != expected_current:
+            raise SourceRegistryError(
+                "current_version must identify the latest contiguous source version"
+            )
+        object.__setattr__(self, "path_history", history)
+        object.__setattr__(self, "versions", versions)
+
+    @property
+    def manifest_path(self) -> str:
+        """D-01 compatibility alias for the current known path."""
+
+        return self.current_path
+
+    @property
+    def current_content_hash(self) -> str | None:
+        return self.versions[-1].content_hash if self.versions else None
+
+    def source_row(self, *, project_id: str) -> dict[str, Any]:
         return {
             "schema_version": SOURCE_REGISTRY_SCHEMA_VERSION,
             "kind": SOURCE_REGISTRY_KIND,
@@ -185,45 +403,133 @@ class SourceRecord:
             "record_type": "source",
             "project_id": project_id,
             "source_id": self.source_id,
-            "manifest_path": self.manifest_path,
+            "current_path": self.current_path,
+            "path_history": [item.as_dict() for item in self.path_history],
             "first_seen_scan_generation": self.first_seen_scan_generation,
+            "last_seen_scan_generation": self.last_seen_scan_generation,
+            "current_version": self.current_version,
         }
+
+    def observe(
+        self,
+        *,
+        manifest_path: str,
+        content_hash: str,
+        scan_generation: int,
+    ) -> tuple[SourceRecord, bool]:
+        """Observe the current path without performing relocation inference."""
+
+        path = _manifest_path(manifest_path)
+        digest = _content_hash(content_hash)
+        generation = _positive_integer(scan_generation, "scan_generation")
+        if path != self.current_path:
+            raise SourceRegistryConflictError(
+                "D-02 cannot change a source current_path without relocation recovery"
+            )
+        if generation < self.last_seen_scan_generation:
+            raise SourceRegistryConflictError(
+                "Manifest generation predates persisted source observations"
+            )
+
+        history = list(self.path_history)
+        history_index = next(
+            index for index, item in enumerate(history) if item.path == path
+        )
+        current_path_record = history[history_index]
+        if generation > current_path_record.last_seen_scan_generation:
+            history[history_index] = replace(
+                current_path_record,
+                last_seen_scan_generation=generation,
+            )
+
+        versions = list(self.versions)
+        added_version = not versions or versions[-1].content_hash != digest
+        if added_version:
+            if versions and generation <= versions[-1].observed_scan_generation:
+                raise SourceRegistryConflictError(
+                    "a content change requires a newer Manifest generation"
+                )
+            versions.append(
+                SourceVersion(
+                    version=len(versions) + 1,
+                    content_hash=digest,
+                    manifest_path=path,
+                    observed_scan_generation=generation,
+                )
+            )
+
+        updated = SourceRecord(
+            source_id=self.source_id,
+            current_path=self.current_path,
+            path_history=tuple(history),
+            first_seen_scan_generation=self.first_seen_scan_generation,
+            last_seen_scan_generation=max(self.last_seen_scan_generation, generation),
+            current_version=len(versions) if versions else None,
+            versions=tuple(versions),
+        )
+        return updated, added_version
 
 
 @dataclass(frozen=True)
 class SourceRegistry:
-    """A strictly validated project-local source identity registry."""
+    """A strictly validated project-local source identity/version registry."""
 
     project_id: str
     sources_file: Path
     records: tuple[SourceRecord, ...]
+    loaded_registry_version: str = SOURCE_REGISTRY_VERSION
 
     def __post_init__(self) -> None:
         if not isinstance(self.project_id, str) or not self.project_id:
             raise SourceRegistryError("project_id must be a non-empty string")
+        if self.loaded_registry_version not in {
+            LEGACY_SOURCE_REGISTRY_VERSION,
+            SOURCE_REGISTRY_VERSION,
+        }:
+            raise SourceRegistryError("unsupported loaded source registry version")
         records = tuple(self.records)
         if not all(isinstance(record, SourceRecord) for record in records):
             raise SourceRegistryError("records must contain only SourceRecord objects")
-        if tuple(sorted(records, key=lambda item: item.manifest_path)) != records:
-            raise SourceRegistryError("source records must be sorted by manifest_path")
+        if tuple(sorted(records, key=lambda item: item.source_id)) != records:
+            raise SourceRegistryError("source records must be sorted by source_id")
         source_ids = [record.source_id for record in records]
-        paths = [record.manifest_path for record in records]
         if len(set(source_ids)) != len(source_ids):
-            raise SourceRegistryConflictError("source registry contains duplicate source_id values")
-        if len(set(paths)) != len(paths):
             raise SourceRegistryConflictError(
-                "source registry contains duplicate manifest_path values"
+                "source registry contains duplicate source_id values"
+            )
+        known_paths: list[str] = []
+        for record in records:
+            known_paths.extend(item.path for item in record.path_history)
+        if len(set(known_paths)) != len(known_paths):
+            raise SourceRegistryConflictError(
+                "source registry contains a path assigned to multiple sources"
             )
         object.__setattr__(self, "sources_file", Path(self.sources_file))
         object.__setattr__(self, "records", records)
 
     @property
-    def by_path(self) -> dict[str, SourceRecord]:
-        return {record.manifest_path: record for record in self.records}
-
-    @property
     def by_source_id(self) -> dict[str, SourceRecord]:
         return {record.source_id: record for record in self.records}
+
+    @property
+    def by_path(self) -> dict[str, SourceRecord]:
+        return {
+            path.path: record
+            for record in self.records
+            for path in record.path_history
+        }
+
+    @property
+    def current_by_path(self) -> dict[str, SourceRecord]:
+        return {record.current_path: record for record in self.records}
+
+    @property
+    def version_count(self) -> int:
+        return sum(len(record.versions) for record in self.records)
+
+    @property
+    def max_scan_generation(self) -> int:
+        return max((record.last_seen_scan_generation for record in self.records), default=0)
 
     def serialized_bytes(self) -> bytes:
         summary = {
@@ -233,14 +539,26 @@ class SourceRegistry:
             "record_type": "summary",
             "project_id": self.project_id,
             "identity_strategy": SOURCE_ID_STRATEGY,
+            "hash_algorithm": SOURCE_VERSION_HASH_ALGORITHM,
             "source_count": len(self.records),
+            "version_count": self.version_count,
         }
         return b"".join(
             [
                 _canonical_json_line(summary),
                 *(
-                    _canonical_json_line(record.as_dict(project_id=self.project_id))
+                    _canonical_json_line(record.source_row(project_id=self.project_id))
                     for record in self.records
+                ),
+                *(
+                    _canonical_json_line(
+                        version.as_dict(
+                            project_id=self.project_id,
+                            source_id=record.source_id,
+                        )
+                    )
+                    for record in self.records
+                    for version in record.versions
                 ),
             ]
         )
@@ -248,7 +566,7 @@ class SourceRegistry:
 
 @dataclass(frozen=True)
 class SourceRegistrySyncResult:
-    """Auditable outcome of assigning identities for one Manifest generation."""
+    """Auditable outcome of one identity and source-version synchronization."""
 
     project_id: str
     project_root: Path
@@ -256,9 +574,12 @@ class SourceRegistrySyncResult:
     sources_file: Path
     scan_generation: int
     source_count: int
+    version_count: int
     manifest_file_count: int
     assigned_count: int
     existing_count: int
+    versions_added_count: int
+    upgraded_registry: bool
     wrote_registry: bool
 
     def as_dict(self) -> dict[str, Any]:
@@ -270,33 +591,72 @@ class SourceRegistrySyncResult:
             "registry_version": SOURCE_REGISTRY_VERSION,
             "scan_generation": self.scan_generation,
             "source_count": self.source_count,
+            "version_count": self.version_count,
             "manifest_file_count": self.manifest_file_count,
             "assigned_count": self.assigned_count,
             "existing_count": self.existing_count,
+            "versions_added_count": self.versions_added_count,
+            "upgraded_registry": self.upgraded_registry,
             "wrote_registry": self.wrote_registry,
         }
 
 
-def _registry_error(path: Path, message: str, line_number: int | None = None) -> SourceRegistryError:
+@dataclass(frozen=True)
+class SourceHistoryResult:
+    """Deterministic source/version history without reading source bytes."""
+
+    project_id: str
+    sources_file: Path
+    record: SourceRecord
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "project_id": self.project_id,
+            "sources_file": str(self.sources_file),
+            "registry_version": SOURCE_REGISTRY_VERSION,
+            "hash_algorithm": SOURCE_VERSION_HASH_ALGORITHM,
+            "source": {
+                "source_id": self.record.source_id,
+                "current_path": self.record.current_path,
+                "path_history": [item.as_dict() for item in self.record.path_history],
+                "first_seen_scan_generation": self.record.first_seen_scan_generation,
+                "last_seen_scan_generation": self.record.last_seen_scan_generation,
+                "current_version": self.record.current_version,
+                "versions": [
+                    {
+                        "version": item.version,
+                        "content_hash": item.content_hash,
+                        "manifest_path": item.manifest_path,
+                        "observed_scan_generation": item.observed_scan_generation,
+                    }
+                    for item in self.record.versions
+                ],
+            },
+        }
+
+
+def _registry_error(
+    path: Path,
+    message: str,
+    line_number: int | None = None,
+) -> SourceRegistryError:
     location = f"{path}:{line_number}" if line_number is not None else str(path)
     return SourceRegistryError(f"invalid source registry at {location}: {message}")
 
 
-def _validate_common_row(
+def _validate_schema_record(
     record: object,
     *,
     path: Path,
     line_number: int,
-    project_id: str,
     expected_fields: set[str],
-    record_type: str,
 ) -> dict[str, Any]:
     if not isinstance(record, dict):
         raise _registry_error(path, "each JSONL line must contain an object", line_number)
     if set(record) != expected_fields:
         raise _registry_error(
             path,
-            f"{record_type} row must contain exactly the Schema v1 fields",
+            "row must contain exactly the expected Schema v1 fields",
             line_number,
         )
     try:
@@ -307,32 +667,51 @@ def _validate_common_row(
         )
     except LayoutError as exc:
         raise _registry_error(path, str(exc), line_number) from exc
-    if record.get("kind") != SOURCE_REGISTRY_KIND:
+    _normalize_json_value(record)
+    return record
+
+
+def _validate_common_row(
+    record: object,
+    *,
+    path: Path,
+    line_number: int,
+    project_id: str,
+    expected_fields: set[str],
+    record_type: str,
+    registry_version: str,
+) -> dict[str, Any]:
+    row = _validate_schema_record(
+        record,
+        path=path,
+        line_number=line_number,
+        expected_fields=expected_fields,
+    )
+    if row.get("kind") != SOURCE_REGISTRY_KIND:
         raise _registry_error(
             path,
-            f"unexpected kind {record.get('kind')!r}",
+            f"unexpected kind {row.get('kind')!r}",
             line_number,
         )
-    if record.get("registry_version") != SOURCE_REGISTRY_VERSION:
+    if row.get("registry_version") != registry_version:
         raise _registry_error(
             path,
-            f"unsupported registry_version {record.get('registry_version')!r}",
+            f"unsupported registry_version {row.get('registry_version')!r}",
             line_number,
         )
-    if record.get("record_type") != record_type:
+    if row.get("record_type") != record_type:
         raise _registry_error(
             path,
             f"expected record_type {record_type!r}",
             line_number,
         )
-    if record.get("project_id") != project_id:
+    if row.get("project_id") != project_id:
         raise _registry_error(
             path,
             "project_id does not match the registered project",
             line_number,
         )
-    _normalize_json_value(record)
-    return record
+    return row
 
 
 def _decode_registry_line(raw_line: str, *, path: Path, line_number: int) -> object:
@@ -350,17 +729,7 @@ def _decode_registry_line(raw_line: str, *, path: Path, line_number: int) -> obj
         raise _registry_error(path, str(exc), line_number) from exc
 
 
-def _load_source_registry_file(
-    sources_file: Path,
-    *,
-    project_id: str,
-    missing_ok: bool,
-) -> SourceRegistry:
-    path = Path(sources_file)
-    if not path.exists():
-        if missing_ok:
-            return SourceRegistry(project_id=project_id, sources_file=path, records=())
-        raise SourceRegistryError(f"source registry does not exist: {path}")
+def _load_registry_lines(path: Path) -> list[object]:
     if path.is_symlink():
         raise SourceRegistryError(f"source registry must not be a symbolic link: {path}")
     if not path.is_file():
@@ -369,59 +738,268 @@ def _load_source_registry_file(
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         raise SourceRegistryError(f"could not read source registry {path}: {exc}") from exc
-    lines = text.splitlines()
-    if not lines:
+    raw_lines = text.splitlines()
+    if not raw_lines:
         raise _registry_error(path, "the registry is empty")
-    if text.endswith("\n\n") or text.endswith("\r\n\r\n"):
-        raise _registry_error(path, "blank JSONL lines are not allowed")
+    return [
+        _decode_registry_line(line, path=path, line_number=line_number)
+        for line_number, line in enumerate(raw_lines, start=1)
+    ]
 
+
+def _load_v1_registry(
+    rows: list[object],
+    *,
+    path: Path,
+    project_id: str,
+) -> SourceRegistry:
     summary = _validate_common_row(
-        _decode_registry_line(lines[0], path=path, line_number=1),
+        rows[0],
         path=path,
         line_number=1,
         project_id=project_id,
-        expected_fields=_SUMMARY_FIELDS,
+        expected_fields=_V1_SUMMARY_FIELDS,
         record_type="summary",
+        registry_version=LEGACY_SOURCE_REGISTRY_VERSION,
     )
     if summary.get("identity_strategy") != SOURCE_ID_STRATEGY:
-        raise _registry_error(
-            path,
-            f"unsupported identity_strategy {summary.get('identity_strategy')!r}",
-            1,
-        )
+        raise _registry_error(path, "unsupported identity_strategy", 1)
     source_count = summary.get("source_count")
     if not _is_integer(source_count) or source_count < 0:
         raise _registry_error(path, "source_count must be a non-negative integer", 1)
 
-    records: list[SourceRecord] = []
-    for line_number, line in enumerate(lines[1:], start=2):
+    parsed: list[tuple[str, SourceRecord]] = []
+    for line_number, raw in enumerate(rows[1:], start=2):
         row = _validate_common_row(
-            _decode_registry_line(line, path=path, line_number=line_number),
+            raw,
             path=path,
             line_number=line_number,
             project_id=project_id,
-            expected_fields=_SOURCE_FIELDS,
+            expected_fields=_V1_SOURCE_FIELDS,
             record_type="source",
+            registry_version=LEGACY_SOURCE_REGISTRY_VERSION,
         )
         try:
-            records.append(
-                SourceRecord(
-                    source_id=row.get("source_id"),
-                    manifest_path=row.get("manifest_path"),
-                    first_seen_scan_generation=row.get(
-                        "first_seen_scan_generation"
+            manifest_path = _manifest_path(row.get("manifest_path"))
+            generation = _positive_integer(
+                row.get("first_seen_scan_generation"),
+                "first_seen_scan_generation",
+            )
+            parsed.append(
+                (
+                    manifest_path,
+                    SourceRecord(
+                        source_id=row.get("source_id"),
+                        current_path=manifest_path,
+                        path_history=(
+                            SourcePathRecord(
+                                path=manifest_path,
+                                first_seen_scan_generation=generation,
+                                last_seen_scan_generation=generation,
+                            ),
+                        ),
+                        first_seen_scan_generation=generation,
+                        last_seen_scan_generation=generation,
                     ),
                 )
             )
         except SourceRegistryError as exc:
             raise _registry_error(path, str(exc), line_number) from exc
-
-    if source_count != len(records):
+    if source_count != len(parsed):
         raise _registry_error(
             path,
             "source_count does not match the number of source rows",
             1,
         )
+    if [item[0] for item in parsed] != sorted(item[0] for item in parsed):
+        raise _registry_error(path, "v1 source rows must be sorted by manifest_path")
+    try:
+        records = tuple(
+            sorted((item[1] for item in parsed), key=lambda item: item.source_id)
+        )
+        return SourceRegistry(
+            project_id=project_id,
+            sources_file=path,
+            records=records,
+            loaded_registry_version=LEGACY_SOURCE_REGISTRY_VERSION,
+        )
+    except SourceRegistryError as exc:
+        raise _registry_error(path, str(exc)) from exc
+
+
+def _parse_source_path(
+    value: object,
+    *,
+    registry_path: Path,
+    line_number: int,
+) -> SourcePathRecord:
+    row = _validate_schema_record(
+        value,
+        path=registry_path,
+        line_number=line_number,
+        expected_fields=_SOURCE_PATH_FIELDS,
+    )
+    if row.get("kind") != SOURCE_PATH_KIND:
+        raise _registry_error(
+            registry_path,
+            f"unexpected source path kind {row.get('kind')!r}",
+            line_number,
+        )
+    try:
+        return SourcePathRecord(
+            path=row.get("path"),
+            first_seen_scan_generation=row.get("first_seen_scan_generation"),
+            last_seen_scan_generation=row.get("last_seen_scan_generation"),
+        )
+    except SourceRegistryError as exc:
+        raise _registry_error(registry_path, str(exc), line_number) from exc
+
+
+def _load_v2_registry(
+    rows: list[object],
+    *,
+    path: Path,
+    project_id: str,
+) -> SourceRegistry:
+    summary = _validate_common_row(
+        rows[0],
+        path=path,
+        line_number=1,
+        project_id=project_id,
+        expected_fields=_V2_SUMMARY_FIELDS,
+        record_type="summary",
+        registry_version=SOURCE_REGISTRY_VERSION,
+    )
+    if summary.get("identity_strategy") != SOURCE_ID_STRATEGY:
+        raise _registry_error(path, "unsupported identity_strategy", 1)
+    if summary.get("hash_algorithm") != SOURCE_VERSION_HASH_ALGORITHM:
+        raise _registry_error(path, "unsupported hash_algorithm", 1)
+    source_count = summary.get("source_count")
+    version_count = summary.get("version_count")
+    if not _is_integer(source_count) or source_count < 0:
+        raise _registry_error(path, "source_count must be a non-negative integer", 1)
+    if not _is_integer(version_count) or version_count < 0:
+        raise _registry_error(path, "version_count must be a non-negative integer", 1)
+
+    source_rows: list[tuple[int, dict[str, Any]]] = []
+    version_rows: list[tuple[int, dict[str, Any]]] = []
+    saw_version = False
+    for line_number, raw in enumerate(rows[1:], start=2):
+        if not isinstance(raw, dict):
+            raise _registry_error(path, "each JSONL line must contain an object", line_number)
+        record_type = raw.get("record_type")
+        if record_type == "source":
+            if saw_version:
+                raise _registry_error(path, "source rows must precede version rows")
+            source_rows.append(
+                (
+                    line_number,
+                    _validate_common_row(
+                        raw,
+                        path=path,
+                        line_number=line_number,
+                        project_id=project_id,
+                        expected_fields=_V2_SOURCE_FIELDS,
+                        record_type="source",
+                        registry_version=SOURCE_REGISTRY_VERSION,
+                    ),
+                )
+            )
+        elif record_type == "version":
+            saw_version = True
+            version_rows.append(
+                (
+                    line_number,
+                    _validate_common_row(
+                        raw,
+                        path=path,
+                        line_number=line_number,
+                        project_id=project_id,
+                        expected_fields=_V2_VERSION_FIELDS,
+                        record_type="version",
+                        registry_version=SOURCE_REGISTRY_VERSION,
+                    ),
+                )
+            )
+        else:
+            raise _registry_error(path, "record_type must be source or version", line_number)
+    if source_count != len(source_rows):
+        raise _registry_error(path, "source_count does not match source rows", 1)
+    if version_count != len(version_rows):
+        raise _registry_error(path, "version_count does not match version rows", 1)
+
+    source_data: dict[
+        str,
+        tuple[int, dict[str, Any], tuple[SourcePathRecord, ...]],
+    ] = {}
+    source_order: list[str] = []
+    for line_number, row in source_rows:
+        try:
+            source_id = _source_id(row.get("source_id"))
+            history_raw = row.get("path_history")
+            if not isinstance(history_raw, list):
+                raise SourceRegistryError("path_history must be a list")
+            history = tuple(
+                _parse_source_path(
+                    item,
+                    registry_path=path,
+                    line_number=line_number,
+                )
+                for item in history_raw
+            )
+        except SourceRegistryError as exc:
+            raise _registry_error(path, str(exc), line_number) from exc
+        if source_id in source_data:
+            raise _registry_error(path, "duplicate source_id", line_number)
+        source_data[source_id] = (line_number, row, history)
+        source_order.append(source_id)
+    if source_order != sorted(source_order):
+        raise _registry_error(path, "source rows must be sorted by source_id")
+
+    versions_by_source: dict[str, list[SourceVersion]] = {
+        source_id: [] for source_id in source_data
+    }
+    version_order: list[tuple[str, int]] = []
+    for line_number, row in version_rows:
+        try:
+            source_id = _source_id(row.get("source_id"))
+            version = SourceVersion(
+                version=row.get("version"),
+                content_hash=row.get("content_hash"),
+                manifest_path=row.get("manifest_path"),
+                observed_scan_generation=row.get("observed_scan_generation"),
+            )
+        except SourceRegistryError as exc:
+            raise _registry_error(path, str(exc), line_number) from exc
+        if source_id not in versions_by_source:
+            raise _registry_error(path, "version references an unknown source_id", line_number)
+        versions_by_source[source_id].append(version)
+        version_order.append((source_id, version.version))
+    if version_order != sorted(version_order):
+        raise _registry_error(path, "version rows must be sorted by source_id and version")
+
+    records: list[SourceRecord] = []
+    for source_id in source_order:
+        line_number, row, history = source_data[source_id]
+        current_version = row.get("current_version")
+        if current_version is not None and not _is_integer(current_version):
+            raise _registry_error(path, "current_version must be an integer or null", line_number)
+        try:
+            records.append(
+                SourceRecord(
+                    source_id=source_id,
+                    current_path=row.get("current_path"),
+                    path_history=history,
+                    first_seen_scan_generation=row.get(
+                        "first_seen_scan_generation"
+                    ),
+                    last_seen_scan_generation=row.get("last_seen_scan_generation"),
+                    current_version=current_version,
+                    versions=tuple(versions_by_source[source_id]),
+                )
+            )
+        except SourceRegistryError as exc:
+            raise _registry_error(path, str(exc), line_number) from exc
     try:
         return SourceRegistry(
             project_id=project_id,
@@ -432,17 +1010,69 @@ def _load_source_registry_file(
         raise _registry_error(path, str(exc)) from exc
 
 
+def _load_source_registry_file(
+    sources_file: Path,
+    *,
+    project_id: str,
+    missing_ok: bool,
+) -> SourceRegistry:
+    path = Path(sources_file)
+    if not path.exists():
+        if missing_ok:
+            return SourceRegistry(
+                project_id=project_id,
+                sources_file=path,
+                records=(),
+            )
+        raise SourceRegistryError(f"source registry does not exist: {path}")
+    rows = _load_registry_lines(path)
+    if not isinstance(rows[0], dict):
+        raise _registry_error(path, "summary row must contain an object", 1)
+    registry_version = rows[0].get("registry_version")
+    if registry_version == LEGACY_SOURCE_REGISTRY_VERSION:
+        return _load_v1_registry(rows, path=path, project_id=project_id)
+    if registry_version == SOURCE_REGISTRY_VERSION:
+        return _load_v2_registry(rows, path=path, project_id=project_id)
+    raise _registry_error(
+        path,
+        f"unsupported registry_version {registry_version!r}",
+        1,
+    )
+
+
 def load_source_registry(
     workspace_root: str | Path,
     project_id: str,
 ) -> SourceRegistry:
-    """Load one existing D-01 registry without modifying project or machine state."""
+    """Load existing source identity/version state without modifying it."""
 
     registration = load_registered_project(workspace_root, project_id)
     return _load_source_registry_file(
         registration.layout.sources_file,
         project_id=registration.project_id,
         missing_ok=False,
+    )
+
+
+def get_source_history(
+    workspace_root: str | Path,
+    project_id: str,
+    source_id: str,
+) -> SourceHistoryResult:
+    """Return one source history without opening source-project bytes."""
+
+    registry = load_source_registry(workspace_root, project_id)
+    normalized_id = _source_id(source_id)
+    try:
+        record = registry.by_source_id[normalized_id]
+    except KeyError as exc:
+        raise SourceRegistryError(
+            f"source_id is not registered for project {project_id}: {normalized_id}"
+        ) from exc
+    return SourceHistoryResult(
+        project_id=registry.project_id,
+        sources_file=registry.sources_file,
+        record=record,
     )
 
 
@@ -520,7 +1150,9 @@ def _write_registry_atomic(registry: SourceRegistry) -> bool:
             if path.read_bytes() == payload:
                 return False
         except OSError as exc:
-            raise SourceRegistryError(f"could not compare source registry {path}: {exc}") from exc
+            raise SourceRegistryError(
+                f"could not compare source registry {path}: {exc}"
+            ) from exc
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = -1
     temporary: Path | None = None
@@ -562,19 +1194,33 @@ def _load_current_manifest(
     return registration, manifest
 
 
+def _manifest_observations(manifest: ProjectManifest) -> dict[str, str]:
+    observations: dict[str, str] = {}
+    for file_record in manifest.file_records:
+        path = _manifest_path(file_record.get("path"))
+        digest = _content_hash(file_record.get("content_sha256"))
+        if path in observations:
+            raise SourceRegistryConflictError(
+                f"Manifest contains duplicate regular-file path: {path}"
+            )
+        observations[path] = digest
+    return observations
+
+
 def sync_source_registry(
     workspace_root: str | Path,
     project_id: str,
     *,
     lock_timeout_seconds: float = _DEFAULT_LOCK_TIMEOUT_SECONDS,
 ) -> SourceRegistrySyncResult:
-    """Assign persistent IDs to every in-scope regular file in the Manifest.
+    """Synchronize stable identities and content versions from the Manifest.
 
-    Existing records are retained even when a path is absent from the current
-    Manifest.  D-01 never interprets a disappearance as deletion or relocation.
+    D-02 matches only a source's current known path. It deliberately does not
+    infer movement from hash matches; D-05 adds that recovery policy.
     """
 
     registration, manifest = _load_current_manifest(workspace_root, project_id)
+    observations = _manifest_observations(manifest)
     sources_file = registration.layout.sources_file
     lock_file = sources_file.with_name(f"{sources_file.name}.lock")
     sources_file.parent.mkdir(parents=True, exist_ok=True)
@@ -588,41 +1234,52 @@ def sync_source_registry(
             project_id=registration.project_id,
             missing_ok=True,
         )
-        if any(
-            record.first_seen_scan_generation > manifest.scan_generation
-            for record in registry.records
-        ):
+        if registry.max_scan_generation > manifest.scan_generation:
             raise SourceRegistryConflictError(
-                "current Manifest generation predates persisted source assignments"
+                "current Manifest generation predates persisted source observations"
             )
 
-        records = list(registry.records)
-        by_path = registry.by_path
-        existing_ids = set(registry.by_source_id)
+        records_by_id = dict(registry.by_source_id)
+        current_by_path = registry.current_by_path
+        existing_ids = set(records_by_id)
         assigned_count = 0
-        manifest_paths: list[str] = []
-        for file_record in manifest.file_records:
-            manifest_paths.append(_manifest_path(file_record.get("path")))
-        for manifest_path in sorted(manifest_paths):
-            if manifest_path in by_path:
-                continue
-            source_id = _new_source_id(existing_ids)
-            existing_ids.add(source_id)
-            source_record = SourceRecord(
-                source_id=source_id,
+        versions_added_count = 0
+        for manifest_path, digest in sorted(observations.items()):
+            record = current_by_path.get(manifest_path)
+            if record is None:
+                source_id = _new_source_id(existing_ids)
+                existing_ids.add(source_id)
+                record = SourceRecord(
+                    source_id=source_id,
+                    current_path=manifest_path,
+                    path_history=(
+                        SourcePathRecord(
+                            path=manifest_path,
+                            first_seen_scan_generation=manifest.scan_generation,
+                            last_seen_scan_generation=manifest.scan_generation,
+                        ),
+                    ),
+                    first_seen_scan_generation=manifest.scan_generation,
+                    last_seen_scan_generation=manifest.scan_generation,
+                )
+                assigned_count += 1
+            updated, added_version = record.observe(
                 manifest_path=manifest_path,
-                first_seen_scan_generation=manifest.scan_generation,
+                content_hash=digest,
+                scan_generation=manifest.scan_generation,
             )
-            records.append(source_record)
-            by_path[manifest_path] = source_record
-            assigned_count += 1
+            records_by_id[updated.source_id] = updated
+            current_by_path[manifest_path] = updated
+            versions_added_count += int(added_version)
 
-        updated = SourceRegistry(
+        updated_registry = SourceRegistry(
             project_id=registration.project_id,
             sources_file=sources_file,
-            records=tuple(sorted(records, key=lambda item: item.manifest_path)),
+            records=tuple(
+                sorted(records_by_id.values(), key=lambda item: item.source_id)
+            ),
         )
-        wrote_registry = _write_registry_atomic(updated)
+        wrote_registry = _write_registry_atomic(updated_registry)
 
     return SourceRegistrySyncResult(
         project_id=registration.project_id,
@@ -630,9 +1287,14 @@ def sync_source_registry(
         manifest_file=manifest.manifest_file,
         sources_file=sources_file,
         scan_generation=manifest.scan_generation,
-        source_count=len(updated.records),
+        source_count=len(updated_registry.records),
+        version_count=updated_registry.version_count,
         manifest_file_count=len(manifest.file_records),
         assigned_count=assigned_count,
         existing_count=len(manifest.file_records) - assigned_count,
+        versions_added_count=versions_added_count,
+        upgraded_registry=(
+            registry.loaded_registry_version == LEGACY_SOURCE_REGISTRY_VERSION
+        ),
         wrote_registry=wrote_registry,
     )

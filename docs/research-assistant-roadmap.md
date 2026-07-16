@@ -39,7 +39,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | C-03 Notebook extractor | 已完成 | `946d05a`, `daf1330` | `checkpoint/c-03-notebook-extractor`, `checkpoint/c-03-notebook-payload-bounds` |
 | C-04 PDF page extractor | 已完成 | `66a7ba7` | `checkpoint/c-04-pdf-extractor` |
 | C-08 定位保真分块 | 已完成 | `1eb64a2`, `6f01136` | `checkpoint/c-08-locator-chunking`, `checkpoint/c-08-locator-chunking-hardening` |
-| D-01 persistent source identity | complete | current commit | `checkpoint/d-01-source-identity` |
+| D-01 persistent source identity | complete | `a11fe6d` | `checkpoint/d-01-source-identity` |
+| D-02 source versions and path history | complete | current commit | `checkpoint/d-02-source-versions` |
 
 ## 3. 后续最小改动计划
 
@@ -323,15 +324,15 @@ git tag checkpoint/b-01-project-register
 
 ## 6. 下一项可执行任务
 
-D-01 persistent source identity is complete. The next task is:
+D-02 source versions and path history is complete. The next task is:
 
-> **D-02: source versions and path history**
+> **D-03: precise Evidence schema**
 
 The minimum scope is strictly limited to:
 
-- associate the current Manifest content hash with the stable `source_id`, recording auditable source versions, the current path, and known path history;
-- preserve the current version when content is unchanged, append a version under the same `source_id` when content changes, and expose deterministic API/CLI history reads;
-- strictly validate and atomically persist the evolved registry artifact, retain D-01 concurrency/read-only/fail-closed guarantees, and explicitly upgrade valid `source-registry-v1` state;
-- do not implement D-03 Evidence, source excerpts, D-04 locate/open, D-05 automatic relocation, D-06 health, extraction scheduling, MCP, Hooks, Web, or LLM behavior.
+- define deterministic, strictly versioned Evidence records containing at least `source_id + content_hash + locator + excerpt_hash` and bind each record to an existing source version;
+- reuse the typed, location-preserving extraction locators so supported locators can be validated, canonically serialized, and checked against exact excerpt bytes or text;
+- make content/hash or excerpt mismatches deterministically invalidate Evidence without opening a query or synthesis workflow;
+- do not implement D-04 source locate/open, D-05 relocation recovery, D-06 source health aggregation, claim propagation, extraction scheduling, MCP, Hooks, Web, or LLM behavior.
 
-D-02 establishes only the audit ledger for source content and known-path evolution. Precise Evidence, reopening, automatic relocation, and health belong to D-03 through D-06.
+D-03 establishes precise evidence identity and validation only. Reopening current source content, recovering moved files, and reporting source health remain D-04 through D-06.

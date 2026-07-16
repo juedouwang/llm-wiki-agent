@@ -14,7 +14,7 @@ llm-wiki-agent/
 |       `-- <project_id>/
 |           |-- project.yaml
 |           |-- manifest.jsonl      # B-03 ledger + B-04 fingerprints + B-05 classification
-|           |-- sources.jsonl       # D-01 persistent source identities; not created by registration
+|           |-- sources.jsonl       # D-01 identity + D-02 version/path ledger; not created by registration
 |           |-- extracted/
 |           |-- indexes/
 |           `-- runs/
@@ -91,7 +91,7 @@ After inventory, D-01 assigns one Core-generated ID to every current in-scope re
 python tools/project.py source sync <project_id> --json
 ```
 
-The command writes only `.llmwiki/projects/<project_id>/sources.jsonl`, preserves prior assignments, serializes concurrent writers, and leaves the source project read-only. See [`source-identity.md`](source-identity.md).
+The command writes only `.llmwiki/projects/<project_id>/sources.jsonl`, preserves prior assignments, records Manifest hash transitions and path history, serializes concurrent writers, and leaves the source project read-only. See [`source-identity.md`](source-identity.md) and [`source-versions.md`](source-versions.md).
 
 ## `project.yaml`
 
