@@ -149,7 +149,7 @@ def _schema_object(
             f"{label} must contain exactly the Schema v1 fields"
         )
     version = value.get("schema_version")
-    if version != CHUNKING_SCHEMA_VERSION:
+    if not _is_integer(version) or version != CHUNKING_SCHEMA_VERSION:
         if _is_integer(version) and version > CHUNKING_SCHEMA_VERSION:
             raise ChunkingSchemaError(
                 f"{label} schema_version {version} is newer than supported "
@@ -376,6 +376,10 @@ class Chunk:
 
 
 def _locator_from_dict(value: object) -> Locator:
+    if isinstance(value, dict) and not _is_integer(value.get("schema_version")):
+        raise ChunkingSchemaError(
+            "invalid nested locator: schema_version must be an integer"
+        )
     try:
         return locator_from_dict(value)
     except ExtractionSchemaError as exc:

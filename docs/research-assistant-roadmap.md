@@ -38,7 +38,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | C-02 文本族提取器 | 已完成 | `5093f80` | `checkpoint/c-02-text-extractors` |
 | C-03 Notebook extractor | 已完成 | `946d05a`, `daf1330` | `checkpoint/c-03-notebook-extractor`, `checkpoint/c-03-notebook-payload-bounds` |
 | C-04 PDF page extractor | 已完成 | `66a7ba7` | `checkpoint/c-04-pdf-extractor` |
-| C-08 定位保真分块 | 本次落库 | 本次提交 | `checkpoint/c-08-locator-chunking` |
+| C-08 定位保真分块 | 已完成 | `1eb64a2` | `checkpoint/c-08-locator-chunking` |
 
 ## 3. 后续最小改动计划
 

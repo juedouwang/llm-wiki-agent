@@ -20,7 +20,8 @@ Every persisted chunk and chunked-document record carries
 | Chunked document | `llmwiki-chunked-document` |
 | Boundary snapshot | `llmwiki-chunk-boundary-snapshot` |
 
-The JSON reader rejects missing or future versions, missing or extra fields,
+The JSON reader requires integer schema versions and rejects missing, boolean, or
+future versions, missing or extra fields,
 wrong kinds, duplicate keys, non-finite numbers, malformed nested C-01
 locators, inconsistent hashes, and non-contiguous ordering. Stable serializers
 use UTF-8, sorted keys, and a final newline.
@@ -39,6 +40,8 @@ always produces the same boundaries.
   not claim a smaller coordinate unless an extractor can prove one; therefore
   an oversized atomic block is rejected.
 - Empty page, Notebook-cell, and table blocks remain one empty, located chunk.
+- An empty line-oriented block is rejected because a positive line locator cannot
+  truthfully identify zero source lines; it is never silently omitted.
 - A single source line larger than the byte limit is rejected instead of being
   cut at an arbitrary character offset.
 - A line-oriented block is rejected when its text line count differs from its

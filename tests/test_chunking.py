@@ -101,6 +101,30 @@ class ChunkingTests(unittest.TestCase):
         self.assertEqual("".join(chunk.text for chunk in result.chunks), source.blocks[0].text)
         validate_chunk_coverage(source, result)
 
+    def test_mixed_newlines_are_preserved_at_exact_line_boundaries(self) -> None:
+        source = document_with(
+            Block(
+                block_id="mixed-newlines",
+                block_type="text",
+                text="a\r\nb\rc\n",
+                locator=LineRangeLocator(7, 9),
+            )
+        )
+
+        result = chunk_document(source, limits=ChunkingLimits(3))
+
+        self.assertEqual([chunk.text for chunk in result.chunks], ["a\r\n", "b\r", "c\n"])
+        self.assertEqual(
+            [chunk.locator for chunk in result.chunks],
+            [
+                LineRangeLocator(7, 7),
+                LineRangeLocator(8, 8),
+                LineRangeLocator(9, 9),
+            ],
+        )
+        self.assertEqual("".join(chunk.text for chunk in result.chunks), source.blocks[0].text)
+        validate_chunk_coverage(source, result)
+
     def test_section_and_symbol_chunks_retain_context_and_truncation(self) -> None:
         source = document_with(
             Block(
@@ -239,6 +263,19 @@ class ChunkingTests(unittest.TestCase):
         with self.assertRaisesRegex(ChunkingError, "unsupported locator"):
             chunk_document(unsupported)
 
+    def test_empty_line_block_is_rejected_without_silent_omission(self) -> None:
+        source = document_with(
+            Block(
+                block_id="empty-line",
+                block_type="text",
+                text="",
+                locator=LineRangeLocator(1, 1),
+            )
+        )
+
+        with self.assertRaisesRegex(ChunkingError, "line count"):
+            chunk_document(source)
+
     def test_empty_extracted_document_produces_a_valid_empty_chunk_set(self) -> None:
         source = document_with()
         result = chunk_document(source, limits=ChunkingLimits(7))
@@ -290,6 +327,31 @@ class ChunkingTests(unittest.TestCase):
             },
         }
         for name, payload in cases.items():
+            with self.subTest(name=name):
+                with self.assertRaises(ChunkingSchemaError):
+                    chunked_document_from_dict(payload)
+
+    def test_schema_versions_reject_booleans_at_every_record_level(self) -> None:
+        result = chunk_document(self.line_document(), limits=ChunkingLimits(4))
+        valid = result.as_dict()
+
+        boolean_document = copy.deepcopy(valid)
+        boolean_document["schema_version"] = True
+        boolean_chunk = copy.deepcopy(valid)
+        boolean_chunk["chunks"][0]["schema_version"] = True
+        boolean_locator = copy.deepcopy(valid)
+        boolean_locator["chunks"][0]["locator"]["schema_version"] = True
+        boolean_source_locator = copy.deepcopy(valid)
+        boolean_source_locator["chunks"][0]["source_block_locator"][
+            "schema_version"
+        ] = True
+
+        for name, payload in {
+            "document": boolean_document,
+            "chunk": boolean_chunk,
+            "locator": boolean_locator,
+            "source locator": boolean_source_locator,
+        }.items():
             with self.subTest(name=name):
                 with self.assertRaises(ChunkingSchemaError):
                     chunked_document_from_dict(payload)
