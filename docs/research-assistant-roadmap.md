@@ -34,7 +34,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | B-05 格式、语言与科研角色识别 | 已完成 | `7ed9196` | `checkpoint/b-05-file-classification` |
 | B-06 Manifest 文件状态双轴 | 已完成 | `9c6ba5d` | `checkpoint/b-06-manifest-file-state` |
 | B-08 覆盖率与失败报告 | 已完成 | `5c864a2` | `checkpoint/b-08-coverage-report` |
-| C-01 提取 Schema | 本次落库 | 本次提交 | `checkpoint/c-01-extraction-schema` |
+| C-01 提取 Schema | 已完成 | `e4b3fed` | `checkpoint/c-01-extraction-schema` |
+| C-02 文本族提取器 | 本次落库 | 本次提交 | `checkpoint/c-02-text-extractors` |
 
 ## 3. 后续最小改动计划
 
@@ -318,16 +319,16 @@ git tag checkpoint/b-01-project-register
 
 ## 6. 下一项可执行任务
 
-C-01 完成后的下一项是：
+C-02 完成后的下一项是：
 
-> **C-02：文本、源码、LaTeX、配置和结构化文本提取器**
+> **C-03：Notebook 提取器**
 
 它的最小范围严格限制为：
 
-- 只为 B-05 已识别的文本、源码、LaTeX、配置和结构化文本实现确定性提取；
-- 使用 C-01 Schema 输出带一基行号的 Block，保留检测编码和稳定截断原因；
-- 使用 fixture 覆盖多语言源码、UTF-8/常见编码、超长行和二进制误判；
-- 不修改源项目，不发送内容到外部服务；
-- 不提前实现 C-03 Notebook、C-04 PDF、C-08 chunking、D 阶段 `source_id`/Evidence/回源、Manifest 状态调度、MCP、Hook、Web 或 LLM 行为。
+- 只为 B-05 已识别的 Jupyter Notebook 实现本地确定性提取；
+- 使用 C-01 Schema 输出带 `NotebookCellLocator` 的 Block，保留 cell ID/index、类型、执行顺序和稳定输出摘要；
+- 使用 fixture 验证修改单个 cell 只影响对应块，大型或二进制输出被安全、可解释地截断；
+- 保留完整文件 hash、Notebook 格式元数据和明确失败理由，不修改源项目，不发送内容到外部服务；
+- 不提前实现 C-04 PDF、C-08 chunking、D 阶段 `source_id`/Evidence/回源、Manifest 状态调度、MCP、Hook、Web 或 LLM 行为。
 
-C-02 仍是 Research Core 的本地确定性提取能力，不是自适应阅读或知识综述。
+C-03 仍是 Research Core 的本地确定性提取能力，不执行 Notebook、不加载外部资源，也不生成科研结论。
