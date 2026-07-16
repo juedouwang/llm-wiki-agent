@@ -93,6 +93,24 @@ The minimal MCP stdio adapter is `python -m tools.research_mcp --workspace-root 
 
 Existing top-level `wiki/` workflows and the current `raw-md` output layout remain compatible during migration. See `docs/project-storage-layout.md`.
 
+## Codex Research Adapter (J-05)
+
+The reference Codex package is `plugins/llmwiki-research/`. Installed copies
+locate this checkout through `LLMWIKI_CORE_ROOT` and write project state under
+`LLMWIKI_WORKSPACE_ROOT` (defaulting to the validated Core root). Use the
+host-safe MCP operations for project context, Host Context Pack, coverage,
+policy-authorized source-open, and explicit `llmwiki_reconcile`.
+
+The optional asynchronous `PostToolUse` Hook is an untrusted H-04 hint producer
+only. It requires an existing `LLMWIKI_PROJECT_ID`, must normalize paths beneath
+the registered source root, and must never register, scan, extract, reconcile,
+acknowledge checkpoints, or update curated Markdown. Always keep explicit
+reconciliation available when Hooks are disabled, unavailable, malformed, or
+untrusted. `llmwiki_query` and `llmwiki_plan` currently return
+`capability-unavailable`; do not claim Verified Query or planning from J-05.
+
+See `docs/codex-reference-adapter.md`.
+
 ---
 
 ## Page Format

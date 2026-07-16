@@ -79,8 +79,10 @@ A generic MCP host configuration uses the same command and arguments:
 }
 ```
 
-Host-specific packaging remains a later adapter task. The server has no Codex-
-or Claude-specific import.
+The J-05 Codex reference package now launches this server without adding
+Codex-specific imports to the host-neutral Core. Claude Code packaging remains a
+later J-06 adapter task. See
+[`codex-reference-adapter.md`](codex-reference-adapter.md).
 
 ## Tool catalog
 

@@ -1,0 +1,37 @@
+{
+  "name": "llmwiki-research",
+  "version": "0.1.0",
+  "description": "Codex adapter for deterministic LLM Wiki Research Core operations.",
+  "author": {
+    "name": "LLM Wiki Agent contributors",
+    "url": "https://github.com/juedouwang/llm-wiki-agent"
+  },
+  "homepage": "https://github.com/juedouwang/llm-wiki-agent",
+  "repository": "https://github.com/juedouwang/llm-wiki-agent",
+  "license": "MIT",
+  "keywords": [
+    "research",
+    "knowledge",
+    "mcp",
+    "codex"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "LLM Wiki Research",
+    "shortDescription": "Use deterministic Research Core operations in Codex.",
+    "longDescription": "Connects Codex to the local Research Core through MCP, portable CLI launchers, and optional host-event hints.",
+    "developerName": "LLM Wiki Agent contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "MCP",
+      "Local research",
+      "Hooks"
+    ],
+    "defaultPrompt": [
+      "Show the registered research project context.",
+      "Reconcile this research project explicitly.",
+      "Open a policy-authorized research source."
+    ]
+  }
+}

@@ -343,7 +343,9 @@ Validation must cover at least:
 - absence of selective extraction, knowledge refresh, LLM, network, and Web
   behavior.
 
-After this validated H-07 boundary, the next executable roadmap task is
-**J-05: the Codex reference adapter package**. J-05 may wire Plugin, Skill, MCP,
-and optional Hook signals to this Core operation, but Hooks must remain an
-optimization rather than a correctness dependency.
+J-05 now wires this validated H-07 boundary into the Codex reference package at
+`plugins/llmwiki-research/`. Its Plugin, Skill, MCP configuration, and optional
+Hook preserve the same invariant: Hook signals are untrusted hints, while
+explicit `llmwiki_reconcile` remains the correctness path. See
+[`codex-reference-adapter.md`](codex-reference-adapter.md). B-07 is the next
+executable roadmap task.

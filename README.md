@@ -155,6 +155,7 @@ The `research-assistant` branch is evolving this repository into a local-first, 
 - [Deterministic one-action project understanding](docs/project-understand.md)
 - [Conservative H-07 project reconciliation](docs/project-reconciliation.md)
 - [Minimal MCP stdio server](docs/research-mcp-server.md)
+- [Codex reference adapter package](docs/codex-reference-adapter.md)
 - [B-02 explainable scan-policy contract](docs/scan-policy.md)
 
 - [B-03 project inventory and accountable directory contract](docs/project-inventory.md)
@@ -174,6 +175,14 @@ This currently performs only `register -> inventory -> classify`, persists a
 resumable run report, and leaves later stages pending. It does **not** yet
 produce the 15-artifact package or local Web dashboard and has no `--open`
 option.
+
+The J-05 Codex reference package lives at `plugins/llmwiki-research/`. It
+contains a validated Plugin manifest, Skill, MCP configuration, portable Core
+launchers, and one optional fail-open Hook. Configure `LLMWIKI_CORE_ROOT` and
+`LLMWIKI_WORKSPACE_ROOT` for an installed copy, use the MCP tools for current
+Core operations, and finish relevant work with explicit `llmwiki_reconcile`.
+Hooks submit untrusted path hints only; `llmwiki_query` and `llmwiki_plan` remain
+explicitly unavailable until their later roadmap slices.
 
 Registered projects also accept host-neutral file-change signals through the
 append-only H-04 event ledger. `event submit` records an idempotent event under

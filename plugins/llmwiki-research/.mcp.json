@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "llmwiki-research-core": {
+      "command": "python",
+      "args": [
+        "-B",
+        "scripts/launch_mcp.py"
+      ],
+      "cwd": "."
+    }
+  }
+}

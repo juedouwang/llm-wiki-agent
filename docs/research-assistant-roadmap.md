@@ -53,6 +53,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | E-08 deterministic one-action prefix (R2 slice) | complete | `b2e04ca` | `checkpoint/e-08-deterministic-understand` |
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
+| J-05 Codex reference adapter package | complete after validation on 2026-07-16 | implementation commit pending | `checkpoint/j-05-codex-plugin` |
 
 ## 3. 后续最小改动计划
 
@@ -237,7 +238,7 @@ G-01 → G-07 → G-08
 
 这是架构防偏门槛：如果这一阶段仍需要两个聊天窗口手工交接，应暂停后续开发修正设计。
 
-As of 2026-07-16, the deterministic R2 Core path through H-07 has been validated. J-05 remains required to package that boundary for Codex, so the broader R2 milestone is not yet complete. H-07 activates explicit reconciliation without requiring Hooks, but does not add Hook wiring, H-05 selective extraction, knowledge refresh, query, or planning.
+As of 2026-07-16, R2 is complete. J-05 packages the validated Core boundary as a Codex Plugin with a Skill, MCP configuration, portable launchers, and one optional fail-open Hook. Codex can identify registered projects, call the current host-safe Core operations, and explicitly reconcile after work. Hook signals remain optional untrusted H-04 hints, so disabled, missing, malformed, unavailable, or untrusted Hooks do not weaken the H-07 full-scan correctness path. R2 still does not claim adaptive extraction, H-05 selective refresh, curated-knowledge refresh, Verified Query, planning, or Web behavior.
 
 ### R3：一键完整项目理解与本地网站
 
@@ -396,14 +397,22 @@ only query and plan remain explicit `capability-unavailable` tools in the
 seven-tool catalog. H-07 stops at `classify` and does not claim H-05 selective
 extraction, selective knowledge refresh, or any later knowledge/rendering stage.
 
+J-05 is complete after validation on 2026-07-16 and is designated by
+`checkpoint/j-05-codex-plugin`. The package at `plugins/llmwiki-research/`
+contains the validated manifest, Skill, MCP configuration, portable Core/CLI
+launchers, and optional fail-open Hook. Clean-profile Codex CLI installation,
+real seven-tool MCP startup, current Core calls, explicit unavailable query/plan
+results, registered-root Hook normalization, and no-Hook reconciliation fallback
+are covered by `tests/test_codex_plugin.py`. See
+[`codex-reference-adapter.md`](codex-reference-adapter.md).
+
 The next executable roadmap task is:
 
-> **J-05: Codex reference adapter package**
+> **B-07: deterministic adaptive reading priority and reference-promotion queue**
 
-J-05 should package the Plugin manifest, Skills, MCP configuration, optional
-Hook wiring, and minimal repository guidance around the validated Core boundary.
-Its acceptance must prove that Codex can identify a project, call Core, and
-reconcile after work, while explicit reconciliation remains available when
-Hooks are untrusted, disabled, or unavailable. It must not advertise query,
-planning, extraction, knowledge refresh, or Web capabilities that remain
-incomplete.
+B-07 must use current Manifest/classification state to rank bounded deep-read
+candidates deterministically. References from README/configuration material may
+promote otherwise `metadata_only` or `sampled` files, while sensitive files,
+large datasets, model weights, and policy-limited content remain bounded. It
+must not perform extraction, Evidence generation, H-05 refresh, external sends,
+or curated-knowledge updates; those remain later tasks.

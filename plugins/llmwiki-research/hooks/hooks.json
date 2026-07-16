@@ -1,0 +1,17 @@
+{
+  "description": "Optionally record successful file-changing tool calls as untrusted H-04 host-event hints.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|write_file|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -B scripts/host_event.py",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
