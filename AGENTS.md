@@ -79,6 +79,8 @@ python tools/project.py inventory <project_id> --json
 
 B-03 established the accountable directory ledger: every in-scope regular file is recorded regardless of format, excluded files and pruned-directory boundaries remain reconcilable, and symbolic links use B-02 root/cycle/duplicate checks. B-04 adds scan generations and conservative local SHA-256 reuse. B-05 adds deterministic format, language, and research-role classification. B-06 writes the current `project-inventory-v4` artifact and gives every ordinary file a versioned `processing_status`, `read_depth`, stable reason code, and non-empty reason; inventory remains `discovered` rather than pretending extraction succeeded. A bounded classification prefix may be read only when B-02 grants local raw-content access. Sensitive and oversized files remain policy-limited after the B-04 hash; source samples and raw content must not be persisted, sent externally, passed to an LLM, or written back to the source project. Do not add B-08 coverage reporting, extraction, Evidence, MCP, Hook, or Web behavior to this inventory step. See `docs/project-inventory.md`, `docs/file-fingerprints.md`, `docs/file-classification.md`, and `docs/manifest-file-state.md`.
 
+For project registration, scan/inventory, coverage, and source-open integrations, use the host-independent `tools.research_core.ResearchCoreService` facade. CLI and future MCP/host adapters must delegate to this boundary rather than duplicating filesystem workflows. See `docs/research-core-service.md`.
+
 Existing top-level `wiki/` workflows and the current `raw-md` output layout remain compatible during migration. See `docs/project-storage-layout.md`.
 
 ---

@@ -46,6 +46,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | D-05 source relocation recovery | complete | `a49c6a8` | `checkpoint/d-05-source-relocation` |
 | D-06 source and Evidence health | complete | `9b38353` | `checkpoint/d-06-source-health` |
 | J-01 R1 basic-chain acceptance | complete (R1 slice) | `73070f1` | `checkpoint/j-01-r1-e2e` |
+| G-01 Research Core service facade | complete | current commit | `checkpoint/g-01-core-service` |
 
 ## 3. 后续最小改动计划
 
@@ -339,13 +340,17 @@ R1 trusted inventory and source-location acceptance is complete. Its final
 commit, test, limitation, and rollback record is in
 [`r1-acceptance-report.md`](r1-acceptance-report.md).
 
+G-01 is complete at `checkpoint/g-01-core-service`; its service contract,
+safety boundary, CLI equivalence, and focused validation are documented in
+[`research-core-service.md`](research-core-service.md).
+
 The next executable roadmap task is:
 
-> **G-01: host-independent Research Core service facade**
+> **G-07: minimal MCP server over Research Core**
 
-Its minimum R2 scope is to expose the already deterministic register, inventory
-(scan), coverage, and source-open capabilities behind one stable Python service
-boundary, then prove that direct service use and the corresponding CLI entry
-points return equivalent structured results without Codex-, Claude-, MCP-, Hook-,
-or Web-specific dependencies. G-07/G-08 and other R2 behavior remain separate
-atomic tasks.
+Its R2 scope is to expose the Core project-context, coverage, source-open, query,
+reconcile, and plan tool contracts through one host-neutral MCP adapter with
+stable error mapping and CLI/service parity. The adapter must not duplicate
+filesystem workflows, leak sensitive raw content, or claim later roadmap
+capabilities are complete. G-08 and the remaining R2 tasks stay separate atomic
+checkpoints.
