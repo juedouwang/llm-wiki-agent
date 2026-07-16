@@ -38,7 +38,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | C-02 文本族提取器 | 已完成 | `5093f80` | `checkpoint/c-02-text-extractors` |
 | C-03 Notebook extractor | 已完成 | `946d05a`, `daf1330` | `checkpoint/c-03-notebook-extractor`, `checkpoint/c-03-notebook-payload-bounds` |
 | C-04 PDF page extractor | 已完成 | `66a7ba7` | `checkpoint/c-04-pdf-extractor` |
-| C-08 定位保真分块 | 已完成 | `1eb64a2` | `checkpoint/c-08-locator-chunking` |
+| C-08 定位保真分块 | 已完成 | `1eb64a2`, `6f01136` | `checkpoint/c-08-locator-chunking`, `checkpoint/c-08-locator-chunking-hardening` |
+| D-01 persistent source identity | complete | current commit | `checkpoint/d-01-source-identity` |
 
 ## 3. 后续最小改动计划
 
@@ -322,15 +323,15 @@ git tag checkpoint/b-01-project-register
 
 ## 6. 下一项可执行任务
 
-C-08 已完成确定性定位保真分块。下一项任务是：
+D-01 persistent source identity is complete. The next task is:
 
-> **D-01：持久来源身份**
+> **D-02: source versions and path history**
 
-最小范围严格限定为：
+The minimum scope is strictly limited to:
 
-- 对 B-04/B-06 Manifest 中首次发现的范围内常规文件，由 Core 分配并持久化稳定 `source_id`；
-- 在项目机器状态中使用带 `schema_version` 的来源注册表，保证重复同步幂等、新增文件不改变旧 ID、并发写入不产生重复来源；
-- 保持源科研项目只读，并对损坏、未来版本和冲突注册表失败关闭；
-- 不实现 D-02 source version/路径别名历史，不实现 Evidence、原文重开、移动恢复、来源健康、提取调度、MCP、Hook、Web 或 LLM 行为。
+- associate the current Manifest content hash with the stable `source_id`, recording auditable source versions, the current path, and known path history;
+- preserve the current version when content is unchanged, append a version under the same `source_id` when content changes, and expose deterministic API/CLI history reads;
+- strictly validate and atomically persist the evolved registry artifact, retain D-01 concurrency/read-only/fail-closed guarantees, and explicitly upgrade valid `source-registry-v1` state;
+- do not implement D-03 Evidence, source excerpts, D-04 locate/open, D-05 automatic relocation, D-06 health, extraction scheduling, MCP, Hooks, Web, or LLM behavior.
 
-D-01 只建立 Core 拥有的持久来源身份；版本演化和回源语义由后续 D-02～D-06 分别实现。
+D-02 establishes only the audit ledger for source content and known-path evolution. Precise Evidence, reopening, automatic relocation, and health belong to D-03 through D-06.

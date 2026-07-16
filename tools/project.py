@@ -16,6 +16,7 @@ if __package__:
     from .project_layout import LayoutError
     from .project_registry import register_project
     from .scan_policy import ScanPolicyConfig, ScanPolicyError
+    from .source_registry import sync_source_registry
 else:
     from coverage_report import generate_coverage_report  # type: ignore[no-redef]
     from project_inventory import inventory_project  # type: ignore[no-redef]
@@ -25,6 +26,7 @@ else:
         ScanPolicyConfig,
         ScanPolicyError,
     )
+    from source_registry import sync_source_registry  # type: ignore[no-redef]
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -128,6 +130,30 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Research Core workspace (default: this repository)",
     )
     coverage.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+
+    source = subparsers.add_parser(
+        "source",
+        help="Manage persistent project source identities and evidence.",
+    )
+    source_subparsers = source.add_subparsers(
+        dest="source_command",
+        required=True,
+    )
+    source_sync = source_subparsers.add_parser(
+        "sync",
+        help="Assign persistent IDs to current Manifest files.",
+    )
+    source_sync.add_argument("project_id", help="B-01 registered project ID")
+    source_sync.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    source_sync.add_argument(
         "--json",
         action="store_true",
         help="Print a machine-readable JSON result",
@@ -257,6 +283,40 @@ def _run_coverage(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_source_sync(args: argparse.Namespace) -> int:
+    try:
+        result = sync_source_registry(
+            workspace_root=args.workspace_root,
+            project_id=args.project_id,
+        )
+    except (LayoutError, OSError) as exc:
+        if args.json:
+            print(
+                json.dumps(
+                    {"ok": False, "error": str(exc)},
+                    ensure_ascii=False,
+                ),
+                file=sys.stderr,
+            )
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        payload = {"ok": True, **result.as_dict()}
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+
+    print(f"Source identities synchronized: {result.project_id}")
+    print(f"Manifest:            {result.manifest_file}")
+    print(f"Source registry:     {result.sources_file}")
+    print(f"Manifest generation: {result.scan_generation}")
+    print(f"Manifest files:      {result.manifest_file_count}")
+    print(f"New source IDs:      {result.assigned_count}")
+    print(f"Registry sources:    {result.source_count}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -266,6 +326,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_inventory(args)
     if args.command == "coverage":
         return _run_coverage(args)
+    if args.command == "source" and args.source_command == "sync":
+        return _run_source_sync(args)
     parser.error(f"unsupported command: {args.command}")
     return 2
 

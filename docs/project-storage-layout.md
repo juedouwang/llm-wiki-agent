@@ -1,6 +1,6 @@
 # Project Registration and Storage Layout (Schema v1)
 
-A-03 established the storage boundary for project-scoped research data. B-01 adds deterministic project registration, B-03 writes the accountable directory ledger, B-04 adds incremental regular-file fingerprints, and B-05 adds deterministic file classification to that Manifest. Registration still assigns identity and initializes empty storage only; it does not scan project files.
+A-03 established the storage boundary for project-scoped research data. B-01 adds deterministic project registration, B-03 writes the accountable directory ledger, B-04 adds incremental regular-file fingerprints, B-05 adds deterministic file classification, B-06 adds two-axis file state, and D-01 assigns persistent source identities. Registration still assigns identity and initializes empty storage only; it does not scan project files.
 
 ## Storage contract
 
@@ -14,7 +14,7 @@ llm-wiki-agent/
 |       `-- <project_id>/
 |           |-- project.yaml
 |           |-- manifest.jsonl      # B-03 ledger + B-04 fingerprints + B-05 classification
-|           |-- sources.jsonl       # later task; not created by registration
+|           |-- sources.jsonl       # D-01 persistent source identities; not created by registration
 |           |-- extracted/
 |           |-- indexes/
 |           `-- runs/
@@ -82,6 +82,16 @@ python tools/project.py inventory <project_id> --json
 ```
 
 The command writes only `.llmwiki/projects/<project_id>/manifest.jsonl`. Every in-scope regular file is recorded without a format whitelist; excluded files and each pruned-directory boundary remain accountable. B-04 adds scan generation, SHA-256, size, mtime, and conservative fingerprint reuse. B-05 classifies every ordinary file by format, language, research role, and auditable reason. B-06 writes the current `project-inventory-v4` artifact and adds versioned `processing_status`, `read_depth`, reason code, and reason fields while preserving source-project zero writes. See [`project-inventory.md`](project-inventory.md), [`file-fingerprints.md`](file-fingerprints.md), [`file-classification.md`](file-classification.md), and [`manifest-file-state.md`](manifest-file-state.md).
+
+## Synchronize persistent source identities
+
+After inventory, D-01 assigns one Core-generated ID to every current in-scope regular file:
+
+```powershell
+python tools/project.py source sync <project_id> --json
+```
+
+The command writes only `.llmwiki/projects/<project_id>/sources.jsonl`, preserves prior assignments, serializes concurrent writers, and leaves the source project read-only. See [`source-identity.md`](source-identity.md).
 
 ## `project.yaml`
 
@@ -194,4 +204,4 @@ B-05 upgrades the artifact to `project-inventory-v3`. It reads a bounded local p
 Still isolated in later tasks:
 
 - independent coverage/failure reports (B-08);
-- content extraction, source IDs, Evidence locators, semantic knowledge, retrieval, MCP, web UI, planning, and legacy-data migration.
+- content extraction, source versions and aliases, Evidence locators, semantic knowledge, retrieval, MCP, web UI, planning, and legacy-data migration.
