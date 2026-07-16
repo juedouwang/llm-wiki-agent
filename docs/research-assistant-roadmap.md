@@ -43,7 +43,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | D-02 source versions and path history | complete | `1230ac2` | `checkpoint/d-02-source-versions` |
 | D-03 precise Evidence schema | complete | `00f036c`, `8e13c6f` | `checkpoint/d-03-evidence-schema`, `checkpoint/d-03-evidence-version-hardening` |
 | D-04 source locate/open | complete | `917475c` | `checkpoint/d-04-source-open` |
-| D-05 source relocation recovery | complete | current commit | `checkpoint/d-05-source-relocation` |
+| D-05 source relocation recovery | complete | `a49c6a8` | `checkpoint/d-05-source-relocation` |
+| D-06 source and Evidence health | complete | current task commit | `checkpoint/d-06-source-health` |
 
 ## 3. 后续最小改动计划
 
@@ -327,27 +328,28 @@ git tag checkpoint/b-01-project-register
 
 ## 6. Next executable task
 
-D-05 source relocation recovery is complete. The next task is:
+D-06 source and Evidence health is complete. The next task is:
 
-> **D-06: source and Evidence health**
+> **J-01 (R1 basic chain): repeatable end-to-end acceptance**
 
-The minimum scope is strictly limited to:
+The minimum R1 slice is strictly limited to one deterministic generated fixture
+that runs from a clean temporary directory and proves:
 
-- deterministically classify registered source and persisted Evidence health as
-  `valid`, `stale`, `missing`, or `ambiguous`;
-- validate current source availability and exact content hash, then validate an
-  Evidence record's source version, locator reopening, and excerpt hash;
-- distinguish deleted/missing sources, modified source versions, truncated or
-  invalid locators/excerpts, and D-05 multiple-candidate ambiguity without
-  silently rebinding an ambiguous source;
-- expose auditable schema-versioned Core results and a project CLI aggregation
-  whose totals reconcile with the underlying source/Evidence registries;
-- keep all checks local-only and source-read-only;
-- do not implement query/synthesis, Claim stale propagation, extraction
-  scheduling, project-understanding orchestration, MCP, Hooks, Web, or LLM
-  behavior.
+- the independent in-scope file set reconciles exactly with the accountable
+  inventory ledger, including every file's processing status, read depth, and
+  reason;
+- code, Notebook, and PDF extraction preserve exact C-01 locators through the
+  current deterministic extraction and chunking layers;
+- source synchronization creates stable source IDs and D-03 Evidence that D-04
+  can reopen from current original bytes;
+- moving one source and refreshing only the deterministic inventory allows D-05
+  and D-06 to recover the same source identity and revalidate its Evidence;
+- source-project file hashes and metadata remain unchanged by Core operations
+  other than the fixture's explicit test-controlled rename; and
+- the acceptance is callable repeatedly by the full test suite without network,
+  LLM, MCP, Hook, Web, query/synthesis, planning, or rendering behavior.
 
-D-06 may read D-05 recovery evidence and may allow one unique safe relocation
-to complete before validation, but health classification must not weaken D-03
-Evidence identity or locator/excerpt verification. J-01 basic-chain end-to-end
-acceptance remains the next task after D-06.
+This J-01 slice is an R1 regression harness, not implementation of later
+understand/query/reconcile/plan/render product stages. R1 acceptance is complete
+only after this chain, the full tests, Ruff baseline, wiki health, clean
+`research-assistant` branch, atomic commits, and checkpoint tags all pass.

@@ -25,6 +25,7 @@ if __package__:
         open_evidence,
         open_source,
     )
+    from .source_health import evaluate_source_health
     from .source_recovery import recover_source
     from .source_registry import get_source_history, sync_source_registry
 else:
@@ -45,6 +46,7 @@ else:
         open_evidence,
         open_source,
     )
+    from source_health import evaluate_source_health  # type: ignore[no-redef]
     from source_recovery import recover_source  # type: ignore[no-redef]
     from source_registry import (  # type: ignore[no-redef]
         get_source_history,
@@ -193,6 +195,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Research Core workspace (default: this repository)",
     )
     source_history.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+    source_health = source_subparsers.add_parser(
+        "health",
+        help="Classify all registered sources and persisted Evidence.",
+    )
+    source_health.add_argument("project_id", help="B-01 registered project ID")
+    source_health.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    source_health.add_argument(
         "--json",
         action="store_true",
         help="Print a machine-readable JSON result",
@@ -434,6 +451,56 @@ def _print_command_error(exc: BaseException, *, as_json: bool) -> int:
     return 2
 
 
+def _run_source_health(args: argparse.Namespace) -> int:
+    try:
+        result = evaluate_source_health(
+            workspace_root=args.workspace_root,
+            project_id=args.project_id,
+        )
+    except (LayoutError, OSError) as exc:
+        return _print_command_error(exc, as_json=args.json)
+
+    payload = result.as_dict()
+    if args.json:
+        print(json.dumps({"ok": True, **payload}, indent=2, ensure_ascii=False))
+        return 0
+
+    source_counts = result.source_status_counts
+    evidence_counts = result.evidence_status_counts
+    print(f"Source health:       {result.project_id}")
+    print(f"Overall status:      {result.overall_status}")
+    print(f"Source registry:     {result.sources_file}")
+    print(f"Evidence registry:   {result.evidence_file}")
+    print(
+        "Sources:             "
+        f"{result.source_registry_count} "
+        f"(valid={source_counts['valid']}, stale={source_counts['stale']}, "
+        f"missing={source_counts['missing']}, "
+        f"ambiguous={source_counts['ambiguous']})"
+    )
+    print(
+        "Evidence:            "
+        f"{result.evidence_registry_count} "
+        f"(valid={evidence_counts['valid']}, stale={evidence_counts['stale']}, "
+        f"missing={evidence_counts['missing']}, "
+        f"ambiguous={evidence_counts['ambiguous']})"
+    )
+    print(f"Relocations written: {result.recovery_write_count}")
+    issues = [
+        *(record for record in result.sources if record.status != "valid"),
+        *(record for record in result.evidence if record.status != "valid"),
+    ]
+    if issues:
+        print("Non-valid records:")
+        for record in issues:
+            record_id = getattr(record, "evidence_id", None) or record.source_id
+            print(
+                f"  - {record_id}: {record.status} "
+                f"({record.reason_code})"
+            )
+    return 0
+
+
 def _run_source_recover(args: argparse.Namespace) -> int:
     try:
         result = recover_source(
@@ -591,6 +658,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_source_sync(args)
     if args.command == "source" and args.source_command == "history":
         return _run_source_history(args)
+    if args.command == "source" and args.source_command == "health":
+        return _run_source_health(args)
     if args.command == "source" and args.source_command == "recover":
         return _run_source_recover(args)
     if args.command == "source" and args.source_command == "locate":

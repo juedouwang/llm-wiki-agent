@@ -148,7 +148,9 @@ are not opened by D-04.
   place paths, hashes, or run state in curated `wiki/projects/` Markdown.
 - D-05 recovery is limited to path aliases, the current Manifest hash ledger,
   and bounded local Git rename history. It never binds an ambiguous candidate.
-  Aggregate health reports, query/synthesis, claim propagation, and extraction
+  D-06 now provides the separate project-wide
+  `valid/stale/missing/ambiguous` pass documented in
+  `docs/source-health.md`; query/synthesis, Claim propagation, and extraction
   scheduling remain out of scope.
 - Exact reopening is bounded by the existing deterministic C-02/C-03/C-04
   extractor safety limits. If a requested unit would be truncated, D-04 fails
