@@ -5,7 +5,7 @@
 - 命令：`python tools/project.py inventory <project_id> --json`
 - 测试：`tests/test_project_inventory.py`
 - B-03 artifact：`llmwiki-project-manifest` / `project-inventory-v1`
-- 当前 artifact：B-05 `project-inventory-v3`（见 [`file-fingerprints.md`](file-fingerprints.md) 与 [`file-classification.md`](file-classification.md)）
+- 当前 artifact：B-06 `project-inventory-v4`（见 [`file-fingerprints.md`](file-fingerprints.md)、[`file-classification.md`](file-classification.md) 与 [`manifest-file-state.md`](manifest-file-state.md)）
 
 ## 1. 本任务解决什么
 
@@ -138,7 +138,7 @@ B-03 的 JSONL 第一行是 `summary`，后续每行是一条目录盘点记录�
 }
 ```
 
-当前 writer 不再生成本节示例中的 v1，而是生成 `project-inventory-v3`。v2 历史 artifact 保留所有 B-03 行类型和边界字段，只为普通 `file` 行增加 SHA-256/size/mtime/cache 元数据，并在 summary 中增加代次与指纹统计；v3 再加入 B-05 分类对象和分类汇总。有效 v1/v2 可由当前读取器兼容升级；未知 artifact 版本或 future Schema fail closed。
+当前 writer 不再生成本节示例中的 v1，而是生成 `project-inventory-v4`。v2 历史 artifact 保留所有 B-03 行类型和边界字段，只为普通 `file` 行增加 SHA-256/size/mtime/cache 元数据，并在 summary 中增加代次与指纹统计；v3 加入 B-05 分类对象和分类汇总；v4 再加入 B-06 版本化两轴文件状态与状态汇总。有效 v1/v2/v3 可由当前读取器兼容升级；未知 artifact 版本或 future Schema fail closed。
 
 ## 6. 原子写入与失败语义
 
@@ -158,5 +158,5 @@ B-03 自身不实现：
 - 文件内容读取、文本或二进制提取；
 - 内容 hash、SHA-256、文件大小、mtime 或 scan generation；这些已由 B-04 在 v2 中实现；
 - 格式、语言和科研角色分类；该能力已由 B-05 在 v3 中实现；
-- `processing_status`、`read_depth` 或最终原因枚举（B-06）；
+- B-03 本身未实现两轴状态；当前 B-06 writer 已增加版本化 `file_state`，见 [`manifest-file-state.md`](manifest-file-state.md)；
 - LLM 调用、MCP、Hook、Web、知识页生成或旧数据迁移。

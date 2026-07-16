@@ -4,7 +4,7 @@
 - 实现：`tools/project_inventory.py`
 - 命令：`python tools/project.py inventory <project_id> --json`
 - 测试：`tests/test_project_inventory.py`
-- B-04 artifact：`llmwiki-project-manifest` Schema v1 / `project-inventory-v2`；当前 writer 为 B-05 `project-inventory-v3`
+- B-04 artifact：`llmwiki-project-manifest` Schema v1 / `project-inventory-v2`；当前 writer 为 B-06 `project-inventory-v4`
 
 ## 1. 本任务解决什么
 
@@ -36,7 +36,7 @@ JSON 结果在 B-03 计数之外增加：
 
 ## 3. Manifest artifact v2
 
-全局机器记录 Schema 仍为 v1；`manifest_version` 是独立的 artifact 版本。B-04 把写入版本从 `project-inventory-v1` 升级为 `project-inventory-v2`。当前 B-05 writer 生成 `project-inventory-v3`，但完整保留本节的指纹与代次语义，并在其上增加分类；详见 [`file-classification.md`](file-classification.md)。
+全局机器记录 Schema 仍为 v1；`manifest_version` 是独立的 artifact 版本。B-04 把写入版本从 `project-inventory-v1` 升级为 `project-inventory-v2`。当前 B-06 writer 生成 `project-inventory-v4`，但完整保留本节的指纹与代次语义；v3 增加分类，v4 增加两轴文件状态。详见 [`file-classification.md`](file-classification.md) 与 [`manifest-file-state.md`](manifest-file-state.md)。
 
 JSONL 第一行仍是 `summary`。它新增：
 
@@ -84,7 +84,7 @@ JSONL 第一行仍是 `summary`。它新增：
 
 1. 没有旧 Manifest 时，首次成功扫描写入 generation 1；
 2. 读取有效 B-03 `project-inventory-v1` 时，把它视为 generation 0，升级后的首次成功扫描写入 generation 1；
-3. 读取有效 B-04 `project-inventory-v2` 或 B-05 `project-inventory-v3` 时，下一次成功替换写入旧代次加一；
+3. 读取有效 B-04 `project-inventory-v2`、B-05 `project-inventory-v3` 或 B-06 `project-inventory-v4` 时，下一次成功替换写入旧代次加一；
 4. 扫描、指纹或写入失败不会替换旧 Manifest，也不会消费代次；
 5. `scan_generation` 只在 summary 中出现，避免仅因代次增长而改写每条文件记录。
 
@@ -149,7 +149,7 @@ B-02 的 `local_content_access` 继续约束后续“打开、提取和语义处
 B-04 不实现：
 
 - 格式、MIME、语言或科研角色分类；该能力已由 B-05 在 v3 中实现；
-- `processing_status`、`read_depth` 或最终原因枚举（B-06）；
+- B-04 本身未实现两轴文件状态；当前 B-06 writer 已在独立 `file_state` Schema 中实现，见 [`manifest-file-state.md`](manifest-file-state.md)；
 - 文件内容提取、Evidence locator、`source_id` 或知识页生成；
 - 新增/修改/删除等 reconciliation 事件分类（H-01）；
 - LLM、MCP、Hook、Web、本地 API 或宿主适配；

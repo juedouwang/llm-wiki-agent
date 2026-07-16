@@ -18,11 +18,19 @@ from tools.file_classification import (
     FILE_CLASSIFICATION_SCHEMA_VERSION,
     classification_from_dict,
 )
+from tools.file_state import (
+    FILE_STATE_KIND,
+    FILE_STATE_SCHEMA_VERSION,
+    FileState,
+    file_state_from_dict,
+)
 from tools.project_inventory import (
+    CLASSIFICATION_PROJECT_MANIFEST_VERSION,
     CLASSIFICATION_SUMMARY_KIND,
     CONTENT_HASH_ALGORITHM,
     FINGERPRINT_CACHE_STRATEGY,
     FINGERPRINT_PROJECT_MANIFEST_VERSION,
+    FILE_STATE_SUMMARY_KIND,
     LEGACY_PROJECT_MANIFEST_VERSION,
     PROJECT_MANIFEST_KIND,
     PROJECT_MANIFEST_SCHEMA_VERSION,
@@ -248,7 +256,7 @@ class ProjectInventoryTests(unittest.TestCase):
         paths = {row.get("path") for row in rows}
         self.assertFalse(any(path and path.endswith("hidden.dat") for path in paths))
 
-    def test_manifest_rows_are_versioned_and_include_auditable_classification(
+    def test_manifest_rows_include_classification_and_two_axis_file_state(
         self,
     ) -> None:
         (self.project / "artifact.ckpt").write_bytes(b"model")
@@ -259,8 +267,6 @@ class ProjectInventoryTests(unittest.TestCase):
         summary = rows[0]
         actual_counts = Counter(row["record_type"] for row in rows[1:])
         later_task_keys = {
-            "processing_status",
-            "read_depth",
             "content",
             "source_id",
             "evidence_id",
@@ -325,11 +331,28 @@ class ProjectInventoryTests(unittest.TestCase):
                 sum(classification_summary[field].values()),
                 summary["record_counts"]["file"],
             )
+        file_state_summary = summary["file_state_summary"]
+        self.assertEqual(
+            file_state_summary["schema_version"],
+            FILE_STATE_SCHEMA_VERSION,
+        )
+        self.assertEqual(file_state_summary["kind"], FILE_STATE_SUMMARY_KIND)
+        self.assertEqual(
+            file_state_summary["state_files"],
+            summary["record_counts"]["file"],
+        )
+        self.assertEqual(file_state_summary["reused_files"], 0)
+        for field in ("processing_statuses", "read_depths", "reasons"):
+            self.assertEqual(
+                sum(file_state_summary[field].values()),
+                summary["record_counts"]["file"],
+            )
 
         for row in rows[1:]:
             if row["record_type"] != "file":
                 self.assertNotIn("content_sha256", row)
                 self.assertNotIn("classification", row)
+                self.assertNotIn("file_state", row)
                 continue
             source = self.project / Path(row["path"])
             metadata = source.stat()
@@ -348,6 +371,10 @@ class ProjectInventoryTests(unittest.TestCase):
                 FILE_CLASSIFICATION_KIND,
             )
             self.assertTrue(classification.reasons["format"]["code"])
+            file_state = file_state_from_dict(row["file_state"])
+            self.assertEqual(row["file_state"]["kind"], FILE_STATE_KIND)
+            self.assertEqual(file_state.processing_status, "discovered")
+            self.assertTrue(file_state.reason)
 
     def test_inventory_hashes_locally_without_writing_source(self) -> None:
         (self.project / "opaque.bin").write_bytes(os.urandom(256))
@@ -373,6 +400,7 @@ class ProjectInventoryTests(unittest.TestCase):
                     "mtime_ns",
                     "fingerprint_cache",
                     "classification",
+                    "file_state",
                 )
             }
             for row in first_rows
@@ -405,6 +433,7 @@ class ProjectInventoryTests(unittest.TestCase):
                     "mtime_ns",
                     "fingerprint_cache",
                     "classification",
+                    "file_state",
                 )
             }
             for row in second_rows
@@ -426,6 +455,10 @@ class ProjectInventoryTests(unittest.TestCase):
             second.classification_summary["reused_files"],
             len(second_files),
         )
+        self.assertEqual(
+            second.file_state_summary["reused_files"],
+            len(second_files),
+        )
 
     def test_b04_manifest_reuses_fingerprints_and_adds_classification(
         self,
@@ -437,8 +470,10 @@ class ProjectInventoryTests(unittest.TestCase):
             row["manifest_version"] = FINGERPRINT_PROJECT_MANIFEST_VERSION
             if row["record_type"] == "summary":
                 row.pop("classification_summary")
+                row.pop("file_state_summary")
             elif row["record_type"] == "file":
                 row.pop("classification")
+                row.pop("file_state")
         current.manifest_file.write_text(
             "".join(
                 json.dumps(
@@ -469,6 +504,188 @@ class ProjectInventoryTests(unittest.TestCase):
         self.assertEqual(
             upgraded.classification_summary["classified_files"],
             upgraded.record_counts["file"],
+        )
+        self.assertEqual(upgraded.file_state_summary["reused_files"], 0)
+
+    def test_b05_manifest_reuses_fingerprints_and_classification_then_adds_state(
+        self,
+    ) -> None:
+        registration = self.register()
+        current = inventory_project(self.workspace, registration.project_id)
+        legacy_rows = self.manifest_rows(current.manifest_file)
+        for row in legacy_rows:
+            row["manifest_version"] = CLASSIFICATION_PROJECT_MANIFEST_VERSION
+            if row["record_type"] == "summary":
+                row.pop("file_state_summary")
+            elif row["record_type"] == "file":
+                row.pop("file_state")
+        current.manifest_file.write_text(
+            "".join(
+                json.dumps(
+                    row,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+                for row in legacy_rows
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        with (
+            patch(
+                "tools.project_inventory._hash_file_content",
+                side_effect=AssertionError("B-05 SHA-256 should be reusable"),
+            ),
+            patch(
+                "tools.project_inventory._read_classification_sample",
+                side_effect=AssertionError("B-05 classification should be reusable"),
+            ),
+        ):
+            upgraded = inventory_project(self.workspace, registration.project_id)
+
+        self.assertEqual(upgraded.scan_generation, 2)
+        self.assertEqual(
+            upgraded.fingerprint_summary["reused_files"],
+            upgraded.record_counts["file"],
+        )
+        self.assertEqual(
+            upgraded.classification_summary["reused_files"],
+            upgraded.record_counts["file"],
+        )
+        self.assertEqual(upgraded.file_state_summary["state_files"], upgraded.record_counts["file"])
+        self.assertEqual(upgraded.file_state_summary["reused_files"], 0)
+
+    def test_state_reuse_resets_on_content_or_policy_basis_change(self) -> None:
+        registration = self.register()
+        first = inventory_project(self.workspace, registration.project_id)
+        rows = self.manifest_rows(first.manifest_file)
+        target = next(row for row in rows if row.get("path") == "README.md")
+        previous_state = file_state_from_dict(target["file_state"])
+        processed_state = FileState(
+            processing_status="processed",
+            read_depth="normal_read",
+            reason_code="text-extracted",
+            reason="deterministic text extraction completed",
+        )
+        target["file_state"] = processed_state.as_dict()
+        state_summary = rows[0]["file_state_summary"]
+        for field, old_value, new_value in (
+            (
+                "processing_statuses",
+                previous_state.processing_status,
+                processed_state.processing_status,
+            ),
+            ("read_depths", previous_state.read_depth, processed_state.read_depth),
+            ("reasons", previous_state.reason_code, processed_state.reason_code),
+        ):
+            counts = state_summary[field]
+            counts[old_value] -= 1
+            if counts[old_value] == 0:
+                del counts[old_value]
+            counts[new_value] = counts.get(new_value, 0) + 1
+        first.manifest_file.write_text(
+            "".join(
+                json.dumps(
+                    row,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+                for row in rows
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        unchanged = inventory_project(self.workspace, registration.project_id)
+        unchanged_rows = self.manifest_rows(unchanged.manifest_file)
+        unchanged_target = next(
+            row for row in unchanged_rows if row.get("path") == "README.md"
+        )
+        self.assertEqual(
+            file_state_from_dict(unchanged_target["file_state"]),
+            processed_state,
+        )
+        self.assertEqual(
+            unchanged.file_state_summary["reused_files"],
+            unchanged.record_counts["file"],
+        )
+
+        (self.project / "README.md").write_text(
+            "# Inventory Study\n\nChanged.\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        changed = inventory_project(self.workspace, registration.project_id)
+        changed_rows = self.manifest_rows(changed.manifest_file)
+        changed_target = next(
+            row for row in changed_rows if row.get("path") == "README.md"
+        )
+        changed_state = file_state_from_dict(changed_target["file_state"])
+        self.assertEqual(
+            (changed_state.processing_status, changed_state.read_depth),
+            ("discovered", "sampled"),
+        )
+        self.assertEqual(
+            changed.file_state_summary["reused_files"],
+            changed.record_counts["file"] - 1,
+        )
+
+        changed_target["file_state"] = processed_state.as_dict()
+        state_summary = changed_rows[0]["file_state_summary"]
+        for field, old_value, new_value in (
+            (
+                "processing_statuses",
+                changed_state.processing_status,
+                processed_state.processing_status,
+            ),
+            ("read_depths", changed_state.read_depth, processed_state.read_depth),
+            ("reasons", changed_state.reason_code, processed_state.reason_code),
+        ):
+            counts = state_summary[field]
+            counts[old_value] -= 1
+            if counts[old_value] == 0:
+                del counts[old_value]
+            counts[new_value] = counts.get(new_value, 0) + 1
+        changed.manifest_file.write_text(
+            "".join(
+                json.dumps(
+                    row,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+                for row in changed_rows
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        restricted = inventory_project(
+            self.workspace,
+            registration.project_id,
+            policy_config=ScanPolicyConfig(
+                max_content_file_bytes=1,
+                max_raw_external_send_bytes=1,
+            ),
+        )
+        restricted_rows = self.manifest_rows(restricted.manifest_file)
+        restricted_target = next(
+            row for row in restricted_rows if row.get("path") == "README.md"
+        )
+        restricted_state = file_state_from_dict(restricted_target["file_state"])
+        self.assertEqual(
+            (
+                restricted_state.processing_status,
+                restricted_state.read_depth,
+                restricted_state.reason_code,
+            ),
+            ("discovered", "metadata_only", "content-size-limit"),
         )
 
     def test_content_change_updates_sha256_when_size_and_mtime_are_restored(
@@ -591,8 +808,10 @@ class ProjectInventoryTests(unittest.TestCase):
                 row.pop("scan_generation")
                 row.pop("fingerprint_summary")
                 row.pop("classification_summary")
+                row.pop("file_state_summary")
             elif row["record_type"] == "file":
                 row.pop("classification")
+                row.pop("file_state")
                 row.pop("content_sha256")
                 row.pop("size_bytes")
                 row.pop("mtime_ns")
@@ -659,7 +878,7 @@ class ProjectInventoryTests(unittest.TestCase):
 
         self.assertEqual(result.manifest_file.read_bytes(), future)
 
-    def test_invalid_v3_classification_fails_closed_without_replacement(
+    def test_invalid_v4_classification_fails_closed_without_replacement(
         self,
     ) -> None:
         registration = self.register()
@@ -676,6 +895,50 @@ class ProjectInventoryTests(unittest.TestCase):
             "classification summary mismatch": lambda rows: rows[0][
                 "classification_summary"
             ]["formats"].clear(),
+        }
+        for name, corrupt_rows in cases.items():
+            with self.subTest(name=name):
+                rows = json.loads(json.dumps(valid_rows))
+                corrupt_rows(rows)
+                corrupt = (
+                    "".join(
+                        json.dumps(
+                            row,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        + "\n"
+                        for row in rows
+                    )
+                ).encode("utf-8")
+                result.manifest_file.write_bytes(corrupt)
+
+                with self.assertRaises(ProjectManifestError):
+                    inventory_project(self.workspace, registration.project_id)
+
+                self.assertEqual(result.manifest_file.read_bytes(), corrupt)
+
+    def test_invalid_v4_file_state_fails_closed_without_replacement(self) -> None:
+        registration = self.register()
+        result = inventory_project(self.workspace, registration.project_id)
+        valid_rows = self.manifest_rows(result.manifest_file)
+
+        cases = {
+            "future file-state schema": lambda rows: rows[1]["file_state"].__setitem__(
+                "schema_version",
+                FILE_STATE_SCHEMA_VERSION + 1,
+            ),
+            "illegal state combination": lambda rows: rows[1]["file_state"].update(
+                processing_status="missing",
+                read_depth="sampled",
+            ),
+            "blank state reason": lambda rows: rows[1]["file_state"].__setitem__(
+                "reason", ""
+            ),
+            "file-state summary mismatch": lambda rows: rows[0][
+                "file_state_summary"
+            ]["read_depths"].clear(),
         }
         for name, corrupt_rows in cases.items():
             with self.subTest(name=name):
@@ -926,6 +1189,10 @@ class ProjectInventoryTests(unittest.TestCase):
         self.assertEqual(payload["project_id"], registration.project_id)
         self.assertEqual(
             payload["classification_summary"]["classified_files"],
+            payload["record_counts"]["file"],
+        )
+        self.assertEqual(
+            payload["file_state_summary"]["state_files"],
             payload["record_counts"]["file"],
         )
         manifest = Path(payload["manifest_file"])

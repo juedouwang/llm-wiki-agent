@@ -82,7 +82,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     inventory = subparsers.add_parser(
         "inventory",
-        help="Inventory, fingerprint, and classify a registered project.",
+        help="Inventory, fingerprint, classify, and assign file state.",
     )
     inventory.add_argument("project_id", help="B-01 registered project ID")
     inventory.add_argument(
@@ -198,6 +198,8 @@ def _run_inventory(args: argparse.Namespace) -> int:
     print(f"Fingerprints reused: {result.fingerprint_summary['reused_files']}")
     print(f"Files classified:    {result.classification_summary['classified_files']}")
     print(f"Classifications reused: {result.classification_summary['reused_files']}")
+    print(f"Files with state:     {result.file_state_summary['state_files']}")
+    print(f"File states reused:   {result.file_state_summary['reused_files']}")
     print(f"Pruned directories:  {result.record_counts['excluded_directory']}")
     print(f"Total records:       {result.total_records}")
     return 0

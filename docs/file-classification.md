@@ -4,7 +4,7 @@
 - 实现：`tools/file_classification.py`、`tools/project_inventory.py`
 - 命令：`python tools/project.py inventory <project_id> --json`
 - 测试：`tests/test_file_classification.py`、`tests/test_project_inventory.py`
-- Schema：`llmwiki-project-manifest` Schema v1 / `project-inventory-v3`
+- B-05 artifact：`llmwiki-project-manifest` Schema v1 / `project-inventory-v3`；当前 writer 为 B-06 `project-inventory-v4`
 
 ## 1. 本任务解决什么
 
@@ -105,7 +105,7 @@ format=unknown / language=unknown / research_role=unknown
 
 - B-03 `project-inventory-v1` 可继续读取，并从 generation 0 重新 hash、分类；
 - B-04 `project-inventory-v2` 的 generation 和 SHA-256 缓存可继续复用，只补分类；
-- B-05 `project-inventory-v3` 在内容 hash 相同时复用已有分类；
+- B-05 `project-inventory-v3` 在内容 hash 相同时复用已有分类；B-06 `project-inventory-v4` 继续保留该分类与复用语义，并增加文件状态；
 - future Schema 或未知 artifact 版本 fail closed；
 - 扫描、hash 或分类中途失败时保留上一份 Manifest，并清理临时文件。
 
@@ -115,7 +115,7 @@ format=unknown / language=unknown / research_role=unknown
 
 B-05 保留 B-01～B-04 的注册、路径边界、排除对账、符号链接、原子替换、文件指纹和源项目零写入保证。本任务不实现：
 
-- `processing_status`、`read_depth` 和最终处理理由（B-06）；
+- B-05 本身未实现 `processing_status`、`read_depth` 和最终处理理由；这些字段现由 B-06 `file_state` 提供，见 [`manifest-file-state.md`](manifest-file-state.md)；
 - 阅读优先级或引用提升队列（B-07）；
 - 内容提取、chunk、Locator、`source_id` 或 Evidence；
 - LLM 补充分类、MCP、Hook、Web 或独立聊天入口；

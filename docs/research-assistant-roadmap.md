@@ -31,7 +31,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | B-02 扫描策略 | 已完成 | `07be63d` | `checkpoint/b-02-scan-policy` |
 | B-03 目录盘点与基础 Manifest | 已完成 | `be4b825` | `checkpoint/b-03-project-inventory` |
 | B-04 文件指纹与增量 Manifest | 已完成 | `f6fcd43` | `checkpoint/b-04-file-fingerprints` |
-| B-05 格式、语言与科研角色识别 | 本次落库 | 本次提交 | `checkpoint/b-05-file-classification` |
+| B-05 格式、语言与科研角色识别 | 已完成 | `7ed9196` | `checkpoint/b-05-file-classification` |
+| B-06 Manifest 文件状态双轴 | 本次落库 | 本次提交 | `checkpoint/b-06-manifest-file-state` |
 
 ## 3. 后续最小改动计划
 
@@ -315,18 +316,18 @@ git tag checkpoint/b-01-project-register
 
 ## 6. 下一项可执行任务
 
-B-05 完成后的下一项是：
+B-06 完成后的下一项是：
 
-> **B-06：Manifest 文件状态双轴**
+> **B-08：覆盖率与失败报告**
 
 它的最小范围严格限制为：
 
-- 在 B-05 `project-inventory-v3` 的普通文件账本上增加版本化文件状态；
-- 分离 `processing_status` 与 `read_depth`，使用产品契约中的稳定枚举；
-- 每条普通文件记录都必须保存可解释 `reason`，不能用空值或单一模糊状态代替；
-- 明确定义并验证状态组合，非法组合、损坏记录和 future Schema 必须 fail closed；
-- 兼容读取 v1/v2/v3，并保留 B-01～B-05 的边界、指纹、分类和源项目零写入语义；
-- 添加 Schema 枚举、非法组合、序列化、旧记录升级和汇总对账测试；
-- 不提前实现 B-07 阅读优先级、B-08 独立覆盖率报告、内容提取、Evidence、MCP、Hook 或 Web。
+- 只消费并验证 B-06 `project-inventory-v4` Manifest，不改变扫描范围、分类或文件状态；
+- 生成独立、可重复构建的覆盖率与失败报告，按文件数量、字节体积、科研角色、处理状态、读取深度和原因汇总；
+- 所有汇总轴都必须与 Manifest 普通文件记录精确对账；失败条目必须保留可定位的项目相对路径；
+- 稳定排序和序列化，使同一 Manifest 生成可比较的快照；
+- 保留源项目零写入、敏感内容不外发和机器状态/curated Markdown 分层边界；
+- 添加对账、失败定位、稳定快照、损坏/future Manifest fail-closed 和源项目零写入测试；
+- 不提前实现 B-07 阅读优先级/引用提升队列、C 阶段提取、Block、Locator、chunk、`source_id`、Evidence、MCP、Hook 或 Web。
 
-B-06 仍是可嵌入宿主 Agent 的 Research Core 确定性状态契约，不新增独立聊天入口，也不把尚未提取的文件伪装成已处理成功。
+B-08 仍是可嵌入宿主 Agent 的 Research Core 确定性审计产物，不新增独立聊天入口，也不把覆盖统计误称为内容提取或理解完成。

@@ -81,7 +81,7 @@ B-03/B-04/B-05 inventory consumes the persisted B-01 registration and B-02 scan 
 python tools/project.py inventory <project_id> --json
 ```
 
-The command writes only `.llmwiki/projects/<project_id>/manifest.jsonl`. Every in-scope regular file is recorded without a format whitelist; excluded files and each pruned-directory boundary remain accountable. B-04 adds scan generation, SHA-256, size, mtime, and conservative fingerprint reuse. B-05 writes the current `project-inventory-v3` artifact and classifies every ordinary file by format, language, research role, and auditable reason while preserving source-project zero writes. See [`project-inventory.md`](project-inventory.md), [`file-fingerprints.md`](file-fingerprints.md), and [`file-classification.md`](file-classification.md).
+The command writes only `.llmwiki/projects/<project_id>/manifest.jsonl`. Every in-scope regular file is recorded without a format whitelist; excluded files and each pruned-directory boundary remain accountable. B-04 adds scan generation, SHA-256, size, mtime, and conservative fingerprint reuse. B-05 classifies every ordinary file by format, language, research role, and auditable reason. B-06 writes the current `project-inventory-v4` artifact and adds versioned `processing_status`, `read_depth`, reason code, and reason fields while preserving source-project zero writes. See [`project-inventory.md`](project-inventory.md), [`file-fingerprints.md`](file-fingerprints.md), [`file-classification.md`](file-classification.md), and [`manifest-file-state.md`](manifest-file-state.md).
 
 ## `project.yaml`
 
@@ -173,7 +173,7 @@ That command and layout remain supported. `resolve_project_layout()` follows the
 
 A later migration task may copy validated legacy evidence into the project-scoped layout. Registration itself never invokes the legacy scanner.
 
-## B-01/B-02/B-03/B-04/B-05 boundary
+## B-01/B-02/B-03/B-04/B-05/B-06 boundary
 
 B-01 registration still does not scan a project. B-02 adds the separate, source-read-only policy layer in `tools/scan_policy.py`:
 
@@ -189,9 +189,9 @@ B-03 is the first consumer of both layers. It loads a project only by registered
 
 B-04 upgrades the artifact to `project-inventory-v2`. It hashes every in-scope ordinary file locally, stores SHA-256/size/mtime plus a conservative local reuse key, increments generation only after a successful atomic replacement, and reads valid B-03 v1 Manifests as generation 0. Hash input is never extracted, persisted as raw content, sent to an LLM, or written back to the source project.
 
-B-05 upgrades the artifact to `project-inventory-v3`. It reads a bounded local prefix only when the B-02 file decision grants `local_content_access=allowed`; sensitive or oversized files are classified from filename/path signals without a second raw-content read after the B-04 hash. Every ordinary file still receives an explicit deterministic classification, valid v2 fingerprints remain reusable during upgrade, and permitted samples are ephemeral and never sent externally or written into curated Markdown.
+B-05 upgrades the artifact to `project-inventory-v3`. It reads a bounded local prefix only when the B-02 file decision grants `local_content_access=allowed`; sensitive or oversized files are classified from filename/path signals without a second raw-content read after the B-04 hash. B-06 upgrades the current writer to `project-inventory-v4`, adding a versioned two-axis state and reconciled state summary to every ordinary file. Valid v1/v2/v3 records remain compatible, permitted samples are ephemeral, and neither raw content nor curated knowledge is written into machine-state records.
 
 Still isolated in later tasks:
 
-- final Manifest processing/read-depth states (B-06);
+- independent coverage/failure reports (B-08);
 - content extraction, source IDs, Evidence locators, semantic knowledge, retrieval, MCP, web UI, planning, and legacy-data migration.

@@ -4,8 +4,9 @@
 B-03 consumes the B-01 project registration and B-02 scan policy, walks only
 approved directory boundaries, and writes an accountable Schema v1 Manifest.
 B-04 adds scan generations and deterministic regular-file fingerprints. B-05
-adds bounded local format/language/research-role classification while still
-avoiding extraction, LLMs, host integration, and source-project writes.
+adds bounded local format/language/research-role classification. B-06 adds a
+versioned two-axis state without pretending that inventory is content extraction;
+all stages remain local and source-project-read-only.
 """
 
 from __future__ import annotations
@@ -32,6 +33,13 @@ if __package__:
         classification_from_dict,
         classify_file,
     )
+    from .file_state import (
+        FILE_STATE_SCHEMA_VERSION,
+        FileState,
+        file_state_from_dict,
+        inventory_file_state,
+        state_is_compatible_with_inventory,
+    )
     from .project_layout import (
         CURRENT_SCHEMA_VERSION,
         LayoutError,
@@ -53,6 +61,13 @@ else:
         classification_from_dict,
         classify_file,
     )
+    from file_state import (  # type: ignore[no-redef]
+        FILE_STATE_SCHEMA_VERSION,
+        FileState,
+        file_state_from_dict,
+        inventory_file_state,
+        state_is_compatible_with_inventory,
+    )
     from project_layout import (  # type: ignore[no-redef]
         CURRENT_SCHEMA_VERSION,
         LayoutError,
@@ -72,19 +87,28 @@ PROJECT_MANIFEST_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
 PROJECT_MANIFEST_KIND = "llmwiki-project-manifest"
 LEGACY_PROJECT_MANIFEST_VERSION = "project-inventory-v1"
 FINGERPRINT_PROJECT_MANIFEST_VERSION = "project-inventory-v2"
-PROJECT_MANIFEST_VERSION = "project-inventory-v3"
+CLASSIFICATION_PROJECT_MANIFEST_VERSION = "project-inventory-v3"
+PROJECT_MANIFEST_VERSION = "project-inventory-v4"
 CLASSIFICATION_SUMMARY_KIND = "llmwiki-file-classification-summary"
+FILE_STATE_SUMMARY_KIND = "llmwiki-file-state-summary"
 CONTENT_HASH_ALGORITHM = "sha256"
 FINGERPRINT_CACHE_STRATEGY = "file-identity-change-v1"
 _SUPPORTED_MANIFEST_VERSIONS = {
     LEGACY_PROJECT_MANIFEST_VERSION,
     FINGERPRINT_PROJECT_MANIFEST_VERSION,
+    CLASSIFICATION_PROJECT_MANIFEST_VERSION,
     PROJECT_MANIFEST_VERSION,
 }
 _FINGERPRINT_MANIFEST_VERSIONS = {
     FINGERPRINT_PROJECT_MANIFEST_VERSION,
+    CLASSIFICATION_PROJECT_MANIFEST_VERSION,
     PROJECT_MANIFEST_VERSION,
 }
+_CLASSIFICATION_MANIFEST_VERSIONS = {
+    CLASSIFICATION_PROJECT_MANIFEST_VERSION,
+    PROJECT_MANIFEST_VERSION,
+}
+_FILE_STATE_MANIFEST_VERSIONS = {PROJECT_MANIFEST_VERSION}
 
 _HASH_CHUNK_BYTES = 1024 * 1024
 _MAX_FINGERPRINT_ATTEMPTS = 3
@@ -171,6 +195,7 @@ class ProjectInventoryResult:
     symlink_summary: dict[str, int]
     fingerprint_summary: dict[str, Any]
     classification_summary: dict[str, Any]
+    file_state_summary: dict[str, Any]
     policy: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
@@ -187,6 +212,7 @@ class ProjectInventoryResult:
             "symlink_summary": dict(self.symlink_summary),
             "fingerprint_summary": dict(self.fingerprint_summary),
             "classification_summary": dict(self.classification_summary),
+            "file_state_summary": dict(self.file_state_summary),
             "policy": self.policy,
         }
 
@@ -228,6 +254,7 @@ class _PriorFingerprint:
     mtime_ns: int
     cache_key: _FingerprintCacheKey | None
     classification: FileClassification | None
+    file_state: FileState | None
 
 
 @dataclass(frozen=True)
@@ -259,6 +286,8 @@ class _InspectedFile:
     fingerprint: _FileFingerprint
     classification: FileClassification
     classification_reused: bool
+    file_state: FileState
+    file_state_reused: bool
 
 
 @dataclass(frozen=True)
@@ -305,6 +334,11 @@ class _InventoryState:
     formats: Counter[str] = field(default_factory=Counter)
     languages: Counter[str] = field(default_factory=Counter)
     research_roles: Counter[str] = field(default_factory=Counter)
+    state_files: int = 0
+    reused_file_states: int = 0
+    processing_statuses: Counter[str] = field(default_factory=Counter)
+    read_depths: Counter[str] = field(default_factory=Counter)
+    state_reasons: Counter[str] = field(default_factory=Counter)
 
     def write(self, record: dict[str, Any]) -> None:
         self.writer.write(
@@ -346,6 +380,14 @@ class _InventoryState:
         self.research_roles[classification.research_role] += 1
         if reused:
             self.reused_classifications += 1
+
+    def record_file_state(self, file_state: FileState, *, reused: bool) -> None:
+        self.state_files += 1
+        self.processing_statuses[file_state.processing_status] += 1
+        self.read_depths[file_state.read_depth] += 1
+        self.state_reasons[file_state.reason_code] += 1
+        if reused:
+            self.reused_file_states += 1
 
 
 @dataclass
@@ -528,9 +570,19 @@ def _parse_prior_fingerprint(
             line_number=line_number,
         )
     classification: FileClassification | None = None
-    if manifest_version == PROJECT_MANIFEST_VERSION:
+    if manifest_version in _CLASSIFICATION_MANIFEST_VERSIONS:
         try:
             classification = classification_from_dict(record.get("classification"))
+        except ValueError as exc:
+            raise _manifest_error(
+                manifest_file,
+                str(exc),
+                line_number=line_number,
+            ) from exc
+    file_state: FileState | None = None
+    if manifest_version in _FILE_STATE_MANIFEST_VERSIONS:
+        try:
+            file_state = file_state_from_dict(record.get("file_state"))
         except ValueError as exc:
             raise _manifest_error(
                 manifest_file,
@@ -547,6 +599,7 @@ def _parse_prior_fingerprint(
             line_number=line_number,
         ),
         classification=classification,
+        file_state=file_state,
     )
 
 
@@ -604,6 +657,57 @@ def _validate_classification_summary(
             )
 
 
+def _validate_file_state_summary(
+    manifest_file: Path,
+    summary: dict[str, Any],
+    *,
+    actual_file_states: dict[str, Counter[str]],
+    file_count: int,
+) -> None:
+    file_state_summary = summary.get("file_state_summary")
+    if not isinstance(file_state_summary, dict):
+        raise _manifest_error(
+            manifest_file,
+            "file_state_summary must be an object",
+            line_number=1,
+        )
+    if file_state_summary.get("schema_version") != FILE_STATE_SCHEMA_VERSION:
+        raise _manifest_error(
+            manifest_file,
+            "file_state_summary schema_version is unsupported",
+            line_number=1,
+        )
+    if file_state_summary.get("kind") != FILE_STATE_SUMMARY_KIND:
+        raise _manifest_error(
+            manifest_file,
+            "file_state_summary kind is unsupported",
+            line_number=1,
+        )
+    state_files = file_state_summary.get("state_files")
+    reused_files = file_state_summary.get("reused_files")
+    if (
+        not _is_integer(state_files)
+        or state_files != file_count
+        or not _is_integer(reused_files)
+        or reused_files < 0
+        or reused_files > state_files
+    ):
+        raise _manifest_error(
+            manifest_file,
+            "file_state_summary file counts do not reconcile",
+            line_number=1,
+        )
+    for field_name in ("processing_statuses", "read_depths", "reasons"):
+        stored = file_state_summary.get(field_name)
+        actual = dict(sorted(actual_file_states[field_name].items()))
+        if stored != actual or sum(actual.values()) != file_count:
+            raise _manifest_error(
+                manifest_file,
+                f"file_state_summary {field_name} do not reconcile",
+                line_number=1,
+            )
+
+
 def _validate_manifest_summary(
     manifest_file: Path,
     summary: dict[str, Any],
@@ -612,6 +716,7 @@ def _validate_manifest_summary(
     manifest_version: str,
     actual_counts: Counter[str],
     actual_classifications: dict[str, Counter[str]],
+    actual_file_states: dict[str, Counter[str]],
     total_records: int,
 ) -> int:
     stored_root = summary.get("project_root")
@@ -704,11 +809,18 @@ def _validate_manifest_summary(
             "fingerprint_summary counts do not reconcile with file records",
             line_number=1,
         )
-    if manifest_version == PROJECT_MANIFEST_VERSION:
+    if manifest_version in _CLASSIFICATION_MANIFEST_VERSIONS:
         _validate_classification_summary(
             manifest_file,
             summary,
             actual_classifications=actual_classifications,
+            file_count=actual_counts["file"],
+        )
+    if manifest_version in _FILE_STATE_MANIFEST_VERSIONS:
+        _validate_file_state_summary(
+            manifest_file,
+            summary,
+            actual_file_states=actual_file_states,
             file_count=actual_counts["file"],
         )
     return scan_generation
@@ -734,6 +846,11 @@ def _load_previous_manifest(
         "formats": Counter(),
         "languages": Counter(),
         "research_roles": Counter(),
+    }
+    actual_file_states = {
+        "processing_statuses": Counter(),
+        "read_depths": Counter(),
+        "reasons": Counter(),
     }
     fingerprints: dict[str, _PriorFingerprint] = {}
     seen_paths: set[str] = set()
@@ -817,6 +934,16 @@ def _load_previous_manifest(
                         actual_classifications["research_roles"][
                             fingerprint.classification.research_role
                         ] += 1
+                    if fingerprint.file_state is not None:
+                        actual_file_states["processing_statuses"][
+                            fingerprint.file_state.processing_status
+                        ] += 1
+                        actual_file_states["read_depths"][
+                            fingerprint.file_state.read_depth
+                        ] += 1
+                        actual_file_states["reasons"][
+                            fingerprint.file_state.reason_code
+                        ] += 1
     except (OSError, UnicodeError) as exc:
         raise ProjectManifestError(
             f"could not read existing project Manifest {manifest_file}: {exc}"
@@ -831,6 +958,7 @@ def _load_previous_manifest(
         manifest_version=manifest_version,
         actual_counts=actual_counts,
         actual_classifications=actual_classifications,
+        actual_file_states=actual_file_states,
         total_records=total_records,
     )
     return _PreviousManifest(
@@ -1147,6 +1275,35 @@ def _classification_is_policy_path_only(
     return classification.reasons["format"]["source"] == "policy-path"
 
 
+def _finish_inspected_file(
+    *,
+    fingerprint: _FileFingerprint,
+    classification: FileClassification,
+    classification_reused: bool,
+    restriction: tuple[str, str] | None,
+    previous: _PriorFingerprint | None,
+) -> _InspectedFile:
+    reason_code, reason = restriction if restriction is not None else (None, None)
+    current_state = inventory_file_state(
+        classification.format,
+        content_access_reason_code=reason_code,
+        content_access_reason=reason,
+    )
+    state_reused = (
+        previous is not None
+        and previous.file_state is not None
+        and previous.content_sha256 == fingerprint.content_sha256
+        and state_is_compatible_with_inventory(previous.file_state, current_state)
+    )
+    return _InspectedFile(
+        fingerprint=fingerprint,
+        classification=classification,
+        classification_reused=classification_reused,
+        file_state=previous.file_state if state_reused else current_state,
+        file_state_reused=state_reused,
+    )
+
+
 def _inspect_regular_file(
     path: Path,
     logical_path: str,
@@ -1179,10 +1336,12 @@ def _inspect_regular_file(
                 and previous.classification == classification
                 and previous.content_sha256 == fingerprint.content_sha256
             )
-            return _InspectedFile(
+            return _finish_inspected_file(
                 fingerprint=fingerprint,
                 classification=classification,
                 classification_reused=reused,
+                restriction=restriction,
+                previous=previous,
             )
 
         if (
@@ -1191,20 +1350,24 @@ def _inspect_regular_file(
             and previous.content_sha256 == fingerprint.content_sha256
             and not _classification_is_policy_path_only(previous.classification)
         ):
-            return _InspectedFile(
+            return _finish_inspected_file(
                 fingerprint=fingerprint,
                 classification=previous.classification,
                 classification_reused=True,
+                restriction=None,
+                previous=previous,
             )
         try:
             sample = _read_classification_sample(path, fingerprint.snapshot)
         except OSError as exc:
             last_error = exc
             continue
-        return _InspectedFile(
+        return _finish_inspected_file(
             fingerprint=fingerprint,
             classification=classify_file(logical_path, sample),
             classification_reused=False,
+            restriction=None,
+            previous=previous,
         )
 
     detail = f": {last_error}" if last_error is not None else ""
@@ -1518,10 +1681,15 @@ def _write_file(
         )
         record.update(inspected.fingerprint.record_fields())
         record["classification"] = inspected.classification.as_dict()
+        record["file_state"] = inspected.file_state.as_dict()
         context.state.record_fingerprint(inspected.fingerprint)
         context.state.record_classification(
             inspected.classification,
             reused=inspected.classification_reused,
+        )
+        context.state.record_file_state(
+            inspected.file_state,
+            reused=inspected.file_state_reused,
         )
     else:
         record.update(_effective_reason_fields(evaluation))
@@ -1794,6 +1962,10 @@ def _build_summary_record(
         raise ProjectInventoryTraversalError(
             "classification count does not reconcile with in-scope file records"
         )
+    if state.state_files != record_counts["file"]:
+        raise ProjectInventoryTraversalError(
+            "file-state count does not reconcile with in-scope file records"
+        )
     summary = _summary_base(project_id)
     summary.update(
         {
@@ -1821,6 +1993,15 @@ def _build_summary_record(
                 "formats": dict(sorted(state.formats.items())),
                 "languages": dict(sorted(state.languages.items())),
                 "research_roles": dict(sorted(state.research_roles.items())),
+            },
+            "file_state_summary": {
+                "schema_version": FILE_STATE_SCHEMA_VERSION,
+                "kind": FILE_STATE_SUMMARY_KIND,
+                "state_files": state.state_files,
+                "reused_files": state.reused_file_states,
+                "processing_statuses": dict(sorted(state.processing_statuses.items())),
+                "read_depths": dict(sorted(state.read_depths.items())),
+                "reasons": dict(sorted(state.state_reasons.items())),
             },
             "policy": policy.as_dict(),
         }
@@ -1948,5 +2129,6 @@ def inventory_project(
         symlink_summary=summary["symlink_summary"],
         fingerprint_summary=summary["fingerprint_summary"],
         classification_summary=summary["classification_summary"],
+        file_state_summary=summary["file_state_summary"],
         policy=summary["policy"],
     )

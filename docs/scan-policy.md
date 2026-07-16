@@ -171,7 +171,7 @@ B-02 不实现：
 - 目录遍历、文件数量统计和排除摘要（B-03）；
 - 源文件内容 hash、scan generation 和增量复用；这些由 B-04 inventory consumer 实现，而不是策略对象本身；
 - 格式、语言和科研角色识别（B-05）；
-- Manifest 最终双轴状态（B-06）；
+- B-02 本身不写 Manifest 双轴状态；当前 B-06 inventory 根据策略决定生成 `sampled`、`metadata_only` 或 `ignored`，见 [`manifest-file-state.md`](manifest-file-state.md)；
 - 内容提取、LLM 调用、MCP、Hook 或 Web 页面。
 
 最终用户仍会通过“一键理解项目”触发完整流水线；`ScanPolicyConfig` 是内部可组合协议，不要求用户在最终产品中手写 Python。

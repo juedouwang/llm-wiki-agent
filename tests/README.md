@@ -52,8 +52,12 @@ python -B -m unittest discover -s tests -v
 
 ## B-04 file-fingerprint coverage
 
-The same test module retains coverage for B-04 scan generations, SHA-256/size/mtime fields, conservative reuse, same-size replacement, mtime-only touches, add/rename/delete refreshes, B-03 v1 compatibility, fail-closed corrupt/future Manifests, and atomic failure preservation. Current output is upgraded by B-05 to `project-inventory-v3`.
+The same test module retains coverage for B-04 scan generations, SHA-256/size/mtime fields, conservative reuse, same-size replacement, mtime-only touches, add/rename/delete refreshes, B-03 v1 compatibility, fail-closed corrupt/future Manifests, and atomic failure preservation. Current output is upgraded by B-06 to `project-inventory-v4`.
 
 ## B-05 deterministic-classification coverage
 
-`test_file_classification.py` and `test_project_inventory.py` verify magic/signature priority, spoofed extensions, extensionless shebang and Notebook detection, common research formats and path roles, explicit unknown files, reason/schema round-trips, B-02-aware path-only classification for sensitive and oversized files without prefix reads, v2 fingerprint reuse during upgrade, unchanged classification reuse, summary reconciliation, source-tree zero writes, and continued absence of B-06 processing/read-depth fields, extraction, Evidence IDs, and reconciliation events.
+`test_file_classification.py` and `test_project_inventory.py` verify magic/signature priority, spoofed extensions, extensionless shebang and Notebook detection, common research formats and path roles, explicit unknown files, reason/schema round-trips, B-02-aware path-only classification for sensitive and oversized files without prefix reads, v2 fingerprint reuse during upgrade, unchanged classification reuse, summary reconciliation, source-tree zero writes, and continued absence of extraction, Evidence IDs, and reconciliation events.
+
+## B-06 Manifest file-state coverage
+
+`test_file_state.py` and `test_project_inventory.py` verify the stable processing-status/read-depth enums, valid and invalid combinations, exact Schema v1 serialization, required reason codes and explanations, truthful inventory states for sampled, sensitive, oversized, and unsupported files, v1/v2/v3 upgrade compatibility, unchanged-state reuse, reset on content or policy-basis changes, `missing` non-reuse, state-summary reconciliation, corrupt/future state fail-closed behavior, atomic Manifest preservation, CLI exposure, and source-tree zero writes. B-06 deliberately does not add B-07 prioritization, B-08 independent coverage reports, content extraction, Blocks, Locators, source IDs, Evidence, MCP, Hook, or Web behavior.

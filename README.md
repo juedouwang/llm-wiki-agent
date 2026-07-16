@@ -140,7 +140,7 @@ Create or incrementally refresh the Manifest for an already registered project:
 python tools/project.py inventory <project_id> --json
 ```
 
-The inventory preserves B-03 accountability for every in-scope regular file, excluded file, pruned-directory boundary, and symbolic link. B-04 adds scan generation, local SHA-256, size, mtime, and conservative fingerprint reuse. B-05 writes `project-inventory-v3` and gives every ordinary file deterministic format, language, research-role, and reason fields; spoofed extensions, extensionless files, and unknown binary files remain auditable. A bounded classification prefix is read only when B-02 grants local raw-content access; sensitive and oversized files are classified from path metadata without a second raw-content read. Samples remain local and ephemeral, and nothing is sent to an LLM or written back to the source project. Final processing/read-depth states remain B-06. See `docs/project-inventory.md`, `docs/file-fingerprints.md`, and `docs/file-classification.md`.
+The inventory preserves B-03 accountability for every in-scope regular file, excluded file, pruned-directory boundary, and symbolic link. B-04 adds scan generation, local SHA-256, size, mtime, and conservative fingerprint reuse. B-05 adds deterministic format, language, research-role, and reason fields. B-06 writes the current `project-inventory-v4` artifact and gives every ordinary file a versioned two-axis state (`processing_status` + `read_depth`) with a stable reason code and explanation; inventory results remain honestly `discovered`, while sampled, metadata-only, ignored, and unsupported files stay distinguishable. B-02 still gates bounded classification-prefix reads, and nothing is sent to an LLM or written back to the source project. Coverage/failure reporting remains B-08. See `docs/project-inventory.md`, `docs/file-fingerprints.md`, `docs/file-classification.md`, and `docs/manifest-file-state.md`.
 
 ## Research Assistant Evolution (In Development)
 
@@ -152,6 +152,7 @@ The `research-assistant` branch is evolving this repository into a local-first, 
 - [B-03 project inventory and accountable directory contract](docs/project-inventory.md)
 - [B-04 file fingerprints and incremental Manifest contract](docs/file-fingerprints.md)
 - [B-05 deterministic file classification contract](docs/file-classification.md)
+- [B-06 Manifest two-axis file-state contract](docs/manifest-file-state.md)
 
 ## What You Get
 
