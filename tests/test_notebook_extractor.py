@@ -88,7 +88,8 @@ class NotebookExtractorTests(unittest.TestCase):
 
         result = extract_notebook_bytes(data, relative_path="notebooks/run.ipynb")
 
-        self.assertEqual(result.status, "processed")
+        self.assertEqual(result.status, "partial")
+        self.assertEqual(result.reason_code, "deterministic-notebook-partial")
         document = self.require_document(result)
         self.assertEqual(document.extractor, NOTEBOOK_EXTRACTOR_NAME)
         self.assertEqual(document.extractor_version, NOTEBOOK_EXTRACTOR_VERSION)
@@ -117,7 +118,15 @@ class NotebookExtractorTests(unittest.TestCase):
         )
         self.assertEqual(document.blocks[0].text, "# \u0422\u0435\u0441\u0442\nContext\n")
         self.assertEqual(document.blocks[1].metadata["execution_count"], 7)
-        output_summary = json.loads(document.blocks[2].text)
+        self.assertEqual(document.blocks[1].metadata["output_count"], 2)
+        output_block = document.blocks[2]
+        self.assertTrue(output_block.truncated)
+        self.assertEqual(output_block.truncation_reason_code, "multiple-output-limits")
+        self.assertEqual(
+            [item["code"] for item in output_block.metadata["truncation_reasons"]],
+            ["binary-output-omitted", "rich-output-omitted"],
+        )
+        output_summary = json.loads(output_block.text)
         self.assertEqual(output_summary[0]["name"], "stdout")
         image_record = output_summary[1]["data"]["items"]["image/png"]
         self.assertTrue(image_record["payload_omitted"])
@@ -133,6 +142,133 @@ class NotebookExtractorTests(unittest.TestCase):
         )
         self.assertEqual(document.metadata["cells_with_ids"], 2)
         self.assertEqual(document.metadata["output_summary_block_count"], 1)
+        self.assertEqual(
+            document.metadata["truncation_reasons"],
+            ["binary-output-omitted", "rich-output-omitted"],
+        )
+        self.assertEqual(
+            document.metadata["notebook_metadata_sha256"],
+            hashlib.sha256(b'{"kernelspec":{"name":"python3"}}').hexdigest(),
+        )
+
+    def test_execute_result_error_and_attachments_are_stable_and_bounded(self) -> None:
+        attachment_payload = "B" * 200
+        data = self.notebook_bytes(
+            [
+                {
+                    "cell_type": "markdown",
+                    "id": "attachment-cell",
+                    "metadata": {},
+                    "source": "![plot](attachment:plot.png)\n",
+                    "attachments": {
+                        "plot.png": {
+                            "image/png": attachment_payload,
+                            "text/plain": "plot preview",
+                        }
+                    },
+                },
+                {
+                    "cell_type": "code",
+                    "id": "result-cell",
+                    "metadata": {},
+                    "execution_count": 8,
+                    "source": "score = 0.9\n",
+                    "outputs": [
+                        {
+                            "output_type": "execute_result",
+                            "execution_count": 8,
+                            "data": {
+                                "application/json": {"score": 0.9},
+                                "text/plain": "0.9",
+                            },
+                            "metadata": {"trusted": False},
+                        },
+                        {
+                            "output_type": "error",
+                            "ename": "ValueError",
+                            "evalue": "bad value",
+                            "traceback": ["line one\n", "line two\n"],
+                        },
+                    ],
+                },
+            ]
+        )
+
+        result = extract_notebook_bytes(data, relative_path="attachments.ipynb")
+
+        self.assertEqual(result.status, "partial")
+        document = self.require_document(result)
+        attachment_block, code_block, output_block = document.blocks
+        self.assertTrue(attachment_block.truncated)
+        self.assertEqual(
+            attachment_block.truncation_reason_code,
+            "cell-attachment-omitted",
+        )
+        self.assertEqual(attachment_block.metadata["attachment_names"], ["plot.png"])
+        attachment_record = attachment_block.metadata["attachment_summaries"][
+            "plot.png"
+        ]["items"]["image/png"]
+        self.assertTrue(attachment_record["payload_omitted"])
+        self.assertEqual(attachment_record["character_count"], len(attachment_payload))
+        self.assertNotIn(attachment_payload, serialize_extraction_result(result))
+        self.assertEqual(code_block.metadata["execution_count"], 8)
+        self.assertEqual(code_block.metadata["output_count"], 2)
+        self.assertFalse(output_block.truncated)
+        summary = json.loads(output_block.text)
+        self.assertEqual(summary[0]["execution_count"], 8)
+        self.assertEqual(
+            summary[0]["data"]["items"]["application/json"]["preview"],
+            '{"score":0.9}',
+        )
+        self.assertEqual(summary[1]["ename"], "ValueError")
+        self.assertEqual(summary[1]["traceback"]["preview"], "line one\nline two\n")
+        self.assertEqual(
+            document.metadata["truncation_reasons"],
+            ["cell-attachment-omitted"],
+        )
+
+    def test_attachment_count_and_mime_limits_are_explicit(self) -> None:
+        data = self.notebook_bytes(
+            [
+                {
+                    "cell_type": "markdown",
+                    "id": "many-attachments",
+                    "metadata": {},
+                    "source": "attachments\n",
+                    "attachments": {
+                        "a": {"image/png": "A", "text/plain": "a"},
+                        "b": {"image/png": "B"},
+                    },
+                }
+            ]
+        )
+        result = extract_notebook_bytes(
+            data,
+            relative_path="many-attachments.ipynb",
+            limits=NotebookExtractionLimits(
+                max_attachments_per_cell=1,
+                max_mime_entries_per_attachment=1,
+            ),
+        )
+
+        self.assertEqual(result.status, "partial")
+        source = self.require_document(result).blocks[0]
+        self.assertEqual(source.truncation_reason_code, "multiple-cell-limits")
+        self.assertEqual(
+            [item["code"] for item in source.metadata["truncation_reasons"]],
+            [
+                "attachment-count-limit",
+                "attachment-mime-entry-limit",
+                "cell-attachment-omitted",
+            ],
+        )
+        self.assertEqual(source.metadata["attachment_count"], 2)
+        self.assertEqual(source.metadata["included_attachment_count"], 1)
+        self.assertEqual(source.metadata["attachment_names"], ["a"])
+        self.assertEqual(
+            source.metadata["attachment_summaries"]["a"]["included_mime_count"],
+            1,
+        )
 
     def test_modifying_one_cell_changes_only_its_source_block(self) -> None:
         cells = [
@@ -354,6 +490,9 @@ class NotebookExtractorTests(unittest.TestCase):
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.reason_code, "notebook-source-byte-limit")
         self.assertIsNone(result.document)
+        self.assertTrue(
+            any(hashlib.sha256(data).hexdigest() in item for item in result.diagnostics)
+        )
 
     def test_file_api_is_read_only_and_verifies_full_hash(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -463,6 +602,10 @@ class NotebookExtractorTests(unittest.TestCase):
             NotebookExtractionLimits(max_source_bytes=3)
         with self.assertRaises(ValueError):
             NotebookExtractionLimits(max_outputs_per_cell=0)
+        with self.assertRaises(ValueError):
+            NotebookExtractionLimits(max_attachments_per_cell=0)
+        with self.assertRaises(ValueError):
+            NotebookExtractionLimits(max_mime_entries_per_attachment=0)
         with self.assertRaises(ValueError):
             extract_notebook_file(
                 "unused.ipynb",

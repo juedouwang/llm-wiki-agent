@@ -33,10 +33,18 @@ SUPPORTED_NOTEBOOK_FORMATS = frozenset({"notebook"})
 
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _SUPPORTED_CELL_TYPES = frozenset({"code", "markdown", "raw"})
-_TEXTUAL_MIME_TYPES = frozenset(
+_PREVIEWABLE_MIME_TYPES = frozenset(
+    {
+        "application/json",
+        "text/markdown",
+        "text/plain",
+    }
+)
+_RICH_MIME_TYPES = frozenset(
     {
         "application/javascript",
-        "application/json",
+        "image/svg+xml",
+        "text/html",
     }
 )
 
@@ -59,6 +67,8 @@ class NotebookExtractionLimits:
     max_output_summary_characters: int = 128 * 1024
     max_outputs_per_cell: int = 100
     max_mime_entries_per_output: int = 32
+    max_attachments_per_cell: int = 32
+    max_mime_entries_per_attachment: int = 32
     read_chunk_bytes: int = 1024 * 1024
 
     def __post_init__(self) -> None:
@@ -69,6 +79,8 @@ class NotebookExtractionLimits:
             "max_output_summary_characters",
             "max_outputs_per_cell",
             "max_mime_entries_per_output",
+            "max_attachments_per_cell",
+            "max_mime_entries_per_attachment",
             "read_chunk_bytes",
         ):
             value = getattr(self, field_name)
@@ -210,8 +222,31 @@ def _metadata_keys(value: object, field_name: str) -> list[str]:
     return sorted(value)
 
 
+def _stable_json_sha256(value: object) -> str:
+    rendered = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
 def _reason_detail(reason_code: str) -> str:
     details = {
+        "attachment-count-limit": (
+            "cell attachments exceeded max_attachments_per_cell"
+        ),
+        "attachment-mime-entry-limit": (
+            "an attachment MIME bundle exceeded max_mime_entries_per_attachment"
+        ),
+        "binary-output-omitted": (
+            "a binary output payload was omitted from the deterministic summary"
+        ),
+        "cell-attachment-omitted": (
+            "cell attachment payloads were omitted from the source block"
+        ),
         "cell-character-limit": "cell source exceeded max_cell_characters",
         "output-count-limit": "cell outputs exceeded max_outputs_per_cell",
         "output-mime-entry-limit": (
@@ -222,6 +257,9 @@ def _reason_detail(reason_code: str) -> str:
         ),
         "output-text-character-limit": (
             "textual output exceeded max_output_text_characters"
+        ),
+        "rich-output-omitted": (
+            "an active or rich output payload was omitted from the deterministic summary"
         ),
     }
     try:
@@ -256,7 +294,12 @@ def _cell_block_type(cell_type: str) -> str:
     return "text"
 
 
-def _attachment_metadata(cell: dict[str, Any], cell_index: int) -> dict[str, Any]:
+def _attachment_metadata(
+    cell: dict[str, Any],
+    cell_index: int,
+    limits: NotebookExtractionLimits,
+    reason_codes: set[str],
+) -> dict[str, Any]:
     attachments = cell.get("attachments", {})
     if attachments is None:
         attachments = {}
@@ -264,16 +307,62 @@ def _attachment_metadata(cell: dict[str, Any], cell_index: int) -> dict[str, Any
         raise _NotebookValidationError(
             f"cells[{cell_index}].attachments must be an object"
         )
-    mime_types: set[str] = set()
-    for attachment_name, bundle in attachments.items():
-        if not isinstance(attachment_name, str) or not isinstance(bundle, dict):
+    ordered_names = sorted(attachments)
+    for attachment_name in ordered_names:
+        bundle = attachments[attachment_name]
+        if not isinstance(attachment_name, str) or not attachment_name:
+            raise _NotebookValidationError(
+                f"cells[{cell_index}].attachments names must be non-empty strings"
+            )
+        if not isinstance(bundle, dict):
             raise _NotebookValidationError(
                 f"cells[{cell_index}].attachments must map names to MIME bundles"
             )
-        mime_types.update(bundle)
+    included_names = ordered_names[: limits.max_attachments_per_cell]
+    if attachments:
+        reason_codes.add("cell-attachment-omitted")
+    if len(ordered_names) > len(included_names):
+        reason_codes.add("attachment-count-limit")
+
+    mime_types: set[str] = set()
+    summaries: dict[str, Any] = {}
+    for attachment_name in included_names:
+        bundle = attachments[attachment_name]
+        assert isinstance(bundle, dict)
+        ordered_mime_types = sorted(bundle)
+        included_mime_types = ordered_mime_types[
+            : limits.max_mime_entries_per_attachment
+        ]
+        if len(ordered_mime_types) > len(included_mime_types):
+            reason_codes.add("attachment-mime-entry-limit")
+        items: dict[str, Any] = {}
+        for mime_type in included_mime_types:
+            if not isinstance(mime_type, str) or not mime_type:
+                raise _NotebookValidationError(
+                    f"cells[{cell_index}].attachments[{attachment_name!r}] "
+                    "MIME keys must be non-empty strings"
+                )
+            text = _mime_value_text(
+                bundle[mime_type],
+                f"cells[{cell_index}].attachments[{attachment_name!r}].{mime_type}",
+            )
+            mime_types.add(mime_type)
+            items[mime_type] = {
+                "character_count": len(text),
+                "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "payload_omitted": True,
+            }
+        summaries[attachment_name] = {
+            "mime_count": len(ordered_mime_types),
+            "included_mime_count": len(included_mime_types),
+            "items": items,
+        }
     return {
-        "attachment_count": len(attachments),
+        "attachment_count": len(ordered_names),
+        "included_attachment_count": len(included_names),
+        "attachment_names": included_names,
         "attachment_mime_types": sorted(mime_types),
+        "attachment_summaries": summaries,
     }
 
 
@@ -296,12 +385,12 @@ def _summarize_text(
     }
 
 
-def _is_textual_mime(mime_type: str) -> bool:
-    return (
-        mime_type.startswith("text/")
-        or mime_type in _TEXTUAL_MIME_TYPES
-        or mime_type.endswith("+json")
-    )
+def _mime_payload_policy(mime_type: str) -> str:
+    if mime_type in _PREVIEWABLE_MIME_TYPES or mime_type.endswith("+json"):
+        return "preview"
+    if mime_type.startswith("text/") or mime_type in _RICH_MIME_TYPES:
+        return "rich"
+    return "binary"
 
 
 def _mime_value_text(value: object, field_name: str) -> str:
@@ -343,12 +432,13 @@ def _summarize_mime_bundle(
             )
         text = _mime_value_text(value[mime_type], f"{field_name}.{mime_type}")
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        policy = _mime_payload_policy(mime_type)
         record: dict[str, Any] = {
             "character_count": len(text),
             "sha256": digest,
-            "payload_omitted": not _is_textual_mime(mime_type),
+            "payload_omitted": policy != "preview",
         }
-        if _is_textual_mime(mime_type):
+        if policy == "preview":
             truncated = len(text) > limits.max_output_text_characters
             if truncated:
                 reason_codes.add("output-text-character-limit")
@@ -358,6 +448,10 @@ def _summarize_mime_bundle(
                     "truncated": truncated,
                 }
             )
+        elif policy == "rich":
+            reason_codes.add("rich-output-omitted")
+        else:
+            reason_codes.add("binary-output-omitted")
         records[mime_type] = record
     return {
         "mime_count": len(mime_types),
@@ -537,12 +631,26 @@ def _cell_blocks(
         f"cells[{cell_index}].metadata",
     )
     execution_count: int | None = None
+    outputs: object = []
+    output_count = 0
     if cell_type == "code":
         execution_count = _optional_execution_count(
             value.get("execution_count"),
             f"cells[{cell_index}].execution_count",
         )
+        outputs = value.get("outputs", [])
+        if not isinstance(outputs, list):
+            raise _NotebookValidationError(
+                f"cells[{cell_index}].outputs must be an array"
+            )
+        output_count = len(outputs)
     source_reason_codes: set[str] = set()
+    attachment_metadata = _attachment_metadata(
+        value,
+        cell_index,
+        limits,
+        source_reason_codes,
+    )
     if len(source) > limits.max_cell_characters:
         source_reason_codes.add("cell-character-limit")
     source_text = source[: limits.max_cell_characters]
@@ -556,12 +664,13 @@ def _cell_blocks(
         "cell_id": cell_id,
         "cell_type": cell_type,
         "execution_count": execution_count,
+        "output_count": output_count,
         "metadata_keys": metadata_keys,
         "source_character_count": len(source),
         "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
         "source_line_count": len(source.splitlines()),
         "truncation_reasons": reason_records,
-        **_attachment_metadata(value, cell_index),
+        **attachment_metadata,
     }
     blocks: list[Block] = [
         Block(
@@ -576,7 +685,6 @@ def _cell_blocks(
         )
     ]
     if cell_type == "code":
-        outputs = value.get("outputs", [])
         output = _output_block(
             outputs,
             cell_index=cell_index,
@@ -617,10 +725,9 @@ def _build_document(
         raise _UnsupportedNotebookVersion(
             f"Notebook nbformat {nbformat} is unsupported; only nbformat 4 is supported"
         )
-    notebook_metadata_keys = _metadata_keys(
-        notebook.get("metadata", {}),
-        "metadata",
-    )
+    notebook_metadata = notebook.get("metadata", {})
+    notebook_metadata_keys = _metadata_keys(notebook_metadata, "metadata")
+    notebook_metadata_sha256 = _stable_json_sha256(notebook_metadata)
     cells = notebook.get("cells")
     if not isinstance(cells, list):
         raise _NotebookValidationError("cells must be an array")
@@ -654,6 +761,7 @@ def _build_document(
             "nbformat": nbformat,
             "nbformat_minor": nbformat_minor,
             "notebook_metadata_keys": notebook_metadata_keys,
+            "notebook_metadata_sha256": notebook_metadata_sha256,
             "cell_count": len(cells),
             "cell_type_counts": cell_type_counts,
             "cells_with_ids": cells_with_ids,
@@ -696,6 +804,7 @@ def _extract_notebook_data(
             "notebook-source-byte-limit",
             "the Notebook exceeds the deterministic source byte limit",
             f"source has {source_size_bytes} bytes; limit is {limits.max_source_bytes}",
+            f"content SHA-256 is {content_sha256}",
         )
     try:
         decoded = _decode_notebook(data)
