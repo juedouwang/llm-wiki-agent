@@ -16,6 +16,15 @@ if __package__:
     from .project_layout import LayoutError
     from .project_registry import register_project
     from .scan_policy import ScanPolicyConfig, ScanPolicyError
+    from .source_access import (
+        SourceAccessError,
+        SourceLocatorError,
+        SourceNotFoundError,
+        deserialize_locator,
+        locate_source,
+        open_evidence,
+        open_source,
+    )
     from .source_registry import get_source_history, sync_source_registry
 else:
     from coverage_report import generate_coverage_report  # type: ignore[no-redef]
@@ -25,6 +34,15 @@ else:
     from scan_policy import (  # type: ignore[no-redef]
         ScanPolicyConfig,
         ScanPolicyError,
+    )
+    from source_access import (  # type: ignore[no-redef]
+        SourceAccessError,
+        SourceLocatorError,
+        SourceNotFoundError,
+        deserialize_locator,
+        locate_source,
+        open_evidence,
+        open_source,
     )
     from source_registry import (  # type: ignore[no-redef]
         get_source_history,
@@ -173,6 +191,53 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Research Core workspace (default: this repository)",
     )
     source_history.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+    source_locate = source_subparsers.add_parser(
+        "locate",
+        help="Resolve one source ID to its current recorded path and version.",
+    )
+    source_locate.add_argument("project_id", help="B-01 registered project ID")
+    source_locate.add_argument("source_id", help="Core-generated persistent source ID")
+    source_locate.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    source_locate.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+    source_open = source_subparsers.add_parser(
+        "open",
+        help="Reopen an exact current source locator or persisted Evidence.",
+    )
+    source_open.add_argument("project_id", help="B-01 registered project ID")
+    source_open.add_argument(
+        "target_id",
+        help="A source ID (src-*) or persisted Evidence ID (evd-*)",
+    )
+    source_open.add_argument(
+        "--locator-json",
+        help="Strict C-01 locator JSON; required when target_id is a source ID",
+    )
+    source_open.add_argument(
+        "--expected-content-hash",
+        help="Optional lowercase SHA-256 expected for a direct source open",
+    )
+    source_open.add_argument(
+        "--expected-excerpt-hash",
+        help="Optional lowercase SHA-256 expected for a direct source excerpt",
+    )
+    source_open.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    source_open.add_argument(
         "--json",
         action="store_true",
         help="Print a machine-readable JSON result",
@@ -339,6 +404,97 @@ def _run_source_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_command_error(exc: BaseException, *, as_json: bool) -> int:
+    if as_json:
+        payload = {"ok": False, "error": str(exc)}
+        reason_code = getattr(exc, "reason_code", None)
+        if isinstance(reason_code, str) and reason_code:
+            payload["reason_code"] = reason_code
+        print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
+    else:
+        print(f"error: {exc}", file=sys.stderr)
+    return 2
+
+
+def _run_source_locate(args: argparse.Namespace) -> int:
+    try:
+        result = locate_source(
+            workspace_root=args.workspace_root,
+            project_id=args.project_id,
+            source_id=args.source_id,
+        )
+    except (LayoutError, OSError) as exc:
+        return _print_command_error(exc, as_json=args.json)
+
+    payload = result.as_dict()
+    if args.json:
+        print(json.dumps({"ok": True, **payload}, indent=2, ensure_ascii=False))
+        return 0
+
+    print(f"Source located:  {result.source_id}")
+    print(f"Project:         {result.project_id}")
+    print(f"Current path:    {result.current_path}")
+    print(f"Absolute path:   {result.absolute_path}")
+    print(f"Current version: {result.current_version}")
+    print(f"Content SHA-256: {result.content_hash}")
+    return 0
+
+
+def _run_source_open(args: argparse.Namespace) -> int:
+    try:
+        if args.target_id.startswith("evd-"):
+            if (
+                args.locator_json is not None
+                or args.expected_content_hash is not None
+                or args.expected_excerpt_hash is not None
+            ):
+                raise SourceLocatorError(
+                    "Evidence targets use their persisted locator and hashes; "
+                    "source-only overrides are not accepted"
+                )
+            result = open_evidence(
+                workspace_root=args.workspace_root,
+                project_id=args.project_id,
+                evidence_id=args.target_id,
+            )
+        elif args.target_id.startswith("src-"):
+            if args.locator_json is None:
+                raise SourceLocatorError(
+                    "--locator-json is required when target_id is a source ID"
+                )
+            result = open_source(
+                workspace_root=args.workspace_root,
+                project_id=args.project_id,
+                source_id=args.target_id,
+                locator=deserialize_locator(args.locator_json),
+                expected_content_hash=args.expected_content_hash,
+                expected_excerpt_hash=args.expected_excerpt_hash,
+            )
+        else:
+            raise SourceNotFoundError(
+                "target_id must be a Core source ID (src-*) or Evidence ID (evd-*)"
+            )
+    except (SourceAccessError, LayoutError, OSError) as exc:
+        return _print_command_error(exc, as_json=args.json)
+
+    payload = result.as_dict()
+    if args.json:
+        print(json.dumps({"ok": True, **payload}, indent=2, ensure_ascii=False))
+        return 0
+
+    print(f"Source opened:    {result.source.source_id}")
+    print(f"Current path:     {result.source.current_path}")
+    print(f"Current version:  {result.source.current_version}")
+    print(f"Content SHA-256:  {result.source.content_hash}")
+    print(f"Excerpt SHA-256:  {result.excerpt_hash}")
+    print(f"Excerpt format:   {result.excerpt_format}")
+    if result.evidence_id is not None:
+        print(f"Evidence:         {result.evidence_id}")
+    print("--- excerpt ---")
+    print(result.excerpt, end="" if result.excerpt.endswith("\n") else "\n")
+    return 0
+
+
 def _run_source_history(args: argparse.Namespace) -> int:
     try:
         result = get_source_history(
@@ -388,6 +544,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_source_sync(args)
     if args.command == "source" and args.source_command == "history":
         return _run_source_history(args)
+    if args.command == "source" and args.source_command == "locate":
+        return _run_source_locate(args)
+    if args.command == "source" and args.source_command == "open":
+        return _run_source_open(args)
     parser.error(f"unsupported command: {args.command}")
     return 2
 

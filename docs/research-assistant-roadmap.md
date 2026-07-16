@@ -41,7 +41,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | C-08 定位保真分块 | 已完成 | `1eb64a2`, `6f01136` | `checkpoint/c-08-locator-chunking`, `checkpoint/c-08-locator-chunking-hardening` |
 | D-01 persistent source identity | complete | `a11fe6d` | `checkpoint/d-01-source-identity` |
 | D-02 source versions and path history | complete | `1230ac2` | `checkpoint/d-02-source-versions` |
-| D-03 precise Evidence schema | complete | current commit | `checkpoint/d-03-evidence-schema` |
+| D-03 precise Evidence schema | complete | `00f036c` | `checkpoint/d-03-evidence-schema` |
+| D-04 source locate/open | complete | current commit | `checkpoint/d-04-source-open` |
 
 ## 3. 后续最小改动计划
 
@@ -325,16 +326,17 @@ git tag checkpoint/b-01-project-register
 
 ## 6. 下一项可执行任务
 
-D-03 precise Evidence schema is complete. The next task is:
+D-04 source locate/open is complete. The next task is:
 
-> **D-04: source locate/open**
+> **D-05: source relocation recovery**
 
 The minimum scope is strictly limited to:
 
-- provide deterministic Core APIs and CLI commands that resolve a registered `source_id` to its current recorded path and version;
-- reopen exact source content for line/code locators, PDF pages, Notebook cells, and table cell ranges, returning the excerpt plus its content and excerpt hashes;
-- verify the current source bytes still match the Evidence content hash and that the reopened excerpt matches the persisted excerpt hash before reporting success;
-- keep source projects read-only and all operations local-only;
-- do not implement D-05 relocation recovery, D-06 aggregate source health, query/synthesis, claim propagation, extraction scheduling, MCP, Hooks, Web, or LLM behavior.
+- when a source's current recorded path cannot be reopened, recover candidates in this order: recorded path aliases, exact local content-hash matches, then deterministic Git path history;
+- accept only project-contained regular files whose bytes match the source's recorded current content hash;
+- preserve the existing `source_id` and source-version history while recording one unambiguous recovered current path under the source-registry lock;
+- return an explicit ambiguous result and make no binding when multiple equal-priority/equal-hash candidates remain;
+- keep the source project read-only and all recovery local-only;
+- do not implement D-06 aggregate source health, query/synthesis, claim propagation, extraction scheduling, MCP, Hooks, Web, or LLM behavior.
 
-D-04 reopens only the current recorded path. If that path is missing or no longer matches, it fails explicitly; path aliases, hash search, Git recovery, ambiguity handling, and aggregate health remain D-05 and D-06.
+D-05 may update only Research Core machine state after a unique verified recovery. It must not rename, move, rewrite, or otherwise modify the source project. Aggregate `valid/stale/missing/ambiguous` classification and locator health remain D-06.
