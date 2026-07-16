@@ -11,11 +11,13 @@ from typing import Sequence
 
 # Support both ``python -m tools.project`` and ``python tools/project.py``.
 if __package__:
+    from .coverage_report import generate_coverage_report
     from .project_inventory import inventory_project
     from .project_layout import LayoutError
     from .project_registry import register_project
     from .scan_policy import ScanPolicyConfig, ScanPolicyError
 else:
+    from coverage_report import generate_coverage_report  # type: ignore[no-redef]
     from project_inventory import inventory_project  # type: ignore[no-redef]
     from project_layout import LayoutError  # type: ignore[no-redef]
     from project_registry import register_project  # type: ignore[no-redef]
@@ -114,6 +116,22 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print a machine-readable JSON result",
     )
+
+    coverage = subparsers.add_parser(
+        "coverage",
+        help="Generate a deterministic B-08 coverage and failure report.",
+    )
+    coverage.add_argument("project_id", help="B-01 registered project ID")
+    coverage.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    coverage.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
     return parser
 
 
@@ -205,6 +223,40 @@ def _run_inventory(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_coverage(args: argparse.Namespace) -> int:
+    try:
+        result = generate_coverage_report(
+            workspace_root=args.workspace_root,
+            project_id=args.project_id,
+        )
+    except (LayoutError, OSError) as exc:
+        if args.json:
+            print(
+                json.dumps(
+                    {"ok": False, "error": str(exc)},
+                    ensure_ascii=False,
+                ),
+                file=sys.stderr,
+            )
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        payload = {"ok": True, **result.as_dict()}
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+
+    totals = result.report["totals"]
+    print(f"Coverage report generated: {result.project_id}")
+    print(f"Manifest:                  {result.manifest_file}")
+    print(f"Report:                    {result.report_file}")
+    print(f"In-scope files:            {totals['file_count']}")
+    print(f"In-scope bytes:            {totals['byte_count']}")
+    print(f"Failed files:              {totals['failed_file_count']}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -212,6 +264,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_register(args)
     if args.command == "inventory":
         return _run_inventory(args)
+    if args.command == "coverage":
+        return _run_coverage(args)
     parser.error(f"unsupported command: {args.command}")
     return 2
 

@@ -258,9 +258,29 @@ class _PriorFingerprint:
 
 
 @dataclass(frozen=True)
+class ProjectManifest:
+    """One strictly validated persisted Manifest and all of its JSONL rows."""
+
+    manifest_file: Path
+    project_id: str
+    project_root: Path
+    manifest_version: str
+    scan_generation: int
+    summary: dict[str, Any]
+    records: tuple[dict[str, Any], ...]
+
+    @property
+    def file_records(self) -> tuple[dict[str, Any], ...]:
+        return tuple(
+            record for record in self.records if record["record_type"] == "file"
+        )
+
+
+@dataclass(frozen=True)
 class _PreviousManifest:
     scan_generation: int
     fingerprints: dict[str, _PriorFingerprint]
+    document: ProjectManifest | None = None
 
 
 @dataclass(frozen=True)
@@ -841,6 +861,7 @@ def _load_previous_manifest(
 
     summary: dict[str, Any] | None = None
     manifest_version: str | None = None
+    records: list[dict[str, Any]] = []
     actual_counts: Counter[str] = Counter()
     actual_classifications = {
         "formats": Counter(),
@@ -913,6 +934,7 @@ def _load_previous_manifest(
                 seen_paths.add(path_value)
                 actual_counts[record_type] += 1
                 total_records += 1
+                records.append(record)
                 if (
                     manifest_version in _FINGERPRINT_MANIFEST_VERSIONS
                     and record_type == "file"
@@ -961,6 +983,15 @@ def _load_previous_manifest(
         actual_file_states=actual_file_states,
         total_records=total_records,
     )
+    document = ProjectManifest(
+        manifest_file=manifest_file,
+        project_id=project_id,
+        project_root=project_root,
+        manifest_version=manifest_version,
+        scan_generation=scan_generation,
+        summary=summary,
+        records=tuple(records),
+    )
     return _PreviousManifest(
         scan_generation=scan_generation,
         fingerprints=(
@@ -968,7 +999,43 @@ def _load_previous_manifest(
             if manifest_version in _FINGERPRINT_MANIFEST_VERSIONS
             else {}
         ),
+        document=document,
     )
+
+
+def load_project_manifest(
+    manifest_file: str | Path,
+    *,
+    project_id: str,
+    project_root: str | Path,
+    required_manifest_version: str | None = None,
+) -> ProjectManifest:
+    """Load one existing Manifest through the inventory compatibility validator.
+
+    The reader never traverses or opens source-project files.  Unsupported Schema
+    or artifact versions, corrupt rows, and summary mismatches fail closed.
+    """
+
+    path = Path(manifest_file)
+    loaded = _load_previous_manifest(
+        path,
+        project_id=project_id,
+        project_root=Path(project_root),
+    )
+    if loaded.document is None:
+        raise ProjectManifestError(f"project Manifest does not exist: {path}")
+    if (
+        required_manifest_version is not None
+        and loaded.document.manifest_version != required_manifest_version
+    ):
+        raise _manifest_error(
+            path,
+            "operation requires manifest_version "
+            f"{required_manifest_version!r}, found "
+            f"{loaded.document.manifest_version!r}",
+            line_number=1,
+        )
+    return loaded.document
 
 
 def _windows_change_time_token(path: Path) -> str | None:
