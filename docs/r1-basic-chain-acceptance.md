@@ -1,7 +1,8 @@
 # R1 Basic-Chain Acceptance
 
-- Status: accepted implementation; repository-level landing results are recorded in
-  `r1-acceptance-report.md`
+- Status: accepted
+- Repository landing results:
+  [`r1-acceptance-report.md`](r1-acceptance-report.md)
 - Date: 2026-07-16
 - Roadmap slice: J-01 (R1 basic chain)
 - Automated test: `tests/test_r1_end_to_end.py`
@@ -89,8 +90,8 @@ python -B -m unittest tests.test_r1_end_to_end
 
 The landing gate additionally requires the full test suite, targeted Ruff, the
 unchanged full-Ruff historical baseline, wiki health, diff hygiene, an atomic
-commit, and a local checkpoint tag. Exact landing results belong in
-`r1-acceptance-report.md` because the J-01 commit cannot record its own hash.
+commit, and a local checkpoint tag. Exact landing results are recorded in
+[`r1-acceptance-report.md`](r1-acceptance-report.md).
 
 ## Explicit non-goals and known limitations
 

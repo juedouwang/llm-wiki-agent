@@ -45,7 +45,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | D-04 source locate/open | complete | `917475c` | `checkpoint/d-04-source-open` |
 | D-05 source relocation recovery | complete | `a49c6a8` | `checkpoint/d-05-source-relocation` |
 | D-06 source and Evidence health | complete | `9b38353` | `checkpoint/d-06-source-health` |
-| J-01 R1 basic-chain acceptance | complete (R1 slice) | current task commit | `checkpoint/j-01-r1-e2e` |
+| J-01 R1 basic-chain acceptance | complete (R1 slice) | `73070f1` | `checkpoint/j-01-r1-e2e` |
 
 ## 3. 后续最小改动计划
 
@@ -336,9 +336,8 @@ git tag checkpoint/b-01-project-register
 ## 6. Next executable task
 
 R1 trusted inventory and source-location acceptance is complete. Its final
-commit, test, limitation, and rollback record will be written after the J-01
-commit in `docs/r1-acceptance-report.md` so that the report can include the real
-commit ID.
+commit, test, limitation, and rollback record is in
+[`r1-acceptance-report.md`](r1-acceptance-report.md).
 
 The next executable roadmap task is:
 
