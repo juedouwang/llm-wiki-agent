@@ -154,6 +154,14 @@ class ResearchCoreServiceTests(unittest.TestCase):
         self.assertEqual(reopened.excerpt, "alpha = 1\r\n")
         self.assertTrue(reopened.excerpt_hash_verified)
 
+        context_pack = self.service.host_context_pack(registration.project_id)
+        self.assertEqual(context_pack.payload["project_id"], registration.project_id)
+        self.assertEqual(
+            [item["evidence_id"] for item in context_pack.payload["evidence_refs"]],
+            [evidence.evidence_id],
+        )
+        self.assertLessEqual(context_pack.used_bytes, context_pack.max_bytes)
+
         self.assertEqual(self.source_snapshot(), before)
         self.assertFalse((self.project / ".llmwiki").exists())
         self.assertFalse((self.project / "wiki").exists())
@@ -352,6 +360,29 @@ class ResearchCoreServiceTests(unittest.TestCase):
             locator=LineRangeLocator(1, 1),
             excerpt="alpha = 1\r\n",
         ).evidence
+        direct_context_pack = self.service.host_context_pack(
+            registration.project_id,
+            max_bytes=8192,
+        )
+        code, stdout, stderr = self.invoke_cli_process(
+            [
+                "context-pack",
+                registration.project_id,
+                "--workspace-root",
+                str(self.workspace),
+                "--max-bytes",
+                "8192",
+                "--json",
+            ],
+            module_entry=True,
+        )
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(stderr, "")
+        self.assertEqual(
+            json.loads(stdout),
+            {"ok": True, **direct_context_pack.as_dict()},
+        )
+
         direct_evidence = self.service.source_open(
             registration.project_id,
             evidence.evidence_id,
@@ -382,7 +413,9 @@ class ResearchCoreServiceTests(unittest.TestCase):
         fake_service = Mock(spec=ResearchCoreService)
         fake_service.register.return_value = registration
         fake_service.scan.return_value = inventory
+        context_pack = self.service.host_context_pack(registration.project_id)
         fake_service.coverage.return_value = coverage
+        fake_service.host_context_pack.return_value = context_pack
         fake_service.source_open.return_value = opened
 
         with patch("tools.project.ResearchCoreService", return_value=fake_service):
@@ -442,6 +475,26 @@ class ResearchCoreServiceTests(unittest.TestCase):
                 include_patterns=[],
                 exclude_patterns=["*.tmp"],
                 follow_symlinks=True,
+            )
+
+            return_code, stdout, stderr = self.invoke_cli(
+                [
+                    "context-pack",
+                    registration.project_id,
+                    "--workspace-root",
+                    str(self.workspace),
+                    "--json",
+                ]
+            )
+            self.assertEqual(return_code, 0)
+            self.assertEqual(stderr, "")
+            self.assertEqual(
+                json.loads(stdout),
+                {"ok": True, **context_pack.as_dict()},
+            )
+            fake_service.host_context_pack.assert_called_once_with(
+                project_id=registration.project_id,
+                max_bytes=32768,
             )
 
             return_code, stdout, stderr = self.invoke_cli(
@@ -606,6 +659,7 @@ class ResearchCoreServiceTests(unittest.TestCase):
                 excerpt="alpha = 1\r\n",
             ).evidence
             self.service.source_open(registration.project_id, evidence.evidence_id)
+            self.service.host_context_pack(registration.project_id)
 
         for guard in guards:
             guard.assert_not_called()

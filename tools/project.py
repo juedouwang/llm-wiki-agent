@@ -11,6 +11,7 @@ from typing import Sequence
 
 # Support both ``python -m tools.project`` and ``python tools/project.py``.
 if __package__:
+    from .host_context import HOST_CONTEXT_DEFAULT_MAX_BYTES
     from .project_layout import LayoutError
     from .research_core import ResearchCoreService
     from .scan_policy import ScanPolicyError
@@ -19,6 +20,9 @@ if __package__:
     from .source_recovery import recover_source
     from .source_registry import get_source_history, sync_source_registry
 else:
+    from host_context import (  # type: ignore[no-redef]
+        HOST_CONTEXT_DEFAULT_MAX_BYTES,
+    )
     from project_layout import LayoutError  # type: ignore[no-redef]
     from research_core import ResearchCoreService  # type: ignore[no-redef]
     from scan_policy import ScanPolicyError  # type: ignore[no-redef]
@@ -101,6 +105,31 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Research Core workspace (default: this repository)",
     )
     context.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+
+    context_pack = subparsers.add_parser(
+        "context-pack",
+        help="Build a deterministic budget-bounded Host Context Pack.",
+    )
+    context_pack.add_argument("project_id", help="B-01 registered project ID")
+    context_pack.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    context_pack.add_argument(
+        "--max-bytes",
+        type=int,
+        default=HOST_CONTEXT_DEFAULT_MAX_BYTES,
+        help=(
+            "Maximum canonical compact UTF-8 JSON bytes "
+            f"(default: {HOST_CONTEXT_DEFAULT_MAX_BYTES})"
+        ),
+    )
+    context_pack.add_argument(
         "--json",
         action="store_true",
         help="Print a machine-readable JSON result",
@@ -347,6 +376,31 @@ def _run_context(args: argparse.Namespace) -> int:
         else "-"
     )
     print(f"Daily hours:      {hours}")
+    return 0
+
+
+def _run_context_pack(args: argparse.Namespace) -> int:
+    try:
+        result = ResearchCoreService(args.workspace_root).host_context_pack(
+            project_id=args.project_id,
+            max_bytes=args.max_bytes,
+        )
+    except (LayoutError, OSError, ValueError) as exc:
+        return _print_command_error(exc, as_json=args.json)
+
+    payload = result.as_dict()
+    if args.json:
+        print(json.dumps({"ok": True, **payload}, indent=2, ensure_ascii=False))
+        return 0
+
+    budget = payload["budget"]
+    print(f"Host context:  {payload['project_id']}")
+    print(f"Budget:        {budget['used_bytes']} / {budget['max_bytes']} bytes")
+    print(f"Truncated:     {budget['truncated']}")
+    print(f"Tasks:        {len(payload['tasks'])}")
+    print(f"Risks:        {len(payload['risks'])}")
+    print(f"Evidence refs:{len(payload['evidence_refs']):>4}")
+    print(f"Omissions:    {len(payload['omissions'])}")
     return 0
 
 
@@ -660,6 +714,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_register(args)
     if args.command == "context":
         return _run_context(args)
+    if args.command == "context-pack":
+        return _run_context_pack(args)
     if args.command == "inventory":
         return _run_inventory(args)
     if args.command == "coverage":

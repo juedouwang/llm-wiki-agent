@@ -1,16 +1,18 @@
-# Minimal Research Core MCP Server (G-07)
+# Minimal Research Core MCP Server (G-07, extended by G-08)
 
-- Status: implemented for the R2 G-07 transport scope
+- Status: implemented for the R2 G-07 transport scope and G-08 Host Context Pack
 - Server module: `tools.research_mcp`
 - Core boundary: `tools.research_core.ResearchCoreService`
 - Transport: MCP stdio, official Python SDK `mcp>=1.28.1,<2`
 - JSON Schema validation: `jsonschema>=4.25,<5`
-- Validation: `tests/test_research_mcp_server.py` and `tests/test_source_access.py`
-- Checkpoint: `checkpoint/g-07-mcp-server`
+- Validation: `tests/test_research_mcp_server.py`, `tests/test_source_access.py`,
+  and `tests/test_host_context_pack.py`
+- Existing checkpoint: `checkpoint/g-07-mcp-server`
 
 ## Purpose and boundary
 
-G-07 adds one host-neutral Model Context Protocol adapter over Research Core. An
+G-07 adds one host-neutral Model Context Protocol adapter over Research Core;
+G-08 adds the bounded `llmwiki_host_context` handoff to that adapter. An
 MCP-capable host can initialize a real stdio server, discover stable tool
 contracts, and call deterministic Core operations without copying project or
 filesystem logic into Codex, Claude Code, a Plugin, or a Hook.
@@ -34,7 +36,7 @@ The adapter is deliberately transport-only:
   Manifest content-access authorization;
 - no LLM, external network service, browser, or host-specific API is used.
 
-G-07 does **not** pretend that later Core query, reconciliation, or planning
+G-07 and G-08 do **not** pretend that later Core query, reconciliation, or planning
 pipelines exist. Their contracts are discoverable so adapters can stabilize,
 but calls return `capability-unavailable` until the corresponding roadmap slices
 land.
@@ -84,13 +86,15 @@ or Claude-specific import.
 | MCP tool | Current behavior | Core delegation / honest status |
 |---|---|---|
 | `llmwiki_project_context` | Available, read-only | `ResearchCoreService.project_context(project_id)` returns a host-safe `ProjectContextResult` without scanning source files |
+| `llmwiki_host_context` | Available, writes deterministic machine state | `ResearchCoreService.host_context_pack(project_id, max_bytes=...)` returns the closed, path-free `HostContextPackResult`; coverage persistence makes `readOnlyHint=false` |
 | `llmwiki_coverage` | Available, writes deterministic machine state | `ResearchCoreService.coverage_view(project_id)` persists `indexes/coverage-report.json` and returns a path-free `HostCoverageResult`; `readOnlyHint=false` |
 | `llmwiki_source_open` | Available, read-only source access | `ResearchCoreService.source_open_view(...)` enforces current Manifest content policy and returns a path-free `HostSourceOpenResult` |
 | `llmwiki_query` | Contract only | Returns `capability-unavailable`, `available_after: G-04` |
 | `llmwiki_reconcile` | Contract only | Returns `capability-unavailable`, `available_after: H-07` |
 | `llmwiki_plan` | Contract only | Returns `capability-unavailable`, `available_after: I-04` |
 
-The three unavailable tools are negative capability contracts, not successful
+The catalog contains exactly seven tools. The three unavailable tools are
+negative capability contracts, not successful
 placeholders: `isError` is true, `ok` is false, no `result` exists, and no
 project state changes.
 
@@ -109,6 +113,25 @@ python -B -m tools.project context <project_id> `
   --workspace-root E:\ResearchAssistantWorkspace `
   --json
 ```
+
+Host Context Pack returns the same closed pack produced by the direct builder
+and Core facade. The equivalent local command is:
+
+```powershell
+python -B -m tools.project context-pack <project_id> `
+  --workspace-root E:\ResearchAssistantWorkspace `
+  --max-bytes 32768 `
+  --json
+```
+
+After removing the CLI's top-level `ok` field and the MCP success envelope, the
+pack payloads have exact parity. `budget.used_bytes` is the canonical compact,
+sorted UTF-8 JSON size of the complete pack, and the payload always fits
+`budget.max_bytes`. The tool is idempotent but advertises `readOnlyHint=false`
+because its Core path persists `indexes/coverage-report.json`. The payload carries
+IDs, hashes, and typed Locators for eligible Evidence, but no raw excerpts or
+source/storage/wiki paths. Full semantics are documented in
+[`host-context-pack.md`](host-context-pack.md).
 
 Coverage and source-open have **semantic Core parity**, not byte-for-byte parity
 with the older path-bearing local CLI wrappers:
@@ -166,13 +189,14 @@ The adapter never serializes Python exception text. Caller-controlled questions,
 objectives, dirty paths, unknown tool names, local paths, and sensitive raw
 content are not echoed through errors or stderr.
 
-## Stable G-07 error codes
+## Stable G-07/G-08 error codes
 
 | Family | Stable codes |
 |---|---|
 | MCP contract | `invalid-arguments`, `mcp-tool-not-found`, `capability-unavailable` |
 | Project/schema | `project-id-invalid`, `project-not-registered`, `project-record-invalid`, `schema-version-invalid`, `schema-version-unsupported` |
 | Coverage/layout/I/O | `coverage-unavailable`, `core-layout-invalid`, `local-io-failed`, `internal-error` |
+| Host Context | `context-budget-too-small`, `host-context-invalid` |
 | Source/Evidence | Existing D-04 codes plus `source-content-policy-denied`, including `source-not-registered`, `source-locator-invalid`, `source-content-hash-mismatch`, `current-source-version-mismatch`, `source-current-path-missing`, and `source-excerpt-hash-mismatch` |
 
 `project-not-registered` is mapped by the typed
@@ -202,22 +226,30 @@ by itself forbid explicit local host-agent source reopening. Ordinary in-scope
 files therefore remain locally openable when their Manifest content-access state
 allows it. Sensitive or otherwise policy-limited files remain denied.
 
-Project context and coverage return metadata only. Coverage persists deterministic
-machine state under `.llmwiki/projects/<project_id>/indexes/` and is therefore
-correctly advertised as non-read-only, while the registered source project stays
-unchanged. Tests verify no `.llmwiki/` or `wiki/` directory is created inside the
-source project.
+Project context and coverage return metadata only. Host Context Pack additionally
+returns only bounded state, deterministic risks, omission counts, and reopenable
+Evidence IDs/hashes/Locators. It never bulk-loads curated wiki Markdown and does
+not include raw Evidence excerpts or source/storage/wiki paths. Sensitive,
+policy-limited, ignored, stale, missing, and out-of-date Evidence references are
+withheld and represented only by stable reason counts.
+
+Coverage persists deterministic machine state under
+`.llmwiki/projects/<project_id>/indexes/` and is therefore correctly advertised as
+non-read-only. `llmwiki_host_context` uses that same coverage path and also has
+`readOnlyHint=false`, while the registered source project stays unchanged. Tests
+verify no `.llmwiki/` or `wiki/` directory is created inside the source project.
 
 ## Automated contract evidence
 
 `tests/test_research_mcp_server.py` starts the server as a real subprocess and
 uses the official MCP `ClientSession` and stdio client to verify:
 
-1. protocol initialization, module/direct-script startup, and the exact six-tool
+1. protocol initialization, module/direct-script startup, and the exact seven-tool
    catalog;
 2. explicit input and output JSON Schema enforcement, including malformed types,
    duplicate arrays, malformed hashes, missing fields, and extra fields;
-3. exact Core/CLI/MCP project-context parity and semantic coverage/source parity;
+3. exact Core/CLI/MCP project-context and Host Context Pack parity, plus semantic
+   coverage/source parity;
 4. omission of absolute paths, storage records, Git root, and Git origin URL;
 5. coverage report persistence with `readOnlyHint=false` and no source writes;
 6. Manifest denial of a real `.env` secret, every policy-limit reason, and any
@@ -231,14 +263,19 @@ uses the official MCP `ClientSession` and stdio client to verify:
 10. no raw-content leakage outside explicit policy-authorized source-open;
 11. clean server stderr and no duplicated filesystem workflow in the adapter.
 
+`tests/test_host_context_pack.py` additionally verifies the closed G-08 payload,
+exact canonical UTF-8 byte accounting, deterministic truncation, omission counts,
+sensitive/ignored/stale Evidence filtering, the pre-I-02 empty task contract,
+typed too-small-budget failure, and fail-closed future schemas.
+
 `tests/test_source_access.py` separately verifies the domain policy gate on
 `open_source(..., enforce_content_policy=True)`.
 
 ## Non-goals and rollback
 
-G-07 does not implement Host Context Packs (G-08), Verified Query (G-02?G-06),
-event-ledger reconciliation (H-04/H-07), plans/tasks (I-01?I-04), Hooks, Plugins,
-Web rendering, or one-click project understanding.
+G-07 and G-08 do not implement Verified Query (G-02 through G-06), event-ledger
+reconciliation (H-04/H-07), the I-02 task store or planning pipeline (I-01 through
+I-04), Hooks, Plugins, Web rendering, or one-click project understanding.
 
 To roll back after dependent work has been reverted, use non-destructive Git
 history operations:

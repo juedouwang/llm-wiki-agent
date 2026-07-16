@@ -24,6 +24,11 @@ if __package__:
         generate_coverage_report,
     )
     from .extraction_schema import Locator, locator_from_dict
+    from .host_context import (
+        HOST_CONTEXT_DEFAULT_MAX_BYTES,
+        HostContextPackResult,
+        assemble_host_context_pack,
+    )
     from .project_inventory import ProjectInventoryResult, inventory_project
     from .project_registry import (
         ProjectRegistrationResult,
@@ -49,6 +54,11 @@ else:
     from extraction_schema import (  # type: ignore[no-redef]
         Locator,
         locator_from_dict,
+    )
+    from host_context import (  # type: ignore[no-redef]
+        HOST_CONTEXT_DEFAULT_MAX_BYTES,
+        HostContextPackResult,
+        assemble_host_context_pack,
     )
     from project_inventory import (  # type: ignore[no-redef]
         ProjectInventoryResult,
@@ -571,6 +581,22 @@ class ResearchCoreService:
         return HostCoverageResult(
             project_id=coverage.project_id,
             report=coverage.report,
+        )
+
+    def host_context_pack(
+        self,
+        project_id: str,
+        *,
+        max_bytes: int = HOST_CONTEXT_DEFAULT_MAX_BYTES,
+    ) -> HostContextPackResult:
+        """Assemble a deterministic, path-free, budget-bounded host context."""
+
+        return assemble_host_context_pack(
+            self.workspace_root,
+            project_id,
+            project_context=self.project_context(project_id).as_dict(),
+            coverage_view=self.coverage_view(project_id).as_dict(),
+            max_bytes=max_bytes,
         )
 
     def source_open(

@@ -33,6 +33,17 @@ if __package__:
         CoverageReportError,
     )
     from .extraction_schema import EXTRACTION_SCHEMA_VERSION, LOCATOR_KIND
+    from .host_context import (
+        HOST_CONTEXT_BUDGET_UNIT,
+        HOST_CONTEXT_DEFAULT_MAX_BYTES,
+        HOST_CONTEXT_KIND,
+        HOST_CONTEXT_MAX_MAX_BYTES,
+        HOST_CONTEXT_MIN_MAX_BYTES,
+        HOST_CONTEXT_SCHEMA_VERSION,
+        HOST_CONTEXT_VERSION,
+        HostContextBudgetError,
+        HostContextError,
+    )
     from .project_layout import (
         InvalidProjectIdError,
         LayoutError,
@@ -64,6 +75,17 @@ else:
         EXTRACTION_SCHEMA_VERSION,
         LOCATOR_KIND,
     )
+    from host_context import (  # type: ignore[no-redef]
+        HOST_CONTEXT_BUDGET_UNIT,
+        HOST_CONTEXT_DEFAULT_MAX_BYTES,
+        HOST_CONTEXT_KIND,
+        HOST_CONTEXT_MAX_MAX_BYTES,
+        HOST_CONTEXT_MIN_MAX_BYTES,
+        HOST_CONTEXT_SCHEMA_VERSION,
+        HOST_CONTEXT_VERSION,
+        HostContextBudgetError,
+        HostContextError,
+    )
     from project_layout import (  # type: ignore[no-redef]
         InvalidProjectIdError,
         LayoutError,
@@ -91,9 +113,10 @@ else:
 
 MCP_ENVELOPE_SCHEMA_VERSION = 1
 MCP_SERVER_NAME = "llmwiki-research-core"
-MCP_SERVER_VERSION = "0.1.0"
+MCP_SERVER_VERSION = "0.2.0"
 
 PROJECT_CONTEXT_TOOL = "llmwiki_project_context"
+HOST_CONTEXT_TOOL = "llmwiki_host_context"
 COVERAGE_TOOL = "llmwiki_coverage"
 SOURCE_OPEN_TOOL = "llmwiki_source_open"
 QUERY_TOOL = "llmwiki_query"
@@ -102,6 +125,7 @@ PLAN_TOOL = "llmwiki_plan"
 
 _TOOL_CAPABILITIES = {
     PROJECT_CONTEXT_TOOL: "project-context",
+    HOST_CONTEXT_TOOL: "host-context",
     COVERAGE_TOOL: "coverage",
     SOURCE_OPEN_TOOL: "source-open",
     QUERY_TOOL: "query",
@@ -119,6 +143,10 @@ _SAFE_ERROR_MESSAGES = {
     "invalid-arguments": "Arguments do not match the published MCP tool contract.",
     "mcp-tool-not-found": "The requested MCP tool is not exposed by this server.",
     "capability-unavailable": "This Core capability is not implemented yet.",
+    "context-budget-too-small": (
+        "The configured budget cannot hold the mandatory Host Context Pack."
+    ),
+    "host-context-invalid": "The Host Context Pack could not be validated safely.",
     "project-id-invalid": "The project identifier is invalid.",
     "project-not-registered": "The requested project is not registered in this workspace.",
     "project-record-invalid": "The registered project record could not be trusted.",
@@ -297,6 +325,202 @@ def _locator_schema() -> dict[str, Any]:
             ),
         ]
     }
+
+
+def _host_context_result_schema() -> dict[str, Any]:
+    nonnegative = {"type": "integer", "minimum": 0}
+    positive = {"type": "integer", "minimum": 1}
+    sha256 = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    nullable_text = _nullable({"type": "string", "minLength": 1})
+    count_axis = {
+        "type": "object",
+        "propertyNames": {
+            "pattern": "^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$"
+        },
+        "additionalProperties": nonnegative,
+    }
+    state = _object_schema(
+        {
+            "project": _object_schema(
+                {
+                    "name": {"type": "string", "minLength": 1},
+                    "identity_strategy": {"type": "string", "minLength": 1},
+                    "registered_at": {"type": "string", "minLength": 1},
+                    "git": _object_schema(
+                        {
+                            "available": {"type": "boolean"},
+                            "is_repository": {"type": "boolean"},
+                            "branch": nullable_text,
+                            "head_commit": nullable_text,
+                        },
+                        required=(
+                            "available",
+                            "is_repository",
+                            "branch",
+                            "head_commit",
+                        ),
+                    ),
+                    "onboarding": _object_schema(
+                        {
+                            "final_goal": nullable_text,
+                            "current_stage": nullable_text,
+                            "important_question": nullable_text,
+                            "deadline": nullable_text,
+                            "daily_available_hours": _nullable(
+                                {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 24,
+                                }
+                            ),
+                        },
+                        required=(
+                            "final_goal",
+                            "current_stage",
+                            "important_question",
+                            "deadline",
+                            "daily_available_hours",
+                        ),
+                    ),
+                },
+                required=(
+                    "name",
+                    "identity_strategy",
+                    "registered_at",
+                    "git",
+                    "onboarding",
+                ),
+            ),
+            "inventory": _object_schema(
+                {
+                    "manifest_version": {"type": "string", "minLength": 1},
+                    "scan_generation": positive,
+                    "file_count": nonnegative,
+                    "byte_count": nonnegative,
+                    "failed_file_count": nonnegative,
+                    "processing_status_counts": count_axis,
+                    "read_depth_counts": count_axis,
+                },
+                required=(
+                    "manifest_version",
+                    "scan_generation",
+                    "file_count",
+                    "byte_count",
+                    "failed_file_count",
+                    "processing_status_counts",
+                    "read_depth_counts",
+                ),
+            ),
+        },
+        required=("project", "inventory"),
+    )
+    risk = _object_schema(
+        {
+            "risk_code": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$",
+            },
+            "severity": {"type": "string", "enum": ["high", "medium"]},
+            "file_count": positive,
+            "byte_count": nonnegative,
+            "summary": {"type": "string", "minLength": 1},
+        },
+        required=(
+            "risk_code",
+            "severity",
+            "file_count",
+            "byte_count",
+            "summary",
+        ),
+    )
+    evidence_ref = _object_schema(
+        {
+            "evidence_id": {
+                "type": "string",
+                "pattern": "^evd-[0-9a-f]{64}$",
+            },
+            "source_id": {
+                "type": "string",
+                "pattern": "^src-[0-9a-f]{32}$",
+            },
+            "source_version": positive,
+            "content_hash": sha256,
+            "locator": _locator_schema(),
+            "excerpt_hash": sha256,
+        },
+        required=(
+            "evidence_id",
+            "source_id",
+            "source_version",
+            "content_hash",
+            "locator",
+            "excerpt_hash",
+        ),
+    )
+    omission = _object_schema(
+        {
+            "section": {
+                "type": "string",
+                "enum": ["tasks", "risks", "evidence_refs"],
+            },
+            "reason_code": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$",
+            },
+            "count": positive,
+        },
+        required=("section", "reason_code", "count"),
+    )
+    return _object_schema(
+        {
+            "schema_version": {"const": HOST_CONTEXT_SCHEMA_VERSION},
+            "kind": {"const": HOST_CONTEXT_KIND},
+            "pack_version": {"const": HOST_CONTEXT_VERSION},
+            "project_id": {"type": "string", "minLength": 1},
+            "budget": _object_schema(
+                {
+                    "unit": {"const": HOST_CONTEXT_BUDGET_UNIT},
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": HOST_CONTEXT_MIN_MAX_BYTES,
+                        "maximum": HOST_CONTEXT_MAX_MAX_BYTES,
+                    },
+                    "used_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": HOST_CONTEXT_MAX_MAX_BYTES,
+                    },
+                    "truncated": {"type": "boolean"},
+                },
+                required=("unit", "max_bytes", "used_bytes", "truncated"),
+            ),
+            "state": state,
+            "tasks": {"type": "array", "maxItems": 0},
+            "risks": {"type": "array", "items": risk, "uniqueItems": True},
+            "evidence_refs": {
+                "type": "array",
+                "items": evidence_ref,
+                "uniqueItems": True,
+            },
+            "omissions": {
+                "type": "array",
+                "items": omission,
+                "uniqueItems": True,
+            },
+        },
+        required=(
+            "schema_version",
+            "kind",
+            "pack_version",
+            "project_id",
+            "budget",
+            "state",
+            "tasks",
+            "risks",
+            "evidence_refs",
+            "omissions",
+        ),
+    )
 
 
 def _project_context_result_schema() -> dict[str, Any]:
@@ -622,7 +846,7 @@ def _read_only_annotations(title: str) -> ToolAnnotations:
 
 
 def tool_contracts() -> tuple[Tool, ...]:
-    """Return the stable G-07 MCP tool catalog."""
+    """Return the stable G-08 MCP tool catalog."""
 
     project_id = {
         "type": "string",
@@ -647,6 +871,42 @@ def tool_contracts() -> tuple[Tool, ...]:
             ),
             outputSchema=_output_schema("project-context", _project_context_result_schema()),
             annotations=_read_only_annotations("Research project context"),
+        ),
+        Tool(
+            name=HOST_CONTEXT_TOOL,
+            title="Budget-bounded host context",
+            description=(
+                "Assemble state, risk, task-availability, and current Evidence "
+                "references through Research Core without returning source excerpts "
+                "or bulk wiki content."
+            ),
+            inputSchema=_object_schema(
+                {
+                    "project_id": project_id,
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": HOST_CONTEXT_MIN_MAX_BYTES,
+                        "maximum": HOST_CONTEXT_MAX_MAX_BYTES,
+                        "default": HOST_CONTEXT_DEFAULT_MAX_BYTES,
+                        "description": (
+                            "Maximum canonical compact UTF-8 JSON bytes for the "
+                            "complete Host Context Pack envelope."
+                        ),
+                    },
+                },
+                required=("project_id",),
+            ),
+            outputSchema=_output_schema(
+                "host-context",
+                _host_context_result_schema(),
+            ),
+            annotations=ToolAnnotations(
+                title="Budget-bounded host context",
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
         ),
         Tool(
             name=COVERAGE_TOOL,
@@ -890,6 +1150,22 @@ def _validate_project_only(arguments: object) -> dict[str, Any]:
     return {"project_id": _required_text(values, "project_id")}
 
 
+def _validate_host_context(arguments: object) -> dict[str, Any]:
+    values = _require_object(arguments)
+    _reject_unknown(values, {"project_id", "max_bytes"})
+    max_bytes = values.get("max_bytes", HOST_CONTEXT_DEFAULT_MAX_BYTES)
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int):
+        raise MCPArgumentError("max_bytes must be an integer")
+    if not HOST_CONTEXT_MIN_MAX_BYTES <= max_bytes <= HOST_CONTEXT_MAX_MAX_BYTES:
+        raise MCPArgumentError(
+            "max_bytes is outside the published Host Context budget range"
+        )
+    return {
+        "project_id": _required_text(values, "project_id"),
+        "max_bytes": max_bytes,
+    }
+
+
 def _validate_source_open(arguments: object) -> dict[str, Any]:
     values = _require_object(arguments)
     allowed = {
@@ -965,6 +1241,12 @@ def _domain_error_code(exc: BaseException) -> str:
     for item in chain:
         if isinstance(item, UnsupportedSchemaVersionError):
             return "schema-version-unsupported"
+    for item in chain:
+        if isinstance(item, HostContextBudgetError):
+            return "context-budget-too-small"
+    for item in chain:
+        if isinstance(item, HostContextError):
+            return "host-context-invalid"
     for item in chain:
         if isinstance(item, SchemaVersionError):
             return "schema-version-invalid"
@@ -1059,6 +1341,13 @@ class ResearchMCPAdapter:
         if name == PROJECT_CONTEXT_TOOL:
             values = _validate_project_only(arguments)
             return self.service.project_context(values["project_id"]).as_dict()
+        if name == HOST_CONTEXT_TOOL:
+            values = _validate_host_context(arguments)
+            project_id = values.pop("project_id")
+            return self.service.host_context_pack(
+                project_id,
+                **values,
+            ).as_dict()
         if name == COVERAGE_TOOL:
             values = _validate_project_only(arguments)
             return self.service.coverage_view(values["project_id"]).as_dict()
@@ -1092,10 +1381,11 @@ def create_mcp_server(adapter: ResearchMCPAdapter) -> Server:
         MCP_SERVER_NAME,
         version=MCP_SERVER_VERSION,
         instructions=(
-            "Use project-context and coverage first. Call source-open only when "
-            "exact current-source evidence is needed. Query, reconcile, and plan "
-            "return explicit capability-unavailable errors until their Core slices "
-            "land."
+            "Use host-context for a budget-bounded project handoff, and use "
+            "project-context or coverage for focused metadata. Call source-open "
+            "only when exact current-source evidence is needed. Query, reconcile, "
+            "and plan return explicit capability-unavailable errors until their "
+            "Core slices land."
         ),
     )
 

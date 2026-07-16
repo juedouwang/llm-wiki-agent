@@ -22,6 +22,7 @@ from tools.project_registry import ProjectNotRegisteredError
 from tools.research_core import ResearchCoreService
 from tools.research_mcp import (
     COVERAGE_TOOL,
+    HOST_CONTEXT_TOOL,
     MCP_ENVELOPE_SCHEMA_VERSION,
     MCP_SERVER_NAME,
     MCP_SERVER_VERSION,
@@ -38,6 +39,7 @@ from tools.source_registry import load_source_registry, sync_source_registry
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXPECTED_TOOLS = (
     PROJECT_CONTEXT_TOOL,
+    HOST_CONTEXT_TOOL,
     COVERAGE_TOOL,
     SOURCE_OPEN_TOOL,
     QUERY_TOOL,
@@ -215,7 +217,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed.stderr, "")
         return json.loads(completed.stdout)
 
-    async def test_stdio_client_lists_six_honest_tool_contracts(self) -> None:
+    async def test_stdio_client_lists_seven_honest_tool_contracts(self) -> None:
         async with self.mcp_session() as session:
             initialized = await session.initialize()
             self.assertEqual(initialized.serverInfo.name, MCP_SERVER_NAME)
@@ -233,6 +235,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                     MCP_ENVELOPE_SCHEMA_VERSION,
                 )
             self.assertFalse(by_name[COVERAGE_TOOL].annotations.readOnlyHint)
+            self.assertFalse(by_name[HOST_CONTEXT_TOOL].annotations.readOnlyHint)
             self.assertTrue(by_name[PROJECT_CONTEXT_TOOL].annotations.readOnlyHint)
             self.assertTrue(by_name[SOURCE_OPEN_TOOL].annotations.readOnlyHint)
             for name, milestone in (
@@ -256,6 +259,9 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         context_direct = self.service.project_context(
             self.registration.project_id
         ).as_dict()
+        context_pack_direct = self.service.host_context_pack(
+            self.registration.project_id
+        ).as_dict()
         coverage_direct = self.service.coverage_view(
             self.registration.project_id
         ).as_dict()
@@ -271,6 +277,10 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             await session.initialize()
             context_call = await session.call_tool(
                 PROJECT_CONTEXT_TOOL,
+                {"project_id": self.registration.project_id},
+            )
+            context_pack_call = await session.call_tool(
+                HOST_CONTEXT_TOOL,
                 {"project_id": self.registration.project_id},
             )
             coverage_call = await session.call_tool(
@@ -289,6 +299,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
 
         for result, capability, expected in (
             (context_call, "project-context", context_direct),
+            (context_pack_call, "host-context", context_pack_direct),
             (coverage_call, "coverage", coverage_direct),
             (source_call, "source-open", opened_direct),
         ):
@@ -309,6 +320,15 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         context_cli = self.invoke_cli(
             [
                 "context",
+                self.registration.project_id,
+                "--workspace-root",
+                str(self.workspace),
+                "--json",
+            ]
+        )
+        context_pack_cli = self.invoke_cli(
+            [
+                "context-pack",
                 self.registration.project_id,
                 "--workspace-root",
                 str(self.workspace),
@@ -342,6 +362,10 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self.payload(context_call)["result"],
             {key: value for key, value in context_cli.items() if key != "ok"},
+        )
+        self.assertEqual(
+            self.payload(context_pack_call)["result"],
+            {key: value for key, value in context_pack_cli.items() if key != "ok"},
         )
         coverage_result = self.payload(coverage_call)["result"]
         self.assertEqual(coverage_result["project_id"], coverage_cli["project_id"])
@@ -389,6 +413,14 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                     "project-not-registered",
                 ),
                 (
+                    HOST_CONTEXT_TOOL,
+                    {
+                        "project_id": self.registration.project_id,
+                        "max_bytes": 512,
+                    },
+                    "context-budget-too-small",
+                ),
+                (
                     SOURCE_OPEN_TOOL,
                     {
                         "project_id": self.registration.project_id,
@@ -433,6 +465,8 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_published_json_schemas_reject_malformed_arguments(self) -> None:
         invalid_calls = (
+            (HOST_CONTEXT_TOOL, {"project_id": "p", "max_bytes": True}),
+            (HOST_CONTEXT_TOOL, {"project_id": "p", "max_bytes": 511}),
             (QUERY_TOOL, {"project_id": "p", "question": "q", "mode": []}),
             (
                 RECONCILE_TOOL,
@@ -766,6 +800,10 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                     {"project_id": self.registration.project_id},
                 ),
                 await session.call_tool(
+                    HOST_CONTEXT_TOOL,
+                    {"project_id": self.registration.project_id},
+                ),
+                await session.call_tool(
                     COVERAGE_TOOL,
                     {"project_id": self.registration.project_id},
                 ),
@@ -801,6 +839,10 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         context.as_dict.return_value = self.service.project_context(
             self.registration.project_id
         ).as_dict()
+        host_context = Mock()
+        host_context.as_dict.return_value = self.service.host_context_pack(
+            self.registration.project_id
+        ).as_dict()
         coverage = Mock()
         coverage.as_dict.return_value = self.service.coverage_view(
             self.registration.project_id
@@ -821,6 +863,11 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             ) as project_context,
             patch.object(
                 ResearchCoreService,
+                "host_context_pack",
+                return_value=host_context,
+            ) as host_context_call,
+            patch.object(
+                ResearchCoreService,
                 "coverage_view",
                 return_value=coverage,
             ) as coverage_call,
@@ -831,6 +878,10 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             ) as source_open,
         ):
             context_result = adapter.call_tool(PROJECT_CONTEXT_TOOL, {"project_id": "p"})
+            host_context_result = adapter.call_tool(
+                HOST_CONTEXT_TOOL,
+                {"project_id": "p", "max_bytes": 4096},
+            )
             coverage_result = adapter.call_tool(COVERAGE_TOOL, {"project_id": "p"})
             source_result = adapter.call_tool(
                 SOURCE_OPEN_TOOL,
@@ -842,9 +893,11 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertFalse(context_result.isError)
+        self.assertFalse(host_context_result.isError)
         self.assertFalse(coverage_result.isError)
         self.assertFalse(source_result.isError)
         project_context.assert_called_once_with("p")
+        host_context_call.assert_called_once_with("p", max_bytes=4096)
         coverage_call.assert_called_once_with("p")
         source_open.assert_called_once_with(
             "p",

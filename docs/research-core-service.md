@@ -1,11 +1,12 @@
-# Research Core Service Facade (G-01, extended by G-07)
+# Research Core Service Facade (G-01, extended by G-07 and G-08)
 
 - G-01 status: implemented and accepted
 - Public module: `tools.research_core`
 - Public class: `ResearchCoreService`
 - Core validation: `tests/test_research_core_service.py`
 - G-07 host-view validation: `tests/test_research_mcp_server.py`
-- Checkpoints: `checkpoint/g-01-core-service`, `checkpoint/g-07-mcp-server`
+- G-08 Host Context Pack validation: `tests/test_host_context_pack.py`
+- Existing checkpoints: `checkpoint/g-01-core-service`, `checkpoint/g-07-mcp-server`
 
 ## Purpose
 
@@ -40,6 +41,7 @@ project and does not create state in the research source tree.
 | `scan(...)` | `tools.project_inventory.inventory_project` with `ScanPolicyConfig` | `ProjectInventoryResult` |
 | `coverage(project_id)` | `tools.coverage_report.generate_coverage_report` | local/path-bearing `CoverageReportResult` |
 | `coverage_view(project_id)` | `coverage(...)` plus host-safe projection | path-free `HostCoverageResult` |
+| `host_context_pack(project_id, max_bytes=...)` | `tools.host_context.assemble_host_context_pack` over host-safe Core DTOs and current registries | path-free `HostContextPackResult` |
 | `source_open(...)` | `tools.source_access.open_source` or `open_evidence` | local/path-bearing `SourceOpenResult` |
 | `source_open_view(...)` | policy-enforced `source_open(...)` plus host-safe projection | path-free `HostSourceOpenResult` |
 
@@ -115,6 +117,38 @@ closed fields, normalized relative failure paths, and validated coverage buckets
 Unknown nested fields fail closed instead of crossing the host boundary.
 Consequently coverage is idempotent but not read-only.
 
+### Host Context Pack
+
+```python
+pack = core.host_context_pack(
+    registration.project_id,
+    max_bytes=32_768,
+)
+payload = pack.as_dict()
+```
+
+G-08 assembles a closed, deterministic Schema v1 handoff from
+`project_context(...)` and `coverage_view(...)`, then joins the current Manifest,
+Source registry, and Evidence registry. The result contains bounded project and
+inventory state, deterministic coverage risks, explicit omission counts, and
+reopenable Evidence references. It contains no raw Evidence excerpts, source or
+storage paths, or curated wiki content. Until I-02 lands, `tasks` is empty and a
+`task-store-unavailable` omission records that limitation.
+
+The complete compact, sorted UTF-8 JSON payload is budgeted. Its
+`budget.used_bytes` equals the encoded envelope size and never exceeds
+`budget.max_bytes`; a budget that cannot hold the mandatory envelope raises
+`HostContextBudgetError` with `reason_code: context-budget-too-small`. See
+[`host-context-pack.md`](host-context-pack.md) for the complete payload, filtering,
+and truncation contract.
+
+`host_context_pack(...)` is deterministic and idempotent, but it is not strictly
+read-only: its `coverage_view(...)` dependency persists the deterministic
+coverage report under machine state. It does not modify the registered source
+project or curated knowledge tree. The convenience
+`tools.host_context.build_host_context_pack(...)` routes through this same Core
+method rather than duplicating filesystem workflows.
+
 ### Source open and host source-open view
 
 ```python
@@ -165,6 +199,7 @@ The local CLI delegates these commands to `ResearchCoreService`:
 ```text
 python -m tools.project register ... --json      -> core.register(...)
 python -m tools.project context ... --json       -> core.project_context(...)
+python -m tools.project context-pack ... --json  -> core.host_context_pack(...)
 python -m tools.project inventory ... --json     -> core.scan(...)
 python -m tools.project coverage ... --json      -> core.coverage(...)
 python -m tools.project source open ... --json   -> core.source_open(...)
@@ -172,7 +207,9 @@ python -m tools.project source open ... --json   -> core.source_open(...)
 
 For JSON commands, the CLI adds top-level `ok: true` to the service
 `as_dict()` payload. `context` therefore has exact Core/CLI/MCP data parity.
-Coverage and source-open MCP calls use `coverage_view` and `source_open_view`, so
+After removing the CLI `ok` field and the MCP success envelope, `context-pack`
+has exact direct-builder/Core/CLI/MCP pack parity. Coverage and source-open MCP
+calls use `coverage_view` and `source_open_view`, so
 they have semantic report/excerpt parity while intentionally omitting the local
 CLI's absolute paths.
 
@@ -183,7 +220,8 @@ CLI's absolute paths.
 - Curated knowledge stays under the configured
   `wiki/projects/<project_id>/`-equivalent knowledge root.
 - The registered research source project remains read-only.
-- Host-safe DTOs add no persisted record and do not rewrite legacy data.
+- Host-safe DTOs add no persisted record and do not rewrite legacy data; Host
+  Context assembly only triggers the existing deterministic coverage-report write.
 - All schema/version checks continue through `tools.project_layout` and accepted
   R1 modules; future unsupported versions fail closed.
 - No source content is sent externally by this deterministic service path.
@@ -198,18 +236,21 @@ Run the focused regressions:
 python -B -m pytest -q `
   tests/test_research_core_service.py `
   tests/test_source_access.py `
-  tests/test_research_mcp_server.py
+  tests/test_research_mcp_server.py `
+  tests/test_host_context_pack.py
 ```
 
 They cover direct service operations, real CLI delegation, complete scan-policy
 mapping, host-safe DTO redaction, Manifest source-content authorization, exact
-source/evidence reopening, output-schema fail-closed behavior, source-project
+source/evidence reopening, Host Context byte accounting and deterministic
+truncation, output-schema fail-closed behavior, source-project
 hash/size/mtime/mode preservation, and the absence of LLM/network/Web calls.
 
 ## Explicit non-goals
 
-G-01 and G-07 do not implement Host Context Packs, orchestration, Hooks,
+G-01, G-07, and G-08 do not implement orchestration, Hooks, event-ledger
 reconciliation, one-click `project understand`, Web rendering, Verified Query,
-or planning. G-07 supplies only the minimal MCP adapter documented in
+or the I-02 task store and planning pipeline. G-07 supplies the minimal MCP
+adapter documented in
 [`research-mcp-server.md`](research-mcp-server.md); later capabilities remain
 separate roadmap tasks.
