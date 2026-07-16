@@ -36,7 +36,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | B-08 覆盖率与失败报告 | 已完成 | `5c864a2` | `checkpoint/b-08-coverage-report` |
 | C-01 提取 Schema | 已完成 | `e4b3fed` | `checkpoint/c-01-extraction-schema` |
 | C-02 文本族提取器 | 已完成 | `5093f80` | `checkpoint/c-02-text-extractors` |
-| C-03 Notebook extractor | 本次落库 | 本次提交 | `checkpoint/c-03-notebook-extractor` |
+| C-03 Notebook extractor | 已完成 | `946d05a`, `daf1330` | `checkpoint/c-03-notebook-extractor`, `checkpoint/c-03-notebook-payload-bounds` |
+| C-04 PDF page extractor | 本次落库 | 本次提交 | `checkpoint/c-04-pdf-extractor` |
 
 ## 3. 后续最小改动计划
 
@@ -320,16 +321,15 @@ git tag checkpoint/b-01-project-register
 
 ## 6. 下一项可执行任务
 
-The next task after C-03 is:
+The next task after C-04 is:
 
-> **C-04: deterministic page-level PDF extraction**
+> **C-08: deterministic locator-preserving chunking**
 
 Its minimum scope is strictly limited to:
 
-- locally and deterministically extract PDF files already classified by B-05;
-- emit C-01 Blocks with `PdfPageLocator`, exact one-based page numbers, and stable page order;
-- detect scanned or low-text pages and mark them for later OCR instead of fabricating page text;
-- retain the full-file hash, basic PDF metadata, and explicit failures without modifying the source project or sending content externally;
-- do not implement C-05 OCR/vision, C-08 chunking, D-stage `source_id`/Evidence/reopening, Manifest scheduling, MCP, Hook, Web, or LLM behavior.
+- chunk existing C-01 extracted documents along grounded section, symbol, PDF page, Notebook cell, table-range, or line boundaries;
+- retain a reopenable original locator on every chunk and reject arbitrary boundaries that cannot be represented by the C-01 locator union;
+- prove that ordered chunks cover their source blocks without omission or overlap and that boundary snapshots are byte-stable;
+- do not add new format extraction, source identity, Evidence, source reopening/relocation, Manifest scheduling, MCP, Hook, Web, or LLM behavior.
 
-C-04 remains a local deterministic Research Core extraction capability. It does not run OCR, load external resources, or generate research conclusions.
+C-08 is deterministic structure preservation, not semantic summarization. D-stage identity and Evidence remain separate later tasks.
