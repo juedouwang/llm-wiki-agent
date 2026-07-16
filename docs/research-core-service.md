@@ -1,4 +1,4 @@
-# Research Core Service Facade (G-01, extended by G-07, G-08, and E-01)
+# Research Core Service Facade (G-01, extended through the E-08 R2 slice)
 
 - G-01 status: implemented and accepted
 - Public module: `tools.research_core`
@@ -7,7 +7,8 @@
 - G-07 host-view validation: `tests/test_research_mcp_server.py`
 - G-08 Host Context Pack validation: `tests/test_host_context_pack.py`
 - E-01 run-orchestration validation: `tests/test_project_run_orchestration.py`
-- Existing checkpoints: `checkpoint/g-01-core-service`, `checkpoint/g-07-mcp-server`, `checkpoint/g-08-host-context-pack`, `checkpoint/e-01-run-orchestrator`
+- E-08 deterministic-action validation: `tests/test_project_understand.py`
+- Existing checkpoints: `checkpoint/g-01-core-service`, `checkpoint/g-07-mcp-server`, `checkpoint/g-08-host-context-pack`, `checkpoint/e-01-run-orchestrator`, `checkpoint/e-08-deterministic-understand`
 
 ## Purpose
 
@@ -43,6 +44,7 @@ project and does not create state in the research source tree.
 | `coverage(project_id)` | `tools.coverage_report.generate_coverage_report` | local/path-bearing `CoverageReportResult` |
 | `coverage_view(project_id)` | `coverage(...)` plus host-safe projection | path-free `HostCoverageResult` |
 | `host_context_pack(project_id, max_bytes=...)` | `tools.host_context.assemble_host_context_pack` over host-safe Core DTOs and current registries | path-free `HostContextPackResult` |
+| `project_understand(project_root, ..., resume_run_id=...)` | idempotent registration plus the E-01 orchestrator through `classify` | local/path-bearing `ProjectRunResult` |
 | `project_run_start(project_id, through_stage=...)` | `tools.project_orchestrator.ProjectRunOrchestrator.start` with current deterministic Core handlers | local/path-bearing `ProjectRunResult` |
 | `project_run_resume(project_id, run_id, through_stage=...)` | persisted checkpoint recovery without repeating succeeded stages | local/path-bearing `ProjectRunResult` |
 | `project_run_status(project_id, run_id)` | strict read-only run loading | local/path-bearing `ProjectRunResult` |
@@ -78,6 +80,32 @@ a dedicated Schema v1 `ProjectContextResult`. It retains:
 It intentionally omits source/workspace/machine/knowledge paths, `project.yaml`
 location, storage records, Git root, and Git origin URL. It performs no scan and
 does not expose the raw `ProjectRegistrationResult`.
+
+### One-action deterministic project understanding
+
+```python
+report = core.project_understand(
+    r"E:\Research\my-project",
+    final_goal="Reproduce the baseline",
+)
+
+same_run = core.project_understand(
+    r"E:\Research\my-project",
+    resume_run_id=report.run_id,
+)
+```
+
+The initial E-08 R2 method idempotently registers or reuses the project path,
+then delegates to the E-01 orchestrator with an exact `through_stage="classify"`
+boundary. A fresh call therefore succeeds at `register`, `inventory`, and
+`classify`, leaves every later stage `pending`, persists the report, and returns
+`paused`. Supplying `resume_run_id` retains the same logical run and skips
+already successful stages.
+
+This is deliberately not the full R3 E-08 contract. It does not extract project
+content, generate the 15 Markdown artifacts, invoke a model or Hook, render a
+website, or accept `--open`. See
+[`project-understand.md`](project-understand.md).
 
 ### Persisted project runs
 
@@ -227,6 +255,7 @@ The local CLI delegates these commands to `ResearchCoreService`:
 
 ```text
 python -m tools.project register ... --json      -> core.register(...)
+python -m tools.project understand ... --json    -> core.project_understand(...)
 python -m tools.project context ... --json       -> core.project_context(...)
 python -m tools.project context-pack ... --json  -> core.host_context_pack(...)
 python -m tools.project inventory ... --json     -> core.scan(...)
@@ -266,7 +295,8 @@ python -B -m pytest -q `
   tests/test_research_core_service.py `
   tests/test_source_access.py `
   tests/test_research_mcp_server.py `
-  tests/test_host_context_pack.py
+  tests/test_host_context_pack.py `
+  tests/test_project_understand.py
 ```
 
 They cover direct service operations, real CLI delegation, complete scan-policy
@@ -277,9 +307,10 @@ hash/size/mtime/mode preservation, and the absence of LLM/network/Web calls.
 
 ## Explicit non-goals
 
-G-01, G-07, and G-08 do not implement orchestration, Hooks, event-ledger
-reconciliation, one-click `project understand`, Web rendering, Verified Query,
-or the I-02 task store and planning pipeline. G-07 supplies the minimal MCP
-adapter documented in
-[`research-mcp-server.md`](research-mcp-server.md); later capabilities remain
-separate roadmap tasks.
+The accepted R2 Core slices do not yet implement Hooks, the H-04 event
+ledger, H-07 reconciliation, full extraction/synthesis, 15-artifact rendering,
+Web rendering/`--open`, Verified Query, or the I-02 task store and planning
+pipeline. The initial E-08 action is only the deterministic
+`register -> inventory -> classify` prefix. G-07 supplies the minimal MCP
+adapter documented in [`research-mcp-server.md`](research-mcp-server.md); later
+capabilities remain separate roadmap tasks.

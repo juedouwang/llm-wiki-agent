@@ -111,6 +111,7 @@ HOST_SOURCE_LOCATION_KIND = "llmwiki-host-source-location"
 HOST_SOURCE_LOCATION_VERSION = "host-source-location-v1"
 HOST_SOURCE_OPEN_KIND = "llmwiki-host-source-open"
 HOST_SOURCE_OPEN_VERSION = "host-source-open-v1"
+_PROJECT_UNDERSTAND_THROUGH_STAGE = "classify"
 
 _COVERAGE_AXES = (
     "research_role",
@@ -606,6 +607,49 @@ class ResearchCoreService:
                     "content_hash": None,
                 },
             ),
+        )
+
+    def project_understand(
+        self,
+        project_root: str | Path,
+        *,
+        project_id: str | None = None,
+        name: str | None = None,
+        knowledge_root: str | Path | None = None,
+        final_goal: str | None = None,
+        current_stage: str | None = None,
+        important_question: str | None = None,
+        deadline: str | None = None,
+        daily_available_hours: float | None = None,
+        resume_run_id: str | None = None,
+    ) -> ProjectRunResult:
+        """Register or reuse a project, then run the deterministic prefix.
+
+        The initial E-08 R2 slice intentionally stops after ``classify``.
+        Later extraction, synthesis, planning, and rendering stages remain
+        pending until their owning roadmap tasks install real handlers.
+        """
+
+        registration = self.register(
+            project_root=project_root,
+            project_id=project_id,
+            name=name,
+            knowledge_root=knowledge_root,
+            final_goal=final_goal,
+            current_stage=current_stage,
+            important_question=important_question,
+            deadline=deadline,
+            daily_available_hours=daily_available_hours,
+        )
+        if resume_run_id is not None:
+            return self.project_run_resume(
+                registration.project_id,
+                resume_run_id,
+                through_stage=_PROJECT_UNDERSTAND_THROUGH_STAGE,
+            )
+        return self.project_run_start(
+            registration.project_id,
+            through_stage=_PROJECT_UNDERSTAND_THROUGH_STAGE,
         )
 
     def project_run_start(

@@ -49,7 +49,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | G-01 Research Core service facade | complete | `baa9625` | `checkpoint/g-01-core-service` |
 | G-07 minimal MCP server | complete | `7b0eef9` | `checkpoint/g-07-mcp-server` |
 | G-08 budget-bounded Host Context Pack | complete | `3721fb5` | `checkpoint/g-08-host-context-pack` |
-| E-01 resumable staged run orchestration | complete | this task commit | `checkpoint/e-01-run-orchestrator` |
+| E-01 resumable staged run orchestration | complete | `146fc0f` | `checkpoint/e-01-run-orchestrator` |
+| E-08 deterministic one-action prefix (R2 slice) | complete | this task commit | `checkpoint/e-08-deterministic-understand` |
 
 ## 3. 后续最小改动计划
 
@@ -354,13 +355,21 @@ recovery, source-read-only boundary, Core/CLI entry points, and honest
 `unavailable` stage semantics are documented in
 [`project-run-orchestration.md`](project-run-orchestration.md).
 
+The initial deterministic R2 slice of E-08 is complete at
+`checkpoint/e-08-deterministic-understand`. The path-based Core/CLI action,
+idempotent registration, exact `register -> inventory -> classify` boundary,
+durable resume behavior, and explicit capability limits are documented in
+[`project-understand.md`](project-understand.md). The full R3 E-08 contract--15
+Markdown artifacts plus Web rendering and `--open`--remains incomplete.
+
 The next executable roadmap task is:
 
-> **E-08 (initial deterministic R2 slice): expose the current run prefix as one user action**
+> **H-04: append-only host event ledger and dirty-path queue**
 
-This narrow slice must call the E-01 orchestrator rather than duplicate its
-state machine, execute only the already implemented deterministic
-`register ? inventory ? classify` prefix, return the durable run report, and
-remain resumable. It must not claim extraction, 15 Markdown artifacts, Web
-rendering/`--open`, Hook behavior, or model-driven understanding. Those remain
-explicitly unavailable until their owning roadmap tasks land.
+This task must define one host-neutral, versioned event model for Codex and
+Claude-style file-change signals, persist append-only events and a derived dirty
+path queue under the registered project machine-state tree, make duplicate
+submission idempotent, tolerate deterministic out-of-order ingestion, and keep
+events from directly mutating curated knowledge. It must preserve source
+read-only behavior and must not claim H-07 reconciliation, Hook reliability, or
+selective refresh before those later tasks land.

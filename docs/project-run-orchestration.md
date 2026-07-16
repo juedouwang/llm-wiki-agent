@@ -186,9 +186,10 @@ source file hashes, sizes, timestamps, and modes across start/resume paths and
 assert that no source-local `.llmwiki/` or `wiki/` directory is created.
 
 The deterministic E-01 path makes no LLM call, opens no network connection,
-opens no browser, and triggers no Hook. The public E-08 one-action
-`project understand` command, extraction orchestration, 15 Markdown outputs,
-and Web `--open` behavior remain later work.
+opens no browser, and triggers no Hook. The initial E-08 R2 action now exposes
+this orchestrator through `classify`; extraction orchestration, 15 Markdown
+outputs, Hooks, and Web `--open` behavior remain later work. See
+[`project-understand.md`](project-understand.md).
 
 ## Validation
 

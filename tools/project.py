@@ -98,6 +98,63 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print a machine-readable JSON result",
     )
 
+    understand = subparsers.add_parser(
+        "understand",
+        help=(
+            "Register or reuse a project and run the deterministic "
+            "understanding prefix."
+        ),
+    )
+    understand.add_argument(
+        "project_path",
+        help="Existing research-project directory",
+    )
+    understand.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    understand.add_argument(
+        "--project-id",
+        help="Optional lowercase path-safe ID; generated from path when omitted",
+    )
+    understand.add_argument("--name", help="Human-readable project name")
+    understand.add_argument(
+        "--knowledge-root",
+        help=(
+            "Parent directory for curated project knowledge; the project ID is "
+            "appended automatically"
+        ),
+    )
+    understand.add_argument(
+        "--goal",
+        "--final-goal",
+        dest="final_goal",
+        help="Initial final research goal",
+    )
+    understand.add_argument("--current-stage", help="Initial research stage")
+    understand.add_argument(
+        "--important-question",
+        help="Most important question at first registration",
+    )
+    understand.add_argument("--deadline", help="Optional ISO date (YYYY-MM-DD)")
+    understand.add_argument(
+        "--daily-hours",
+        dest="daily_available_hours",
+        type=float,
+        help="Available research time per day, greater than 0 and at most 24",
+    )
+    understand.add_argument(
+        "--resume-run",
+        dest="resume_run_id",
+        help="Resume this durable run instead of creating a new run ID",
+    )
+    understand.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+
     context = subparsers.add_parser(
         "context",
         help="Load path-free trusted project identity and onboarding context.",
@@ -414,6 +471,25 @@ def _run_register(args: argparse.Namespace) -> int:
     print(f"Knowledge:     {result.layout.knowledge_root}")
     print(f"Record:        {result.project_file}")
     return 0
+
+
+def _run_project_understand(args: argparse.Namespace) -> int:
+    try:
+        result = ResearchCoreService(args.workspace_root).project_understand(
+            project_root=args.project_path,
+            project_id=args.project_id,
+            name=args.name,
+            knowledge_root=args.knowledge_root,
+            final_goal=args.final_goal,
+            current_stage=args.current_stage,
+            important_question=args.important_question,
+            deadline=args.deadline,
+            daily_available_hours=args.daily_available_hours,
+            resume_run_id=args.resume_run_id,
+        )
+    except (LayoutError, OSError) as exc:
+        return _print_command_error(exc, as_json=args.json)
+    return _print_project_run_result(result, as_json=args.json)
 
 
 def _run_context(args: argparse.Namespace) -> int:
@@ -836,6 +912,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "register":
         return _run_register(args)
+    if args.command == "understand":
+        return _run_project_understand(args)
     if args.command == "context":
         return _run_context(args)
     if args.command == "context-pack":

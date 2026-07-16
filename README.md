@@ -149,6 +149,7 @@ The `research-assistant` branch is evolving this repository into a local-first, 
 - [Final product and scan-output contract](docs/research-assistant-product-contract.md)
 - [Minimum-scope implementation roadmap](docs/research-assistant-roadmap.md)
 - [Host-neutral Research Core service](docs/research-core-service.md)
+- [Deterministic one-action project understanding](docs/project-understand.md)
 - [Minimal MCP stdio server](docs/research-mcp-server.md)
 - [B-02 explainable scan-policy contract](docs/scan-policy.md)
 
@@ -156,6 +157,19 @@ The `research-assistant` branch is evolving this repository into a local-first, 
 - [B-04 file fingerprints and incremental Manifest contract](docs/file-fingerprints.md)
 - [B-05 deterministic file classification contract](docs/file-classification.md)
 - [B-06 Manifest two-axis file-state contract](docs/manifest-file-state.md)
+
+The current deterministic one-action prefix can be run from an empty
+assistant workspace with:
+
+```bash
+python -B -m tools.project understand /path/to/research-project \
+  --workspace-root /path/to/assistant-workspace --json
+```
+
+This currently performs only `register -> inventory -> classify`, persists a
+resumable run report, and leaves later stages pending. It does **not** yet
+produce the 15-artifact package or local Web dashboard and has no `--open`
+option.
 
 The current R2 transport can be started for any MCP-capable host with:
 
