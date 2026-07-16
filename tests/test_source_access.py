@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -37,6 +38,7 @@ from tools.source_access import (
     TABLE_EXCERPT_FORMAT,
     SourceBoundaryError,
     SourceContentMismatchError,
+    SourceContentPolicyDeniedError,
     SourceExcerptMismatchError,
     SourceFormatError,
     SourceLocatorError,
@@ -106,6 +108,12 @@ class SourceAccessTests(unittest.TestCase):
         self.code_path = self.project / "src" / "model.py"
         self.code_bytes = b"alpha = 1\r\nbeta = 2\r\ngamma = alpha + beta\r\n"
         self.code_path.write_bytes(self.code_bytes)
+        self.sensitive_secret = "SOURCE_ACCESS_ENV_SECRET_5f07a2c1"
+        self.sensitive_path = self.project / ".env"
+        self.sensitive_path.write_text(
+            f"TOKEN={self.sensitive_secret}\n",
+            encoding="utf-8",
+        )
 
         self.pdf_path = self.project / "papers" / "study.pdf"
         self.pdf_path.write_bytes(
@@ -524,6 +532,110 @@ class SourceAccessTests(unittest.TestCase):
                 self.registration.project_id,
                 "evd-" + "0" * 64,
             )
+
+    def test_manifest_content_policy_is_explicit_and_host_local_only_is_allowed(
+        self,
+    ) -> None:
+        sensitive = self.source_for(".env")
+        ordinary = self.source_for("src/model.py")
+        before = self.source_snapshot()
+
+        with self.assertRaises(SourceContentPolicyDeniedError) as denied:
+            open_source(
+                self.workspace,
+                self.registration.project_id,
+                source_id=sensitive.source_id,
+                locator=LineRangeLocator(1, 1),
+                expected_content_hash=sensitive.current_content_hash,
+                enforce_content_policy=True,
+            )
+        self.assertNotIn(self.sensitive_secret, str(denied.exception))
+
+        opened = open_source(
+            self.workspace,
+            self.registration.project_id,
+            source_id=ordinary.source_id,
+            locator=LineRangeLocator(1, 1),
+            expected_content_hash=ordinary.current_content_hash,
+            enforce_content_policy=True,
+        )
+        self.assertEqual(opened.excerpt, "alpha = 1\r\n")
+        self.assertEqual(self.source_snapshot(), before)
+
+    def test_manifest_content_policy_denies_all_restricted_states(self) -> None:
+        source = self.source_for("src/model.py")
+        manifest_file = self.registration.layout.manifest_file
+        original_text = manifest_file.read_text(encoding="utf-8")
+        records = [json.loads(line) for line in original_text.splitlines()]
+        file_record = next(
+            record for record in records if record.get("path") == "src/model.py"
+        )
+        states = (
+            ("metadata_only", "content-size-limit"),
+            ("metadata_only", "outside-scan-boundary"),
+            ("ignored", "explicit-ignore"),
+        )
+        try:
+            for read_depth, reason_code in states:
+                with self.subTest(
+                    read_depth=read_depth,
+                    reason_code=reason_code,
+                ):
+                    file_record["file_state"] = {
+                        "schema_version": 1,
+                        "kind": "llmwiki-file-state",
+                        "processing_status": "discovered",
+                        "read_depth": read_depth,
+                        "reason_code": reason_code,
+                        "reason": "test-only current Manifest content restriction",
+                    }
+                    persisted_states = [
+                        record["file_state"]
+                        for record in records
+                        if isinstance(record.get("file_state"), dict)
+                    ]
+                    summary = records[0]["file_state_summary"]
+                    summary["processing_statuses"] = dict(
+                        sorted(
+                            Counter(
+                                state["processing_status"]
+                                for state in persisted_states
+                            ).items()
+                        )
+                    )
+                    summary["read_depths"] = dict(
+                        sorted(
+                            Counter(
+                                state["read_depth"] for state in persisted_states
+                            ).items()
+                        )
+                    )
+                    summary["reasons"] = dict(
+                        sorted(
+                            Counter(
+                                state["reason_code"] for state in persisted_states
+                            ).items()
+                        )
+                    )
+                    manifest_file.write_text(
+                        "".join(
+                            json.dumps(record, ensure_ascii=False, sort_keys=True)
+                            + "\n"
+                            for record in records
+                        ),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(SourceContentPolicyDeniedError):
+                        open_source(
+                            self.workspace,
+                            self.registration.project_id,
+                            source_id=source.source_id,
+                            locator=LineRangeLocator(1, 1),
+                            expected_content_hash=source.current_content_hash,
+                            enforce_content_policy=True,
+                        )
+        finally:
+            manifest_file.write_text(original_text, encoding="utf-8")
 
     def test_symlink_escape_is_rejected_before_source_content_is_opened(self) -> None:
         source = self.source_for("src/model.py")

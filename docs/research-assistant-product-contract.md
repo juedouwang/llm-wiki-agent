@@ -4,7 +4,7 @@
 - 决策编号：`P-05 Agent 原生执行闭环`
 - 确认日期：2026-07-15
 - 适用分支：`research-assistant`
-- 当前实现状态：R1 确定性基础链已于 2026-07-16 验收；R2 的 G-01 Research Core service facade 已实现。本文其余内容仍描述目标产品，不代表后续能力已经全部实现。
+- 当前实现状态：R1 确定性基础链已于 2026-07-16 验收；R2 的 G-01 Research Core service facade 与 G-07 minimal MCP server 已实现。G-07 query, reconcile, and plan remain explicit unavailable contracts; they do not represent completed later Core capabilities. 本文其余内容仍描述目标产品，不代表后续能力已经全部实现。
 
 ## 1. 产品定义
 

@@ -47,6 +47,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | D-06 source and Evidence health | complete | `9b38353` | `checkpoint/d-06-source-health` |
 | J-01 R1 basic-chain acceptance | complete (R1 slice) | `73070f1` | `checkpoint/j-01-r1-e2e` |
 | G-01 Research Core service facade | complete | current commit | `checkpoint/g-01-core-service` |
+| G-07 minimal MCP server | complete | current commit | `checkpoint/g-07-mcp-server` |
 
 ## 3. 后续最小改动计划
 
@@ -336,21 +337,17 @@ git tag checkpoint/b-01-project-register
 
 ## 6. Next executable task
 
-R1 trusted inventory and source-location acceptance is complete. Its final
-commit, test, limitation, and rollback record is in
-[`r1-acceptance-report.md`](r1-acceptance-report.md).
-
-G-01 is complete at `checkpoint/g-01-core-service`; its service contract,
-safety boundary, CLI equivalence, and focused validation are documented in
-[`research-core-service.md`](research-core-service.md).
+R1 and the G-01 Core facade remain accepted at their checkpoints. G-07 is
+complete at `checkpoint/g-07-mcp-server`; its stdio transport, six-tool catalog,
+honest unavailable capability contracts, stable error mapping, privacy boundary,
+and real MCP client validation are documented in
+[`research-mcp-server.md`](research-mcp-server.md).
 
 The next executable roadmap task is:
 
-> **G-07: minimal MCP server over Research Core**
+> **G-08: budget-bounded Host Context Pack**
 
-Its R2 scope is to expose the Core project-context, coverage, source-open, query,
-reconcile, and plan tool contracts through one host-neutral MCP adapter with
-stable error mapping and CLI/service parity. The adapter must not duplicate
-filesystem workflows, leak sensitive raw content, or claim later roadmap
-capabilities are complete. G-08 and the remaining R2 tasks stay separate atomic
-checkpoints.
+Its R2 scope is to assemble project state, tasks, risks, and Evidence references
+through Core data while enforcing a deterministic context budget, making every
+omission reason visible, and filtering sensitive paths. It must not bulk-load the
+wiki or add orchestration, Hook, extraction, or Web behavior from later tasks.

@@ -90,6 +90,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print a machine-readable JSON result",
     )
 
+    context = subparsers.add_parser(
+        "context",
+        help="Load path-free trusted project identity and onboarding context.",
+    )
+    context.add_argument("project_id", help="B-01 registered project ID")
+    context.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    context.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+
     inventory = subparsers.add_parser(
         "inventory",
         help="Inventory, fingerprint, classify, and assign file state.",
@@ -299,6 +315,38 @@ def _run_register(args: argparse.Namespace) -> int:
     print(f"Machine state: {result.layout.machine_root}")
     print(f"Knowledge:     {result.layout.knowledge_root}")
     print(f"Record:        {result.project_file}")
+    return 0
+
+
+def _run_context(args: argparse.Namespace) -> int:
+    try:
+        result = ResearchCoreService(args.workspace_root).project_context(
+            project_id=args.project_id,
+        )
+    except (LayoutError, OSError) as exc:
+        return _print_command_error(exc, as_json=args.json)
+
+    payload = result.as_dict()
+    if args.json:
+        print(json.dumps({"ok": True, **payload}, indent=2, ensure_ascii=False))
+        return 0
+
+    print(f"Project context:  {result.name}")
+    print(f"Project ID:       {result.project_id}")
+    print(f"Registered at:    {result.registered_at}")
+    print(f"Git repository:   {result.git_is_repository}")
+    print(f"Git branch:       {result.git_branch or '-'}")
+    print(f"Git head:         {result.git_head_commit or '-'}")
+    print(f"Final goal:       {result.final_goal or '-'}")
+    print(f"Current stage:    {result.current_stage or '-'}")
+    print(f"Key question:     {result.important_question or '-'}")
+    print(f"Deadline:         {result.deadline or '-'}")
+    hours = (
+        str(result.daily_available_hours)
+        if result.daily_available_hours is not None
+        else "-"
+    )
+    print(f"Daily hours:      {hours}")
     return 0
 
 
@@ -610,6 +658,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "register":
         return _run_register(args)
+    if args.command == "context":
+        return _run_context(args)
     if args.command == "inventory":
         return _run_inventory(args)
     if args.command == "coverage":

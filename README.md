@@ -148,11 +148,29 @@ The `research-assistant` branch is evolving this repository into a local-first, 
 
 - [Final product and scan-output contract](docs/research-assistant-product-contract.md)
 - [Minimum-scope implementation roadmap](docs/research-assistant-roadmap.md)
+- [Host-neutral Research Core service](docs/research-core-service.md)
+- [Minimal MCP stdio server](docs/research-mcp-server.md)
 - [B-02 explainable scan-policy contract](docs/scan-policy.md)
+
 - [B-03 project inventory and accountable directory contract](docs/project-inventory.md)
 - [B-04 file fingerprints and incremental Manifest contract](docs/file-fingerprints.md)
 - [B-05 deterministic file classification contract](docs/file-classification.md)
 - [B-06 Manifest two-axis file-state contract](docs/manifest-file-state.md)
+
+The current R2 transport can be started for any MCP-capable host with:
+
+```bash
+python -B -m tools.research_mcp --workspace-root /path/to/assistant-workspace
+```
+
+Project context, coverage, and source-open are real Core calls. MCP results use
+path-free host DTOs; every advertised input/output JSON Schema is enforced;
+coverage persists deterministic machine state and is not marked read-only; and
+source-open denies Manifest-sensitive or otherwise content-restricted files. The
+default `local-only` external-send mode still permits explicit local host access
+to ordinary policy-authorized files. Query, reconciliation, and planning
+advertise stable contracts but fail explicitly as unavailable until their
+corresponding roadmap slices are implemented.
 
 ## What You Get
 

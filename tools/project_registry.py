@@ -66,6 +66,10 @@ class ProjectRecordError(ProjectRegistrationError):
     """Raised when a persisted project record cannot be trusted."""
 
 
+class ProjectNotRegisteredError(ProjectRecordError):
+    """Raised when no persisted registration exists for a valid project ID."""
+
+
 @dataclass(frozen=True)
 class ProjectRegistrationResult:
     """The persisted project registration and its resolved layout."""
@@ -606,7 +610,7 @@ def load_registered_project(
         / "project.yaml"
     )
     if not project_file.exists():
-        raise ProjectRecordError(f"project is not registered: {normalized_id}")
+        raise ProjectNotRegisteredError(f"project is not registered: {normalized_id}")
     if not project_file.is_file():
         raise ProjectRecordError(
             f"registered project record is not a file: {project_file}"

@@ -11,13 +11,18 @@ import sys
 import tempfile
 import unittest
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from tools.evidence_registry import register_evidence
 from tools.extraction_schema import LineRangeLocator
 from tools.project import main as project_main
-from tools.research_core import ResearchCoreService
+from tools.research_core import (
+    HostCoverageResult,
+    HostSourceOpenResult,
+    ResearchCoreService,
+)
 from tools.scan_policy import ScanPolicyConfig, ScanPolicyError
 from tools.source_access import (
     SourceLocatorError,
@@ -152,6 +157,48 @@ class ResearchCoreServiceTests(unittest.TestCase):
         self.assertEqual(self.source_snapshot(), before)
         self.assertFalse((self.project / ".llmwiki").exists())
         self.assertFalse((self.project / "wiki").exists())
+
+    def test_host_views_reject_nested_path_or_locator_injection(self) -> None:
+        registration, _inventory, _coverage, source, locator, _opened = (
+            self.prepare_results()
+        )
+        coverage_view = self.service.coverage_view(registration.project_id)
+        bad_report = json.loads(json.dumps(coverage_view.report))
+        bad_report["manifest"]["manifest_file"] = str(
+            self.project / "secret-manifest.jsonl"
+        )
+        with self.assertRaises(ValueError):
+            HostCoverageResult(
+                project_id=registration.project_id,
+                report=bad_report,
+            ).as_dict()
+
+        source_view = self.service.source_open_view(
+            registration.project_id,
+            source.source_id,
+            locator=locator,
+        )
+
+        source_path = self.source_path
+
+        class InjectedLocator:
+            def as_dict(self):
+                return {
+                    **locator.as_dict(),
+                    "absolute_path": str(source_path),
+                }
+
+        injected_open = replace(source_view.opened, locator=InjectedLocator())
+        with self.assertRaises(ValueError):
+            HostSourceOpenResult(injected_open).as_dict()
+
+        absolute_location = replace(
+            source_view.opened.source,
+            current_path=str(self.source_path),
+        )
+        injected_open = replace(source_view.opened, source=absolute_location)
+        with self.assertRaises(ValueError):
+            HostSourceOpenResult(injected_open).as_dict()
 
     def test_scan_accepts_complete_policy_without_narrowing_core_capability(
         self,

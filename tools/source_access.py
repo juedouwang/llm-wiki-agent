@@ -40,6 +40,8 @@ if __package__:
         extract_notebook_bytes,
     )
     from .pdf_extractor import PdfExtractionLimits, extract_pdf_bytes
+    from .file_state import file_state_from_dict
+    from .project_inventory import PROJECT_MANIFEST_VERSION, load_project_manifest
     from .project_layout import CURRENT_SCHEMA_VERSION, LayoutError
     from .project_registry import load_registered_project
     from .source_recovery import SourceRecoveryError, recover_source
@@ -78,6 +80,11 @@ else:
     from pdf_extractor import (  # type: ignore[no-redef]
         PdfExtractionLimits,
         extract_pdf_bytes,
+    )
+    from file_state import file_state_from_dict  # type: ignore[no-redef]
+    from project_inventory import (  # type: ignore[no-redef]
+        PROJECT_MANIFEST_VERSION,
+        load_project_manifest,
     )
     from project_layout import (  # type: ignore[no-redef]
         CURRENT_SCHEMA_VERSION,
@@ -148,6 +155,12 @@ class SourceContentMismatchError(SourceAccessError):
     """Raised when current bytes do not match the recorded source version."""
 
     reason_code = "source-content-hash-mismatch"
+
+
+class SourceContentPolicyDeniedError(SourceAccessError):
+    """Raised when the current Manifest forbids raw-content access."""
+
+    reason_code = "source-content-policy-denied"
 
 
 class SourceVersionMismatchError(SourceAccessError):
@@ -443,6 +456,50 @@ def locate_source(
         current_version=source.current_version,
         content_hash=source.current_content_hash,
     )
+
+
+_CONTENT_POLICY_DENIAL_REASONS = frozenset(
+    {"sensitive-path", "content-size-limit", "outside-scan-boundary"}
+)
+
+
+def _assert_manifest_content_access_allowed(
+    workspace_root: str | Path,
+    location: SourceLocation,
+) -> None:
+    """Fail closed when the current Manifest forbids raw-content access."""
+
+    registration = load_registered_project(workspace_root, location.project_id)
+    manifest = load_project_manifest(
+        registration.layout.manifest_file,
+        project_id=registration.project_id,
+        project_root=registration.project_root,
+        required_manifest_version=PROJECT_MANIFEST_VERSION,
+    )
+
+    matching = [
+        record
+        for record in manifest.file_records
+        if record["path"] == location.current_path
+        and record["content_sha256"] == location.content_hash
+    ]
+    if len(matching) != 1:
+        raise SourceContentPolicyDeniedError(
+            "current Source has no unique matching Manifest policy record"
+        )
+    try:
+        state = file_state_from_dict(matching[0]["file_state"])
+    except ValueError as exc:
+        raise SourceAccessError(
+            "current Manifest file-state policy record is invalid"
+        ) from exc
+    if (
+        state.reason_code in _CONTENT_POLICY_DENIAL_REASONS
+        or state.read_depth == "ignored"
+    ):
+        raise SourceContentPolicyDeniedError(
+            "current Manifest forbids raw-content access for this Source"
+        )
 
 
 def _read_verified_source(location: SourceLocation) -> bytes:
@@ -743,11 +800,15 @@ def open_source(
     expected_excerpt_hash: str | None = None,
     evidence_id: str | None = None,
     evidence_source_version: int | None = None,
+    enforce_content_policy: bool = False,
 ) -> SourceOpenResult:
     """Open one locator at the current path and verify exact current bytes."""
 
     normalized_locator = _normalize_locator(locator)
     location = locate_source(workspace_root, project_id, source_id)
+    if enforce_content_policy:
+        _assert_manifest_content_access_allowed(workspace_root, location)
+
     def verify_requested_identity(candidate: SourceLocation) -> None:
         if evidence_source_version is not None:
             if not _is_integer(evidence_source_version) or evidence_source_version < 1:
@@ -786,6 +847,8 @@ def open_source(
             location.project_id,
             location.source_id,
         )
+        if enforce_content_policy:
+            _assert_manifest_content_access_allowed(workspace_root, location)
         verify_requested_identity(location)
         data = _read_verified_source(location)
     excerpt, excerpt_format = _reopen_locator(
@@ -827,6 +890,8 @@ def open_evidence(
     workspace_root: str | Path,
     project_id: str,
     evidence_id: str,
+    *,
+    enforce_content_policy: bool = False,
 ) -> SourceOpenResult:
     """Reopen and verify one persisted Evidence against the current source."""
 
@@ -850,4 +915,5 @@ def open_evidence(
         expected_excerpt_hash=evidence.excerpt_hash,
         evidence_id=evidence.evidence_id,
         evidence_source_version=evidence.source_version,
+        enforce_content_policy=enforce_content_policy,
     )

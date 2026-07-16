@@ -1,24 +1,24 @@
-# Research Core Service Facade (G-01)
+# Research Core Service Facade (G-01, extended by G-07)
 
-- Status: implemented for the R2 G-01 scope
+- G-01 status: implemented and accepted
 - Public module: `tools.research_core`
 - Public class: `ResearchCoreService`
-- Validation: `tests/test_research_core_service.py`
-- Checkpoint: `checkpoint/g-01-core-service`
+- Core validation: `tests/test_research_core_service.py`
+- G-07 host-view validation: `tests/test_research_mcp_server.py`
+- Checkpoints: `checkpoint/g-01-core-service`, `checkpoint/g-07-mcp-server`
 
 ## Purpose
 
 `ResearchCoreService` is the host-independent Python boundary for deterministic
-Research Core capabilities. The project CLI now delegates the G-01 operations
-to this facade instead of calling storage modules directly. Future MCP, Codex,
-Claude Code, Hook, Web, or other adapters must call the same service boundary;
-they must not duplicate the underlying filesystem workflows.
+Research Core capabilities. The project CLI and MCP transport delegate to this
+facade instead of duplicating storage or source-access workflows. Future Codex,
+Claude Code, Hook, Web, and other adapters must use the same boundary.
 
 The facade does not parse command-line arguments, print terminal output, start a
-server, call an LLM, open a browser, or import a host adapter. It returns the
-existing typed result objects and lets the existing Core exceptions propagate.
-This keeps policy, schema validation, source-read-only behavior, and fail-closed
-version checks in the already accepted R1 implementations.
+server, call an LLM, open a browser, or import a host adapter. It returns typed
+results and lets typed Core exceptions propagate. Policy, schema validation,
+source-read-only behavior, and fail-closed version checks remain in the domain
+modules accepted during R1.
 
 ## Construction
 
@@ -31,14 +31,17 @@ core = ResearchCoreService(workspace_root=r"E:\ResearchCore")
 Construction only normalizes the workspace path. It does not register or scan a
 project and does not create state in the research source tree.
 
-## G-01 operations
+## Service operations
 
-| Service method | Existing deterministic implementation | Return type |
+| Service method | Deterministic implementation | Return type |
 |---|---|---|
 | `register(...)` | `tools.project_registry.register_project` | `ProjectRegistrationResult` |
-| `scan(...)` | `tools.project_inventory.inventory_project` with a `ScanPolicyConfig` | `ProjectInventoryResult` |
-| `coverage(project_id)` | `tools.coverage_report.generate_coverage_report` | `CoverageReportResult` |
-| `source_open(...)` | `tools.source_access.open_source` or `open_evidence` | `SourceOpenResult` |
+| `project_context(project_id)` | validated `tools.project_registry.load_registered_project` projection | path-free `ProjectContextResult` |
+| `scan(...)` | `tools.project_inventory.inventory_project` with `ScanPolicyConfig` | `ProjectInventoryResult` |
+| `coverage(project_id)` | `tools.coverage_report.generate_coverage_report` | local/path-bearing `CoverageReportResult` |
+| `coverage_view(project_id)` | `coverage(...)` plus host-safe projection | path-free `HostCoverageResult` |
+| `source_open(...)` | `tools.source_access.open_source` or `open_evidence` | local/path-bearing `SourceOpenResult` |
+| `source_open_view(...)` | policy-enforced `source_open(...)` plus host-safe projection | path-free `HostSourceOpenResult` |
 
 ### Register
 
@@ -52,6 +55,23 @@ registration = core.register(
 
 Registration remains deterministic and source-read-only. It creates project
 identity and external storage only; it is not a completed scan.
+
+### Project context
+
+```python
+context = core.project_context("study-0123456789ab")
+```
+
+This read-only G-07 extension revalidates the persisted registration and returns
+a dedicated Schema v1 `ProjectContextResult`. It retains:
+
+- project ID, name, identity strategy, and registration time;
+- onboarding goal, stage, key question, deadline, and daily hours;
+- Git availability, repository status, branch, and head commit.
+
+It intentionally omits source/workspace/machine/knowledge paths, `project.yaml`
+location, storage records, Git root, and Git origin URL. It performs no scan and
+does not expose the raw `ProjectRegistrationResult`.
 
 ### Scan
 
@@ -68,31 +88,46 @@ policy = ScanPolicyConfig(
 inventory = core.scan(registration.project_id, policy_config=policy)
 ```
 
-`scan` is the service name for the current `inventory` command. A complete
-`ScanPolicyConfig` is the canonical host-facing input, so adapters retain every
-B-02 control: include/exclude and sensitive patterns, external-send rules, size
-limits, symlink behavior, and case sensitivity. The convenience
-`include_patterns`, `exclude_patterns`, and `follow_symlinks` arguments remain for
-the existing CLI mapping and cannot be combined with `policy_config`. The method
-then runs the accepted B-03 through B-06 inventory chain; policy and
-source-read-only constraints remain authoritative in `tools.scan_policy` and
-`tools.project_inventory`.
+`scan` is the service name for the existing `inventory` command. A complete
+`ScanPolicyConfig` is the canonical host-facing input, retaining B-02 controls
+for include/exclude and sensitive patterns, external-send rules, size limits,
+symlink behavior, and case sensitivity. Convenience include/exclude/follow
+arguments remain for CLI mapping and cannot be combined with `policy_config`.
+The method runs the accepted B-03 through B-06 chain; `tools.scan_policy` and
+`tools.project_inventory` remain authoritative.
 
-### Coverage
+### Coverage and host coverage view
 
 ```python
-coverage = core.coverage(registration.project_id)
+local_coverage = core.coverage(registration.project_id)
+host_coverage = core.coverage_view(registration.project_id)
 ```
 
-Coverage is generated from the current Manifest and remains reconcilable by
-count, byte size, role, status, read depth, and reason.
+Both generate the same deterministic report from the current Manifest and
+persist it under
+`.llmwiki/projects/<project_id>/indexes/coverage-report.json`. The report remains
+reconcilable by count, byte size, role, status, read depth, and reason.
 
-### Source open
+`CoverageReportResult` retains trusted local `manifest_file` and `report_file`
+paths for backward-compatible CLI automation. `HostCoverageResult` retains only
+`project_id`, `report_persisted`, and a recursively projected report body with
+closed fields, normalized relative failure paths, and validated coverage buckets.
+Unknown nested fields fail closed instead of crossing the host boundary.
+Consequently coverage is idempotent but not read-only.
+
+### Source open and host source-open view
 
 ```python
 from tools.extraction_schema import LineRangeLocator
 
-opened = core.source_open(
+local_open = core.source_open(
+    registration.project_id,
+    "src-...",
+    locator=LineRangeLocator(10, 20),
+    expected_content_hash="...",
+)
+
+host_open = core.source_open_view(
     registration.project_id,
     "src-...",
     locator=LineRangeLocator(10, 20),
@@ -100,36 +135,46 @@ opened = core.source_open(
 )
 ```
 
-A `src-*` target requires a typed Locator or locator dictionary. The CLI parses
-strict locator JSON only for a confirmed `src-*` target; malformed JSON therefore
-does not change the established Evidence-override or unknown-target error
-priority. An `evd-*` target reuses its persisted locator and hashes and rejects
-caller overrides. Unknown target types and invalid locator combinations fail
-closed with the existing `SourceAccessError` hierarchy and stable `reason_code`
-values.
+A `src-*` target requires a typed Locator or locator dictionary. An `evd-*`
+target reuses its persisted locator and hashes and rejects caller overrides.
+Unknown target types and invalid locator combinations fail closed through the
+existing `SourceAccessError` hierarchy and stable `reason_code` values.
 
-## CLI equivalence
+`source_open(...)` keeps backward-compatible local behavior and accepts the
+explicit `enforce_content_policy` switch. `source_open_view(...)` always enables
+that switch. Before returning raw content it requires one unique current Manifest
+record matching relative path plus content SHA-256, and denies
+`sensitive-path`, `content-size-limit`, `outside-scan-boundary`, and every
+`read_depth: ignored` state. The check runs before byte reads and again after
+relocation recovery.
 
-These CLI entry points instantiate `ResearchCoreService` with
-`--workspace-root`, call the corresponding method, and serialize the returned
-object with the same `as_dict()` method used by direct Python callers:
+The default `external_send_mode: local-only` prohibits sending raw content to an
+independent external provider. It does not by itself prohibit an explicit local
+host-agent open when Manifest local content access is allowed.
+
+`SourceOpenResult` retains local `project_root` and `absolute_path` fields.
+`HostSourceOpenResult` retains only stable source identity, a validated normalized
+current relative path and version, a re-parsed closed Locator union, excerpt,
+hashes, formats, and Evidence identity fields. Injected locator or path fields fail
+closed before serialization.
+
+## CLI and transport equivalence
+
+The local CLI delegates these commands to `ResearchCoreService`:
 
 ```text
-python tools/project.py register ... --json      -> core.register(...)
-python tools/project.py inventory ... --json     -> core.scan(...)
-python tools/project.py coverage ... --json      -> core.coverage(...)
-python tools/project.py source open ... --json   -> core.source_open(...)
+python -m tools.project register ... --json      -> core.register(...)
+python -m tools.project context ... --json       -> core.project_context(...)
+python -m tools.project inventory ... --json     -> core.scan(...)
+python -m tools.project coverage ... --json      -> core.coverage(...)
+python -m tools.project source open ... --json   -> core.source_open(...)
 ```
 
-For successful JSON commands, the CLI payload is exactly:
-
-```python
-{"ok": True, **service_result.as_dict()}
-```
-
-The G-01 tests compare all four CLI payloads with their direct service results
-and verify the exact method arguments. Existing command names and JSON fields
-remain compatible.
+For JSON commands, the CLI adds top-level `ok: true` to the service
+`as_dict()` payload. `context` therefore has exact Core/CLI/MCP data parity.
+Coverage and source-open MCP calls use `coverage_view` and `source_open_view`, so
+they have semantic report/excerpt parity while intentionally omitting the local
+CLI's absolute paths.
 
 ## Safety and ownership boundaries
 
@@ -138,32 +183,33 @@ remain compatible.
 - Curated knowledge stays under the configured
   `wiki/projects/<project_id>/`-equivalent knowledge root.
 - The registered research source project remains read-only.
-- The facade adds no new persisted record or schema and does not rewrite legacy
-  data.
-- All schema/version checks continue through `tools.project_layout` and the
-  accepted R1 modules; unsupported future versions fail closed.
-- No source content is sent externally by the G-01 service path.
+- Host-safe DTOs add no persisted record and do not rewrite legacy data.
+- All schema/version checks continue through `tools.project_layout` and accepted
+  R1 modules; future unsupported versions fail closed.
+- No source content is sent externally by this deterministic service path.
+- Raw content crosses a host boundary only through explicit, policy-authorized
+  source-open.
 
 ## Validation
 
-Run the focused G-01 regression:
+Run the focused regressions:
 
 ```powershell
-python -B -m unittest tests.test_research_core_service
+python -B -m pytest -q `
+  tests/test_research_core_service.py `
+  tests/test_source_access.py `
+  tests/test_research_mcp_server.py
 ```
 
-The test covers:
-
-1. direct register, complete-policy scan, coverage, Source open, and Evidence open;
-2. exact real script/module CLI versus direct structured-result equivalence;
-3. exact adapter delegation and serialization arguments;
-4. source-open failure priority and stable reason codes;
-5. source-project hash/size/mtime/mode preservation and no in-project state;
-6. the facade dependency closure contains no CLI or host adapter;
-7. the deterministic chain performs no LLM, network, URL, or Web UI call.
+They cover direct service operations, real CLI delegation, complete scan-policy
+mapping, host-safe DTO redaction, Manifest source-content authorization, exact
+source/evidence reopening, output-schema fail-closed behavior, source-project
+hash/size/mtime/mode preservation, and the absence of LLM/network/Web calls.
 
 ## Explicit non-goals
 
-G-01 does not implement MCP, Host Context Packs, orchestration, Hooks,
+G-01 and G-07 do not implement Host Context Packs, orchestration, Hooks,
 reconciliation, one-click `project understand`, Web rendering, Verified Query,
-or planning. Those remain separate atomic roadmap tasks beginning with G-07.
+or planning. G-07 supplies only the minimal MCP adapter documented in
+[`research-mcp-server.md`](research-mcp-server.md); later capabilities remain
+separate roadmap tasks.

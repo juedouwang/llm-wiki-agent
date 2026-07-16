@@ -81,6 +81,8 @@ B-03 established the accountable directory ledger: every in-scope regular file i
 
 For project registration, scan/inventory, coverage, and source-open integrations, use the host-independent `tools.research_core.ResearchCoreService` facade. CLI and future MCP/host adapters must delegate to this boundary rather than duplicating filesystem workflows. See `docs/research-core-service.md`.
 
+The minimal MCP stdio adapter is `python -m tools.research_mcp --workspace-root <workspace>`. Its project-context, coverage, and source-open tools delegate to host-safe `ResearchCoreService` views; all advertised input/output JSON Schemas are enforced. Coverage writes deterministic machine state and is not read-only. Source-open must enforce current Manifest content policy, deny sensitive or ignored files, omit absolute/storage/Git-origin paths, and may allow ordinary local access even when independent external sends are `local-only`. Query, reconcile, and plan must return explicit `capability-unavailable` errors until their real Core roadmap slices land. The adapter must not echo caller-controlled sensitive inputs or return raw content outside explicit policy-authorized source-open. See `docs/research-mcp-server.md`.
+
 Existing top-level `wiki/` workflows and the current `raw-md` output layout remain compatible during migration. See `docs/project-storage-layout.md`.
 
 ---
