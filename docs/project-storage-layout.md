@@ -1,6 +1,6 @@
 # Project Registration and Storage Layout (Schema v1)
 
-A-03 established the storage boundary for project-scoped research data. B-01 adds deterministic project registration, B-03 writes the accountable directory ledger, B-04 adds incremental regular-file fingerprints, B-05 adds deterministic file classification, B-06 adds two-axis file state, and D-01 assigns persistent source identities. Registration still assigns identity and initializes empty storage only; it does not scan project files.
+A-03 established the storage boundary for project-scoped research data. B-01 adds deterministic project registration, B-03 writes the accountable directory ledger, B-04 adds incremental regular-file fingerprints, B-05 adds deterministic file classification, B-06 adds two-axis file state, D-01 assigns persistent source identities, D-02 records source versions, and D-03 persists precise Evidence. Registration still assigns identity and initializes empty storage only; it does not scan project files.
 
 ## Storage contract
 
@@ -15,6 +15,7 @@ llm-wiki-agent/
 |           |-- project.yaml
 |           |-- manifest.jsonl      # B-03 ledger + B-04 fingerprints + B-05 classification
 |           |-- sources.jsonl       # D-01 identity + D-02 version/path ledger; not created by registration
+|           |-- evidence.jsonl      # D-03 exact source/version/locator/excerpt-hash Evidence
 |           |-- extracted/
 |           |-- indexes/
 |           `-- runs/
@@ -36,7 +37,7 @@ llm-wiki-agent/
 
 The default `knowledge_projects_root` is `wiki/projects/`. `--knowledge-root` can point it at a personal knowledge base outside this repository. The supplied directory is the parent of all project directories, so registration writes curated storage under `<knowledge-root>/<project_id>/`.
 
-Machine-generated evidence must not be bulk-copied into the human knowledge tree. Later curated claims and summaries will point back to stable source and Evidence identifiers.
+Machine-generated evidence must not be bulk-copied into the human knowledge tree. Curated claims and summaries point back to stable source and Evidence identifiers. See [`evidence-schema.md`](evidence-schema.md) for the D-03 artifact and validation contract.
 
 ## Register a project
 
@@ -204,4 +205,4 @@ B-05 upgrades the artifact to `project-inventory-v3`. It reads a bounded local p
 Still isolated in later tasks:
 
 - independent coverage/failure reports (B-08);
-- content extraction, source versions and aliases, Evidence locators, semantic knowledge, retrieval, MCP, web UI, planning, and legacy-data migration.
+- source reopening, relocation recovery, aggregate source health, semantic knowledge, retrieval, MCP, web UI, planning, and legacy-data migration.

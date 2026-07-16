@@ -40,7 +40,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | C-04 PDF page extractor | 已完成 | `66a7ba7` | `checkpoint/c-04-pdf-extractor` |
 | C-08 定位保真分块 | 已完成 | `1eb64a2`, `6f01136` | `checkpoint/c-08-locator-chunking`, `checkpoint/c-08-locator-chunking-hardening` |
 | D-01 persistent source identity | complete | `a11fe6d` | `checkpoint/d-01-source-identity` |
-| D-02 source versions and path history | complete | current commit | `checkpoint/d-02-source-versions` |
+| D-02 source versions and path history | complete | `1230ac2` | `checkpoint/d-02-source-versions` |
+| D-03 precise Evidence schema | complete | current commit | `checkpoint/d-03-evidence-schema` |
 
 ## 3. 后续最小改动计划
 
@@ -324,15 +325,16 @@ git tag checkpoint/b-01-project-register
 
 ## 6. 下一项可执行任务
 
-D-02 source versions and path history is complete. The next task is:
+D-03 precise Evidence schema is complete. The next task is:
 
-> **D-03: precise Evidence schema**
+> **D-04: source locate/open**
 
 The minimum scope is strictly limited to:
 
-- define deterministic, strictly versioned Evidence records containing at least `source_id + content_hash + locator + excerpt_hash` and bind each record to an existing source version;
-- reuse the typed, location-preserving extraction locators so supported locators can be validated, canonically serialized, and checked against exact excerpt bytes or text;
-- make content/hash or excerpt mismatches deterministically invalidate Evidence without opening a query or synthesis workflow;
-- do not implement D-04 source locate/open, D-05 relocation recovery, D-06 source health aggregation, claim propagation, extraction scheduling, MCP, Hooks, Web, or LLM behavior.
+- provide deterministic Core APIs and CLI commands that resolve a registered `source_id` to its current recorded path and version;
+- reopen exact source content for line/code locators, PDF pages, Notebook cells, and table cell ranges, returning the excerpt plus its content and excerpt hashes;
+- verify the current source bytes still match the Evidence content hash and that the reopened excerpt matches the persisted excerpt hash before reporting success;
+- keep source projects read-only and all operations local-only;
+- do not implement D-05 relocation recovery, D-06 aggregate source health, query/synthesis, claim propagation, extraction scheduling, MCP, Hooks, Web, or LLM behavior.
 
-D-03 establishes precise evidence identity and validation only. Reopening current source content, recovering moved files, and reporting source health remain D-04 through D-06.
+D-04 reopens only the current recorded path. If that path is missing or no longer matches, it fails explicitly; path aliases, hash search, Git recovery, ambiguity handling, and aggregate health remain D-05 and D-06.

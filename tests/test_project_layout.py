@@ -47,6 +47,7 @@ class ProjectLayoutBaselineTests(unittest.TestCase):
         self.assertEqual(layout.project_file.name, "project.yaml")
         self.assertEqual(layout.manifest_file.name, "manifest.jsonl")
         self.assertEqual(layout.sources_file.name, "sources.jsonl")
+        self.assertEqual(layout.evidence_file.name, "evidence.jsonl")
         self.assertEqual(
             {path.name for path in layout.machine_directories},
             {"extracted", "indexes", "runs"},
@@ -102,6 +103,7 @@ class ProjectLayoutBaselineTests(unittest.TestCase):
         self.assertFalse(layout.project_file.exists())
         self.assertFalse(layout.manifest_file.exists())
         self.assertFalse(layout.sources_file.exists())
+        self.assertFalse(layout.evidence_file.exists())
         self.assertFalse(layout.overview_file.exists())
 
         schema_text_before = layout.workspace.schema_file.read_text(encoding="utf-8")

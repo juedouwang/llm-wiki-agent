@@ -307,6 +307,10 @@ class ProjectLayout:
         return self.machine_root / "sources.jsonl"
 
     @property
+    def evidence_file(self) -> Path:
+        return self.machine_root / "evidence.jsonl"
+
+    @property
     def extracted_dir(self) -> Path:
         return self.machine_root / "extracted"
 
