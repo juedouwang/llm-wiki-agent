@@ -1,7 +1,7 @@
 # 科研助手改造路线图（P-05 对齐版）
 
 - 状态：**后续开发的执行计划**
-- 更新日期：2026-07-15
+- 更新日期：2026-07-16
 - 基线分支：`research-assistant`
 - 产品约定：[`research-assistant-product-contract.md`](research-assistant-product-contract.md)
 - 任务原则：每个编号尽量对应一个独立任务分支、一个原子提交和一个检查点标签。
@@ -30,7 +30,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | B-01 项目注册 | 已完成 | `15d317a` | `checkpoint/b-01-project-register` |
 | B-02 扫描策略 | 已完成 | `07be63d` | `checkpoint/b-02-scan-policy` |
 | B-03 目录盘点与基础 Manifest | 已完成 | `be4b825` | `checkpoint/b-03-project-inventory` |
-| B-04 文件指纹与增量 Manifest | 本次落库 | 本次提交 | `checkpoint/b-04-file-fingerprints` |
+| B-04 文件指纹与增量 Manifest | 已完成 | `f6fcd43` | `checkpoint/b-04-file-fingerprints` |
+| B-05 格式、语言与科研角色识别 | 本次落库 | 本次提交 | `checkpoint/b-05-file-classification` |
 
 ## 3. 后续最小改动计划
 
@@ -314,19 +315,18 @@ git tag checkpoint/b-01-project-register
 
 ## 6. 下一项可执行任务
 
-B-04 完成后的下一项是：
+B-05 完成后的下一项是：
 
-> **B-05：格式、语言与科研角色识别**
+> **B-06：Manifest 文件状态双轴**
 
 它的最小范围严格限制为：
 
-- 在 B-04 `project-inventory-v2` 的普通文件账本上增加确定性分类结果；
-- 识别文件格式、主要语言和科研角色，并保存可解释的分类理由；
-- 扩展名、magic/MIME 和路径规则优先，主流程不得依赖 LLM 才能完成；
-- fixture 覆盖伪扩展名、无扩展名和常见科研文件；
-- 无法识别的文件仍保留 Manifest 记录并显式标记未知，不能静默遗漏；
-- 保留 B-01 注册、B-02 边界与符号链接安全、B-03 排除对账和 B-04 指纹/代次语义；
-- 保持源科研项目零写入；
-- 不提前实现最终 `processing_status` / `read_depth`、内容提取、Evidence、MCP、Hook 或 Web。
+- 在 B-05 `project-inventory-v3` 的普通文件账本上增加版本化文件状态；
+- 分离 `processing_status` 与 `read_depth`，使用产品契约中的稳定枚举；
+- 每条普通文件记录都必须保存可解释 `reason`，不能用空值或单一模糊状态代替；
+- 明确定义并验证状态组合，非法组合、损坏记录和 future Schema 必须 fail closed；
+- 兼容读取 v1/v2/v3，并保留 B-01～B-05 的边界、指纹、分类和源项目零写入语义；
+- 添加 Schema 枚举、非法组合、序列化、旧记录升级和汇总对账测试；
+- 不提前实现 B-07 阅读优先级、B-08 独立覆盖率报告、内容提取、Evidence、MCP、Hook 或 Web。
 
-B-05 仍是可嵌入宿主 Agent 的 Research Core 确定性能力，不新增独立聊天入口，也不能破坏后续 Codex/Claude Code 通过 Core 共享同一项目状态的产品边界。
+B-06 仍是可嵌入宿主 Agent 的 Research Core 确定性状态契约，不新增独立聊天入口，也不把尚未提取的文件伪装成已处理成功。

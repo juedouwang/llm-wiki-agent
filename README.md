@@ -140,7 +140,7 @@ Create or incrementally refresh the Manifest for an already registered project:
 python tools/project.py inventory <project_id> --json
 ```
 
-The inventory preserves B-03 accountability for every in-scope regular file, excluded file, pruned-directory boundary, and symbolic link. B-04 writes `project-inventory-v2` with scan generation, local SHA-256, size, mtime, and conservative reuse of unchanged fingerprints. Source bytes are streamed only into local hash state: no content is extracted, persisted, sent to an LLM, or written back to the source project. Format/research-role classification and final processing states remain later tasks. See `docs/project-inventory.md` and `docs/file-fingerprints.md`.
+The inventory preserves B-03 accountability for every in-scope regular file, excluded file, pruned-directory boundary, and symbolic link. B-04 adds scan generation, local SHA-256, size, mtime, and conservative fingerprint reuse. B-05 writes `project-inventory-v3` and gives every ordinary file deterministic format, language, research-role, and reason fields; spoofed extensions, extensionless files, and unknown binary files remain auditable. A bounded classification prefix is read only when B-02 grants local raw-content access; sensitive and oversized files are classified from path metadata without a second raw-content read. Samples remain local and ephemeral, and nothing is sent to an LLM or written back to the source project. Final processing/read-depth states remain B-06. See `docs/project-inventory.md`, `docs/file-fingerprints.md`, and `docs/file-classification.md`.
 
 ## Research Assistant Evolution (In Development)
 
@@ -151,6 +151,7 @@ The `research-assistant` branch is evolving this repository into a local-first, 
 - [B-02 explainable scan-policy contract](docs/scan-policy.md)
 - [B-03 project inventory and accountable directory contract](docs/project-inventory.md)
 - [B-04 file fingerprints and incremental Manifest contract](docs/file-fingerprints.md)
+- [B-05 deterministic file classification contract](docs/file-classification.md)
 
 ## What You Get
 

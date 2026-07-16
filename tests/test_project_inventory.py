@@ -13,9 +13,16 @@ from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 
+from tools.file_classification import (
+    FILE_CLASSIFICATION_KIND,
+    FILE_CLASSIFICATION_SCHEMA_VERSION,
+    classification_from_dict,
+)
 from tools.project_inventory import (
+    CLASSIFICATION_SUMMARY_KIND,
     CONTENT_HASH_ALGORITHM,
     FINGERPRINT_CACHE_STRATEGY,
+    FINGERPRINT_PROJECT_MANIFEST_VERSION,
     LEGACY_PROJECT_MANIFEST_VERSION,
     PROJECT_MANIFEST_KIND,
     PROJECT_MANIFEST_SCHEMA_VERSION,
@@ -241,7 +248,9 @@ class ProjectInventoryTests(unittest.TestCase):
         paths = {row.get("path") for row in rows}
         self.assertFalse(any(path and path.endswith("hidden.dat") for path in paths))
 
-    def test_manifest_rows_are_versioned_and_keep_later_task_fields_absent(self) -> None:
+    def test_manifest_rows_are_versioned_and_include_auditable_classification(
+        self,
+    ) -> None:
         (self.project / "artifact.ckpt").write_bytes(b"model")
         registration = self.register()
 
@@ -249,15 +258,10 @@ class ProjectInventoryTests(unittest.TestCase):
         rows = self.manifest_rows(result.manifest_file)
         summary = rows[0]
         actual_counts = Counter(row["record_type"] for row in rows[1:])
-        forbidden_keys = {
-            "format",
-            "language",
-            "role",
-            "research_role",
+        later_task_keys = {
             "processing_status",
             "read_depth",
             "content",
-            "text",
             "source_id",
             "evidence_id",
         }
@@ -279,7 +283,9 @@ class ProjectInventoryTests(unittest.TestCase):
             self.assertEqual(row["schema_version"], PROJECT_MANIFEST_SCHEMA_VERSION)
             self.assertEqual(row["kind"], PROJECT_MANIFEST_KIND)
             self.assertEqual(row["manifest_version"], PROJECT_MANIFEST_VERSION)
-            self.assertTrue(forbidden_keys.isdisjoint(nested_keys(row)))
+            self.assertTrue(later_task_keys.isdisjoint(nested_keys(row)))
+            if row["record_type"] == "file":
+                self.assertNotIn("text", row)
 
         self.assertEqual(summary["record_type"], "summary")
         self.assertEqual(summary["scan_generation"], 1)
@@ -300,10 +306,30 @@ class ProjectInventoryTests(unittest.TestCase):
                 "reused_files": 0,
             },
         )
+        classification_summary = summary["classification_summary"]
+        self.assertEqual(
+            classification_summary["schema_version"],
+            FILE_CLASSIFICATION_SCHEMA_VERSION,
+        )
+        self.assertEqual(
+            classification_summary["kind"],
+            CLASSIFICATION_SUMMARY_KIND,
+        )
+        self.assertEqual(
+            classification_summary["classified_files"],
+            summary["record_counts"]["file"],
+        )
+        self.assertEqual(classification_summary["reused_files"], 0)
+        for field in ("formats", "languages", "research_roles"):
+            self.assertEqual(
+                sum(classification_summary[field].values()),
+                summary["record_counts"]["file"],
+            )
 
         for row in rows[1:]:
             if row["record_type"] != "file":
                 self.assertNotIn("content_sha256", row)
+                self.assertNotIn("classification", row)
                 continue
             source = self.project / Path(row["path"])
             metadata = source.stat()
@@ -316,6 +342,12 @@ class ProjectInventoryTests(unittest.TestCase):
             cache = row["fingerprint_cache"]
             self.assertIsInstance(cache, dict)
             self.assertEqual(cache["strategy"], FINGERPRINT_CACHE_STRATEGY)
+            classification = classification_from_dict(row["classification"])
+            self.assertEqual(
+                row["classification"]["kind"],
+                FILE_CLASSIFICATION_KIND,
+            )
+            self.assertTrue(classification.reasons["format"]["code"])
 
     def test_inventory_hashes_locally_without_writing_source(self) -> None:
         (self.project / "opaque.bin").write_bytes(os.urandom(256))
@@ -340,15 +372,26 @@ class ProjectInventoryTests(unittest.TestCase):
                     "size_bytes",
                     "mtime_ns",
                     "fingerprint_cache",
+                    "classification",
                 )
             }
             for row in first_rows
             if row["record_type"] == "file"
         }
 
-        with patch(
-            "tools.project_inventory._hash_file_content",
-            side_effect=AssertionError("unchanged files must reuse prior SHA-256"),
+        with (
+            patch(
+                "tools.project_inventory._hash_file_content",
+                side_effect=AssertionError(
+                    "unchanged files must reuse prior SHA-256"
+                ),
+            ),
+            patch(
+                "tools.project_inventory._read_classification_sample",
+                side_effect=AssertionError(
+                    "unchanged files must reuse prior classification"
+                ),
+            ),
         ):
             second = inventory_project(self.workspace, registration.project_id)
 
@@ -361,6 +404,7 @@ class ProjectInventoryTests(unittest.TestCase):
                     "size_bytes",
                     "mtime_ns",
                     "fingerprint_cache",
+                    "classification",
                 )
             }
             for row in second_rows
@@ -377,6 +421,54 @@ class ProjectInventoryTests(unittest.TestCase):
                 "hashed_files": 0,
                 "reused_files": len(second_files),
             },
+        )
+        self.assertEqual(
+            second.classification_summary["reused_files"],
+            len(second_files),
+        )
+
+    def test_b04_manifest_reuses_fingerprints_and_adds_classification(
+        self,
+    ) -> None:
+        registration = self.register()
+        current = inventory_project(self.workspace, registration.project_id)
+        legacy_rows = self.manifest_rows(current.manifest_file)
+        for row in legacy_rows:
+            row["manifest_version"] = FINGERPRINT_PROJECT_MANIFEST_VERSION
+            if row["record_type"] == "summary":
+                row.pop("classification_summary")
+            elif row["record_type"] == "file":
+                row.pop("classification")
+        current.manifest_file.write_text(
+            "".join(
+                json.dumps(
+                    row,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+                for row in legacy_rows
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        with patch(
+            "tools.project_inventory._hash_file_content",
+            side_effect=AssertionError("B-04 SHA-256 should be reusable"),
+        ):
+            upgraded = inventory_project(self.workspace, registration.project_id)
+
+        self.assertEqual(upgraded.scan_generation, 2)
+        self.assertEqual(
+            upgraded.fingerprint_summary["reused_files"],
+            upgraded.record_counts["file"],
+        )
+        self.assertEqual(upgraded.classification_summary["reused_files"], 0)
+        self.assertEqual(
+            upgraded.classification_summary["classified_files"],
+            upgraded.record_counts["file"],
         )
 
     def test_content_change_updates_sha256_when_size_and_mtime_are_restored(
@@ -498,7 +590,9 @@ class ProjectInventoryTests(unittest.TestCase):
             if row["record_type"] == "summary":
                 row.pop("scan_generation")
                 row.pop("fingerprint_summary")
+                row.pop("classification_summary")
             elif row["record_type"] == "file":
+                row.pop("classification")
                 row.pop("content_sha256")
                 row.pop("size_bytes")
                 row.pop("mtime_ns")
@@ -564,6 +658,47 @@ class ProjectInventoryTests(unittest.TestCase):
             inventory_project(self.workspace, registration.project_id)
 
         self.assertEqual(result.manifest_file.read_bytes(), future)
+
+    def test_invalid_v3_classification_fails_closed_without_replacement(
+        self,
+    ) -> None:
+        registration = self.register()
+        result = inventory_project(self.workspace, registration.project_id)
+        valid_rows = self.manifest_rows(result.manifest_file)
+
+        cases = {
+            "future classification schema": lambda rows: rows[1][
+                "classification"
+            ].__setitem__(
+                "schema_version",
+                FILE_CLASSIFICATION_SCHEMA_VERSION + 1,
+            ),
+            "classification summary mismatch": lambda rows: rows[0][
+                "classification_summary"
+            ]["formats"].clear(),
+        }
+        for name, corrupt_rows in cases.items():
+            with self.subTest(name=name):
+                rows = json.loads(json.dumps(valid_rows))
+                corrupt_rows(rows)
+                corrupt = (
+                    "".join(
+                        json.dumps(
+                            row,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        + "\n"
+                        for row in rows
+                    )
+                ).encode("utf-8")
+                result.manifest_file.write_bytes(corrupt)
+
+                with self.assertRaises(ProjectManifestError):
+                    inventory_project(self.workspace, registration.project_id)
+
+                self.assertEqual(result.manifest_file.read_bytes(), corrupt)
 
     def test_fingerprint_failure_preserves_existing_manifest(self) -> None:
         registration = self.register()
@@ -789,6 +924,10 @@ class ProjectInventoryTests(unittest.TestCase):
         payload = json.loads(completed.stdout)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["project_id"], registration.project_id)
+        self.assertEqual(
+            payload["classification_summary"]["classified_files"],
+            payload["record_counts"]["file"],
+        )
         manifest = Path(payload["manifest_file"])
         self.assertTrue(manifest.is_file())
         rows = self.manifest_rows(manifest)

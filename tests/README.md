@@ -52,4 +52,8 @@ python -B -m unittest discover -s tests -v
 
 ## B-04 file-fingerprint coverage
 
-The same test module verifies `project-inventory-v2`, scan-generation increments, SHA-256/size/mtime fields on ordinary files only, local hashing with source-tree zero writes, full fingerprint reuse for unchanged paths, same-size content replacement with restored mtime, mtime-only touches, add/rename/delete refreshes, B-03 v1 upgrade, fail-closed corrupt or future Manifests, and atomic preservation when hashing fails. It also asserts that format/language/research-role classification, final processing states, extracted content, Evidence IDs, and change-classification fields remain absent.
+The same test module retains coverage for B-04 scan generations, SHA-256/size/mtime fields, conservative reuse, same-size replacement, mtime-only touches, add/rename/delete refreshes, B-03 v1 compatibility, fail-closed corrupt/future Manifests, and atomic failure preservation. Current output is upgraded by B-05 to `project-inventory-v3`.
+
+## B-05 deterministic-classification coverage
+
+`test_file_classification.py` and `test_project_inventory.py` verify magic/signature priority, spoofed extensions, extensionless shebang and Notebook detection, common research formats and path roles, explicit unknown files, reason/schema round-trips, B-02-aware path-only classification for sensitive and oversized files without prefix reads, v2 fingerprint reuse during upgrade, unchanged classification reuse, summary reconciliation, source-tree zero writes, and continued absence of B-06 processing/read-depth fields, extraction, Evidence IDs, and reconciliation events.
