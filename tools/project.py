@@ -25,6 +25,7 @@ if __package__:
         open_evidence,
         open_source,
     )
+    from .source_recovery import recover_source
     from .source_registry import get_source_history, sync_source_registry
 else:
     from coverage_report import generate_coverage_report  # type: ignore[no-redef]
@@ -44,6 +45,7 @@ else:
         open_evidence,
         open_source,
     )
+    from source_recovery import recover_source  # type: ignore[no-redef]
     from source_registry import (  # type: ignore[no-redef]
         get_source_history,
         sync_source_registry,
@@ -191,6 +193,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Research Core workspace (default: this repository)",
     )
     source_history.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+    source_recover = source_subparsers.add_parser(
+        "recover",
+        help="Recover one unavailable source path without changing source identity.",
+    )
+    source_recover.add_argument("project_id", help="B-01 registered project ID")
+    source_recover.add_argument("source_id", help="Core-generated persistent source ID")
+    source_recover.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    source_recover.add_argument(
         "--json",
         action="store_true",
         help="Print a machine-readable JSON result",
@@ -416,6 +434,35 @@ def _print_command_error(exc: BaseException, *, as_json: bool) -> int:
     return 2
 
 
+def _run_source_recover(args: argparse.Namespace) -> int:
+    try:
+        result = recover_source(
+            workspace_root=args.workspace_root,
+            project_id=args.project_id,
+            source_id=args.source_id,
+        )
+    except (LayoutError, OSError) as exc:
+        return _print_command_error(exc, as_json=args.json)
+
+    payload = result.as_dict()
+    if args.json:
+        print(json.dumps({"ok": True, **payload}, indent=2, ensure_ascii=False))
+        return 0
+
+    print(f"Source recovery:     {result.source_id}")
+    print(f"Status:              {result.status}")
+    print(f"Method:              {result.recovery_method or '-'}")
+    print(f"Previous path:       {result.previous_path}")
+    print(f"Current path:        {result.current_path}")
+    print(f"Candidate paths:     {len(result.candidate_paths)}")
+    for candidate in result.candidate_paths:
+        print(f"  - {candidate}")
+    print(f"Registry updated:    {result.wrote_registry}")
+    print(f"Reason:              {result.reason_code}")
+    print(f"Detail:              {result.detail}")
+    return 0
+
+
 def _run_source_locate(args: argparse.Namespace) -> int:
     try:
         result = locate_source(
@@ -544,6 +591,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_source_sync(args)
     if args.command == "source" and args.source_command == "history":
         return _run_source_history(args)
+    if args.command == "source" and args.source_command == "recover":
+        return _run_source_recover(args)
     if args.command == "source" and args.source_command == "locate":
         return _run_source_locate(args)
     if args.command == "source" and args.source_command == "open":

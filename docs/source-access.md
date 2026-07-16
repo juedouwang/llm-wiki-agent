@@ -1,14 +1,16 @@
-# Source Locate/Open Contract (D-04)
+# Source Locate/Open Contract (D-04 + D-05)
 
 D-04 provides deterministic, local-only source access for a B-01 registered
 research project. It resolves a persistent `source_id` to the source registry's
 **current recorded path and version**, then can reopen one exact C-01 locator
 from the current source bytes.
 
-D-04 deliberately does not search for moved files. If the current path is
-missing, resolves outside the registered project, or no longer has the recorded
-content hash, the operation fails explicitly. Relocation recovery is D-05 and
-aggregate health classification is D-06.
+D-05 extends this access boundary with deterministic relocation recovery. The
+current path is always tried first. Only after resolution, read, or exact-hash
+verification fails does access try recorded path aliases, the current Manifest's
+exact content hashes, and local Git rename history. See
+[`source-relocation.md`](source-relocation.md). Aggregate source/Evidence health
+classification remains D-06.
 
 ## Core APIs
 
@@ -30,14 +32,16 @@ deserialize_locator(payload) -> Locator
 ```
 
 `locate_source` returns the current project-relative path, resolved absolute
-path, current source version, and recorded content SHA-256. It resolves only the
-registered current path and rejects missing files, non-files, and paths whose
-resolved target is outside the registered project root.
+path, current source version, and recorded content SHA-256. It first resolves
+only the registered current path and does not hash a normally resolvable path. If
+that access fails, D-05 may repair one unique exact-hash relocation, reload the
+registry, and resolve the recovered path. Ambiguous recovery fails explicitly.
 
-`open_source` reads the resolved file once, computes its SHA-256, and refuses to
+`open_source` reads the resolved file, computes its SHA-256, and refuses to
 extract a locator unless the bytes still match the source registry's current
-content hash. Optional expected content and excerpt hashes allow direct callers
-to require a particular current version and exact excerpt.
+content hash. A read or content mismatch may trigger one D-05 recovery attempt
+and one retry. Optional expected content and excerpt hashes still require the
+requested current identity and exact excerpt; recovery does not weaken them.
 
 `open_evidence` loads one persisted D-03 Evidence record and requires all of:
 
@@ -57,7 +61,14 @@ Structured results carry schema v1 plus `access_version: source-access-v1`.
 
 ## CLI
 
-Locate a source's current recorded path and version:
+Evaluate or repair a moved source identity explicitly:
+
+```bash
+python tools/project.py source recover <project_id> <source_id> --json
+```
+
+Locate a source's current recorded path and version, with automatic recovery
+only if current-path access fails:
 
 ```bash
 python tools/project.py source locate <project_id> <source_id> --json
@@ -115,8 +126,9 @@ are not opened by D-04.
 | Reason code | Meaning |
 |---|---|
 | `source-not-registered` | The source or Evidence target is unknown or malformed |
-| `source-current-path-missing` | The current recorded path is absent or is not a regular file |
-| `source-path-outside-project` | The current path resolves beyond the registered source root |
+| `source-current-path-missing` | The current recorded path is absent or is not a regular file, and no relocation resolved it |
+| `source-path-outside-project` | The current path resolves beyond the registered source root, and no relocation resolved it |
+| `source-relocation-ambiguous` | Multiple equal-priority exact-hash relocation candidates remain; no binding changed |
 | `current-source-version-mismatch` | Evidence is bound to a non-current source version, even if the same bytes recur later |
 | `source-content-hash-mismatch` | Current bytes or a requested content hash differ from the recorded current source version |
 | `source-locator-invalid` | Locator JSON, bounds, page, cell, cell ID, or sheet is invalid for current content |
@@ -127,15 +139,17 @@ are not opened by D-04.
 
 ## Safety and non-goals
 
-- Source projects are read-only. D-04 writes no source bytes, metadata, or
-  timestamps.
+- Source projects are read-only. D-04/D-05 write no source bytes, metadata, or
+  timestamps. D-05 may atomically update only the local source registry after a
+  unique verified relocation.
 - All source content remains local. There are no LLM, MCP, Hook, Web, network,
   or external-provider calls.
 - Machine records remain under `.llmwiki/projects/<project_id>/`; D-04 does not
   place paths, hashes, or run state in curated `wiki/projects/` Markdown.
-- D-04 performs no path-alias search, project-wide hash search, Git recovery,
-  ambiguous-candidate binding, registry relocation write, aggregate health
-  report, query/synthesis, claim propagation, or extraction scheduling.
+- D-05 recovery is limited to path aliases, the current Manifest hash ledger,
+  and bounded local Git rename history. It never binds an ambiguous candidate.
+  Aggregate health reports, query/synthesis, claim propagation, and extraction
+  scheduling remain out of scope.
 - Exact reopening is bounded by the existing deterministic C-02/C-03/C-04
   extractor safety limits. If a requested unit would be truncated, D-04 fails
   rather than returning a partial excerpt as exact Evidence.

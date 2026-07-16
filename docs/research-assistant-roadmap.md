@@ -41,8 +41,9 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | C-08 定位保真分块 | 已完成 | `1eb64a2`, `6f01136` | `checkpoint/c-08-locator-chunking`, `checkpoint/c-08-locator-chunking-hardening` |
 | D-01 persistent source identity | complete | `a11fe6d` | `checkpoint/d-01-source-identity` |
 | D-02 source versions and path history | complete | `1230ac2` | `checkpoint/d-02-source-versions` |
-| D-03 precise Evidence schema | complete | `00f036c`, current hardening commit | `checkpoint/d-03-evidence-schema`, `checkpoint/d-03-evidence-version-hardening` |
+| D-03 precise Evidence schema | complete | `00f036c`, `8e13c6f` | `checkpoint/d-03-evidence-schema`, `checkpoint/d-03-evidence-version-hardening` |
 | D-04 source locate/open | complete | `917475c` | `checkpoint/d-04-source-open` |
+| D-05 source relocation recovery | complete | current commit | `checkpoint/d-05-source-relocation` |
 
 ## 3. 后续最小改动计划
 
@@ -324,19 +325,29 @@ git tag checkpoint/b-01-project-register
 6. 若任务必须拆成多个 commit，提交信息都带同一任务 ID，并在完成报告列出顺序；
 7. 不修改用户个人知识库中的历史规划文件；仓库内本文作为后续实现的执行基线。
 
-## 6. 下一项可执行任务
+## 6. Next executable task
 
-D-04 source locate/open is complete. The next task is:
+D-05 source relocation recovery is complete. The next task is:
 
-> **D-05: source relocation recovery**
+> **D-06: source and Evidence health**
 
 The minimum scope is strictly limited to:
 
-- when a source's current recorded path cannot be reopened, recover candidates in this order: recorded path aliases, exact local content-hash matches, then deterministic Git path history;
-- accept only project-contained regular files whose bytes match the source's recorded current content hash;
-- preserve the existing `source_id` and source-version history while recording one unambiguous recovered current path under the source-registry lock;
-- return an explicit ambiguous result and make no binding when multiple equal-priority/equal-hash candidates remain;
-- keep the source project read-only and all recovery local-only;
-- do not implement D-06 aggregate source health, query/synthesis, claim propagation, extraction scheduling, MCP, Hooks, Web, or LLM behavior.
+- deterministically classify registered source and persisted Evidence health as
+  `valid`, `stale`, `missing`, or `ambiguous`;
+- validate current source availability and exact content hash, then validate an
+  Evidence record's source version, locator reopening, and excerpt hash;
+- distinguish deleted/missing sources, modified source versions, truncated or
+  invalid locators/excerpts, and D-05 multiple-candidate ambiguity without
+  silently rebinding an ambiguous source;
+- expose auditable schema-versioned Core results and a project CLI aggregation
+  whose totals reconcile with the underlying source/Evidence registries;
+- keep all checks local-only and source-read-only;
+- do not implement query/synthesis, Claim stale propagation, extraction
+  scheduling, project-understanding orchestration, MCP, Hooks, Web, or LLM
+  behavior.
 
-D-05 may update only Research Core machine state after a unique verified recovery. It must not rename, move, rewrite, or otherwise modify the source project. Aggregate `valid/stale/missing/ambiguous` classification and locator health remain D-06.
+D-06 may read D-05 recovery evidence and may allow one unique safe relocation
+to complete before validation, but health classification must not weaken D-03
+Evidence identity or locator/excerpt verification. J-01 basic-chain end-to-end
+acceptance remains the next task after D-06.

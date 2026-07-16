@@ -9,10 +9,12 @@ separate D-03 through D-06 concerns.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import re
+import stat
 import tempfile
 import time
 import unicodedata
@@ -469,6 +471,45 @@ class SourceRecord:
         )
         return updated, added_version
 
+    def relocate(self, recovered_path: str) -> SourceRecord:
+        """Bind one verified path without changing source identity or versions."""
+
+        path = _manifest_path(recovered_path)
+        if path == self.current_path:
+            return self
+        generation = self.last_seen_scan_generation
+        history = list(self.path_history)
+        for index, item in enumerate(history):
+            if item.path == path:
+                history[index] = replace(
+                    item,
+                    last_seen_scan_generation=max(
+                        item.last_seen_scan_generation,
+                        generation,
+                    ),
+                )
+                break
+        else:
+            history.append(
+                SourcePathRecord(
+                    path=path,
+                    first_seen_scan_generation=generation,
+                    last_seen_scan_generation=generation,
+                )
+            )
+        history.sort(
+            key=lambda item: (item.first_seen_scan_generation, item.path)
+        )
+        return SourceRecord(
+            source_id=self.source_id,
+            current_path=path,
+            path_history=tuple(history),
+            first_seen_scan_generation=self.first_seen_scan_generation,
+            last_seen_scan_generation=self.last_seen_scan_generation,
+            current_version=self.current_version,
+            versions=self.versions,
+        )
+
 
 @dataclass(frozen=True)
 class SourceRegistry:
@@ -598,6 +639,35 @@ class SourceRegistrySyncResult:
             "versions_added_count": self.versions_added_count,
             "upgraded_registry": self.upgraded_registry,
             "wrote_registry": self.wrote_registry,
+        }
+
+
+@dataclass(frozen=True)
+class SourceRegistryRelocationResult:
+    """Transactional source-registry update for one verified relocation."""
+
+    project_id: str
+    project_root: Path
+    sources_file: Path
+    previous_path: str
+    recovered_path: str
+    record: SourceRecord
+    wrote_registry: bool
+    already_current: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "project_id": self.project_id,
+            "project_root": str(self.project_root),
+            "sources_file": str(self.sources_file),
+            "source_id": self.record.source_id,
+            "previous_path": self.previous_path,
+            "recovered_path": self.recovered_path,
+            "current_path": self.record.current_path,
+            "current_version": self.record.current_version,
+            "content_hash": self.record.current_content_hash,
+            "wrote_registry": self.wrote_registry,
+            "already_current": self.already_current,
         }
 
 
@@ -1178,6 +1248,250 @@ def _write_registry_atomic(registry: SourceRegistry) -> bool:
             os.close(descriptor)
         if temporary is not None:
             temporary.unlink(missing_ok=True)
+
+
+def _file_snapshot_signature(metadata: os.stat_result) -> tuple[object, ...]:
+    signature: tuple[object, ...] = (
+        stat.S_IFMT(metadata.st_mode),
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+    )
+    if os.name != "nt":
+        signature += (metadata.st_ctime_ns,)
+    return signature
+
+
+def _reject_relocation_reparse_points(project_root: Path, path: str) -> Path:
+    candidate = project_root
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    for part in PurePosixPath(path).parts:
+        candidate = candidate / part
+        try:
+            metadata = candidate.lstat()
+        except FileNotFoundError as exc:
+            raise SourceRegistryConflictError(
+                f"recovered source path does not exist: {path}"
+            ) from exc
+        except OSError as exc:
+            raise SourceRegistryConflictError(
+                f"could not inspect recovered source path {path}: {exc}"
+            ) from exc
+        if stat.S_ISLNK(metadata.st_mode) or (
+            reparse_flag
+            and getattr(metadata, "st_file_attributes", 0) & reparse_flag
+        ):
+            raise SourceRegistryConflictError(
+                "recovered source path must not contain a symbolic link or "
+                f"reparse point: {path}"
+            )
+    return candidate
+
+
+def _verify_relocation_candidate(
+    project_root: Path,
+    recovered_path: str,
+    expected_content_hash: str,
+) -> Path:
+    relative_path = _manifest_path(recovered_path)
+    expected = _content_hash(expected_content_hash)
+    root = project_root.resolve(strict=True)
+    candidate = _reject_relocation_reparse_points(root, relative_path)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise SourceRegistryConflictError(
+            f"could not resolve recovered source path {relative_path}: {exc}"
+        ) from exc
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise SourceRegistryConflictError(
+            "recovered source path resolves outside the registered project: "
+            f"{relative_path}"
+        ) from exc
+
+    try:
+        before = candidate.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise SourceRegistryConflictError(
+            f"could not stat recovered source path {relative_path}: {exc}"
+        ) from exc
+    if not stat.S_ISREG(before.st_mode):
+        raise SourceRegistryConflictError(
+            f"recovered source path is not a regular file: {relative_path}"
+        )
+
+    digest = hashlib.sha256()
+    try:
+        with candidate.open("rb") as source:
+            opened = os.fstat(source.fileno())
+            if not stat.S_ISREG(opened.st_mode):
+                raise SourceRegistryConflictError(
+                    "recovered source descriptor is not a regular file: "
+                    f"{relative_path}"
+                )
+            if _file_snapshot_signature(opened) != _file_snapshot_signature(before):
+                raise SourceRegistryConflictError(
+                    "recovered source changed before verification: "
+                    f"{relative_path}"
+                )
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+            after_descriptor = os.fstat(source.fileno())
+    except SourceRegistryConflictError:
+        raise
+    except OSError as exc:
+        raise SourceRegistryConflictError(
+            f"could not read recovered source path {relative_path}: {exc}"
+        ) from exc
+
+    try:
+        after_path = candidate.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise SourceRegistryConflictError(
+            f"could not restat recovered source path {relative_path}: {exc}"
+        ) from exc
+    signature = _file_snapshot_signature(before)
+    if (
+        _file_snapshot_signature(after_descriptor) != signature
+        or _file_snapshot_signature(after_path) != signature
+    ):
+        raise SourceRegistryConflictError(
+            f"recovered source changed during verification: {relative_path}"
+        )
+    observed = digest.hexdigest()
+    if observed != expected:
+        raise SourceRegistryConflictError(
+            "recovered source bytes do not match the recorded current version: "
+            f"expected {expected}; observed {observed}"
+        )
+    return resolved
+
+
+def record_source_relocation(
+    workspace_root: str | Path,
+    project_id: str,
+    *,
+    source_id: str,
+    recovered_path: str,
+    expected_content_hash: str,
+    expected_current_path: str | None = None,
+    expected_current_version: int | None = None,
+    lock_timeout_seconds: float = _DEFAULT_LOCK_TIMEOUT_SECONDS,
+) -> SourceRegistryRelocationResult:
+    """Verify and persist one unambiguous relocation under the registry lock."""
+
+    registration = load_registered_project(workspace_root, project_id)
+    normalized_id = _source_id(source_id)
+    normalized_path = _manifest_path(recovered_path)
+    expected_hash = _content_hash(expected_content_hash)
+    stale_path = (
+        _manifest_path(expected_current_path)
+        if expected_current_path is not None
+        else None
+    )
+    stale_version = (
+        _positive_integer(expected_current_version, "expected_current_version")
+        if expected_current_version is not None
+        else None
+    )
+    sources_file = registration.layout.sources_file
+    lock_file = sources_file.with_name(f"{sources_file.name}.lock")
+    sources_file.parent.mkdir(parents=True, exist_ok=True)
+
+    with _exclusive_registry_lock(
+        lock_file,
+        timeout_seconds=lock_timeout_seconds,
+    ):
+        registry = _load_source_registry_file(
+            sources_file,
+            project_id=registration.project_id,
+            missing_ok=False,
+        )
+        try:
+            record = registry.by_source_id[normalized_id]
+        except KeyError as exc:
+            raise SourceRegistryConflictError(
+                "source_id is not registered for project "
+                f"{registration.project_id}: {normalized_id}"
+            ) from exc
+        if record.current_content_hash is None or record.current_version is None:
+            raise SourceRegistryConflictError(
+                f"source {normalized_id} has no recorded content version"
+            )
+        if record.current_content_hash != expected_hash:
+            raise SourceRegistryConflictError(
+                "source content version changed during relocation recovery"
+            )
+        if stale_version is not None and record.current_version != stale_version:
+            raise SourceRegistryConflictError(
+                "source version changed during relocation recovery"
+            )
+        if (
+            stale_path is not None
+            and record.current_path not in {stale_path, normalized_path}
+        ):
+            raise SourceRegistryConflictError(
+                "source current path changed during relocation recovery: "
+                f"expected {stale_path}; observed {record.current_path}"
+            )
+
+        previous_path = record.current_path
+        _verify_relocation_candidate(
+            registration.project_root,
+            normalized_path,
+            expected_hash,
+        )
+        if record.current_path == normalized_path:
+            return SourceRegistryRelocationResult(
+                project_id=registration.project_id,
+                project_root=registration.project_root,
+                sources_file=sources_file,
+                previous_path=previous_path,
+                recovered_path=normalized_path,
+                record=record,
+                wrote_registry=False,
+                already_current=True,
+            )
+
+        path_owner = registry.by_path.get(normalized_path)
+        if path_owner is not None and path_owner.source_id != normalized_id:
+            raise SourceRegistryConflictError(
+                "recovered path is already assigned to another source: "
+                f"{normalized_path} -> {path_owner.source_id}"
+            )
+        updated_record = record.relocate(normalized_path)
+        records = tuple(
+            sorted(
+                (
+                    updated_record if item.source_id == normalized_id else item
+                    for item in registry.records
+                ),
+                key=lambda item: item.source_id,
+            )
+        )
+        updated_registry = SourceRegistry(
+            project_id=registration.project_id,
+            sources_file=sources_file,
+            records=records,
+        )
+        wrote_registry = _write_registry_atomic(updated_registry)
+
+    return SourceRegistryRelocationResult(
+        project_id=registration.project_id,
+        project_root=registration.project_root,
+        sources_file=sources_file,
+        previous_path=previous_path,
+        recovered_path=normalized_path,
+        record=updated_record,
+        wrote_registry=wrote_registry,
+        already_current=False,
+    )
 
 
 def _load_current_manifest(

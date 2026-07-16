@@ -42,6 +42,7 @@ if __package__:
     from .pdf_extractor import PdfExtractionLimits, extract_pdf_bytes
     from .project_layout import CURRENT_SCHEMA_VERSION, LayoutError
     from .project_registry import load_registered_project
+    from .source_recovery import SourceRecoveryError, recover_source
     from .source_registry import SourceRecord, load_source_registry
     from .text_extractor import (
         SUPPORTED_TEXT_FORMATS,
@@ -83,6 +84,10 @@ else:
         LayoutError,
     )
     from project_registry import load_registered_project  # type: ignore[no-redef]
+    from source_recovery import (  # type: ignore[no-redef]
+        SourceRecoveryError,
+        recover_source,
+    )
     from source_registry import (  # type: ignore[no-redef]
         SourceRecord,
         load_source_registry,
@@ -125,6 +130,12 @@ class SourceMissingError(SourceAccessError):
     """Raised when the current recorded path no longer resolves to a file."""
 
     reason_code = "source-current-path-missing"
+
+
+class SourceRelocationAmbiguousError(SourceAccessError):
+    """Raised when relocation has multiple equal-priority hash matches."""
+
+    reason_code = "source-relocation-ambiguous"
 
 
 class SourceBoundaryError(SourceAccessError):
@@ -355,12 +366,35 @@ def _resolve_current_path(project_root: Path, current_path: str) -> Path:
     return resolved
 
 
+def _recover_failed_access(
+    workspace_root: str | Path,
+    project_id: str,
+    source_id: str,
+    original_error: SourceAccessError,
+) -> None:
+    try:
+        recovery = recover_source(workspace_root, project_id, source_id)
+    except SourceRecoveryError as exc:
+        raise SourceAccessError(
+            f"could not evaluate deterministic source relocation: {exc}"
+        ) from exc
+    if recovery.ambiguous:
+        candidates = ", ".join(recovery.candidate_paths)
+        raise SourceRelocationAmbiguousError(
+            "source relocation has multiple equal-priority exact-hash candidates: "
+            f"{candidates}"
+        )
+    if recovery.status in {"recovered", "not-needed"}:
+        return
+    raise original_error
+
+
 def locate_source(
     workspace_root: str | Path,
     project_id: str,
     source_id: str,
 ) -> SourceLocation:
-    """Resolve one source's current path and recorded version without hash search."""
+    """Resolve the current path, recovering identity only after access failure."""
 
     try:
         registration = load_registered_project(workspace_root, project_id)
@@ -375,10 +409,31 @@ def locate_source(
         raise SourceContentMismatchError(
             f"source {source.source_id} has no recorded content version"
         )
-    absolute_path = _resolve_current_path(
-        registration.project_root,
-        source.current_path,
-    )
+    try:
+        absolute_path = _resolve_current_path(
+            registration.project_root,
+            source.current_path,
+        )
+    except (SourceMissingError, SourceBoundaryError, SourceReadError) as exc:
+        _recover_failed_access(
+            workspace_root,
+            registration.project_id,
+            source.source_id,
+            exc,
+        )
+        source = _source_record(
+            registration.project_id,
+            source.source_id,
+            workspace_root,
+        )
+        if source.current_version is None or source.current_content_hash is None:
+            raise SourceContentMismatchError(
+                f"source {source.source_id} has no recorded content version"
+            )
+        absolute_path = _resolve_current_path(
+            registration.project_root,
+            source.current_path,
+        )
     return SourceLocation(
         project_id=registration.project_id,
         source_id=source.source_id,
@@ -693,27 +748,46 @@ def open_source(
 
     normalized_locator = _normalize_locator(locator)
     location = locate_source(workspace_root, project_id, source_id)
-    if evidence_source_version is not None:
-        if not _is_integer(evidence_source_version) or evidence_source_version < 1:
-            raise SourceVersionMismatchError(
-                "evidence_source_version must be a positive integer"
+    def verify_requested_identity(candidate: SourceLocation) -> None:
+        if evidence_source_version is not None:
+            if not _is_integer(evidence_source_version) or evidence_source_version < 1:
+                raise SourceVersionMismatchError(
+                    "evidence_source_version must be a positive integer"
+                )
+            if evidence_source_version != candidate.current_version:
+                raise SourceVersionMismatchError(
+                    "Evidence source version is not the current registered version: "
+                    f"evidence {evidence_source_version}; "
+                    f"current {candidate.current_version}"
+                )
+        if expected_content_hash is not None:
+            expected_content = _content_hash(
+                expected_content_hash,
+                "expected_content_hash",
             )
-        if evidence_source_version != location.current_version:
-            raise SourceVersionMismatchError(
-                "Evidence source version is not the current registered version: "
-                f"evidence {evidence_source_version}; current {location.current_version}"
-            )
-    if expected_content_hash is not None:
-        expected_content = _content_hash(
-            expected_content_hash,
-            "expected_content_hash",
+            if expected_content != candidate.content_hash:
+                raise SourceContentMismatchError(
+                    "requested content hash is not the current recorded source version: "
+                    f"expected {expected_content}; current {candidate.content_hash}"
+                )
+
+    verify_requested_identity(location)
+    try:
+        data = _read_verified_source(location)
+    except (SourceContentMismatchError, SourceReadError) as exc:
+        _recover_failed_access(
+            workspace_root,
+            location.project_id,
+            location.source_id,
+            exc,
         )
-        if expected_content != location.content_hash:
-            raise SourceContentMismatchError(
-                "requested content hash is not the current recorded source version: "
-                f"expected {expected_content}; current {location.content_hash}"
-            )
-    data = _read_verified_source(location)
+        location = locate_source(
+            workspace_root,
+            location.project_id,
+            location.source_id,
+        )
+        verify_requested_identity(location)
+        data = _read_verified_source(location)
     excerpt, excerpt_format = _reopen_locator(
         data,
         relative_path=location.current_path,
