@@ -50,9 +50,9 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | G-07 minimal MCP server | complete | `7b0eef9` | `checkpoint/g-07-mcp-server` |
 | G-08 budget-bounded Host Context Pack | complete | `3721fb5` | `checkpoint/g-08-host-context-pack` |
 | E-01 resumable staged run orchestration | complete | `146fc0f` | `checkpoint/e-01-run-orchestrator` |
-| E-08 deterministic one-action prefix (R2 slice) | complete | this task commit | `checkpoint/e-08-deterministic-understand` |
+| E-08 deterministic one-action prefix (R2 slice) | complete | `b2e04ca` | `checkpoint/e-08-deterministic-understand` |
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
-| H-07 conservative project reconciliation | complete after validation on 2026-07-16 | this task commit | `checkpoint/h-07-project-reconciliation` |
+| H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
 
 ## 3. 后续最小改动计划
 
