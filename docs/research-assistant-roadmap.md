@@ -33,7 +33,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | B-04 文件指纹与增量 Manifest | 已完成 | `f6fcd43` | `checkpoint/b-04-file-fingerprints` |
 | B-05 格式、语言与科研角色识别 | 已完成 | `7ed9196` | `checkpoint/b-05-file-classification` |
 | B-06 Manifest 文件状态双轴 | 已完成 | `9c6ba5d` | `checkpoint/b-06-manifest-file-state` |
-| B-08 覆盖率与失败报告 | 本次落库 | 本次提交 | `checkpoint/b-08-coverage-report` |
+| B-08 覆盖率与失败报告 | 已完成 | `5c864a2` | `checkpoint/b-08-coverage-report` |
+| C-01 提取 Schema | 本次落库 | 本次提交 | `checkpoint/c-01-extraction-schema` |
 
 ## 3. 后续最小改动计划
 
@@ -317,16 +318,16 @@ git tag checkpoint/b-01-project-register
 
 ## 6. 下一项可执行任务
 
-B-08 完成后的下一项是：
+C-01 完成后的下一项是：
 
-> **C-01：`ExtractedDocument`、`Block` 与 `Locator` Schema**
+> **C-02：文本、源码、LaTeX、配置和结构化文本提取器**
 
 它的最小范围严格限制为：
 
-- 定义版本化 `ExtractedDocument`、`Block`、`Locator` 和提取器结果 Schema；
-- 统一表达行、PDF 页、Notebook cell、表格范围等可回溯定位，并对非法组合 fail closed；
-- 提供稳定 JSON round-trip、Schema 版本和 future-version 拒绝测试；
-- 仅实现数据契约，不读取或修改源科研项目，不执行提取；
-- 不提前实现 C-02/C-03/C-04 格式提取器、C-08 chunking、D 阶段 `source_id`/Evidence/回源、MCP、Hook、Web 或知识综述。
+- 只为 B-05 已识别的文本、源码、LaTeX、配置和结构化文本实现确定性提取；
+- 使用 C-01 Schema 输出带一基行号的 Block，保留检测编码和稳定截断原因；
+- 使用 fixture 覆盖多语言源码、UTF-8/常见编码、超长行和二进制误判；
+- 不修改源项目，不发送内容到外部服务；
+- 不提前实现 C-03 Notebook、C-04 PDF、C-08 chunking、D 阶段 `source_id`/Evidence/回源、Manifest 状态调度、MCP、Hook、Web 或 LLM 行为。
 
-C-01 仍是 Research Core 的确定性数据契约，不是内容提取或独立聊天入口。
+C-02 仍是 Research Core 的本地确定性提取能力，不是自适应阅读或知识综述。
