@@ -1,4 +1,4 @@
-# Research Core Service Facade (G-01, extended by G-07 and G-08)
+# Research Core Service Facade (G-01, extended by G-07, G-08, and E-01)
 
 - G-01 status: implemented and accepted
 - Public module: `tools.research_core`
@@ -6,7 +6,8 @@
 - Core validation: `tests/test_research_core_service.py`
 - G-07 host-view validation: `tests/test_research_mcp_server.py`
 - G-08 Host Context Pack validation: `tests/test_host_context_pack.py`
-- Existing checkpoints: `checkpoint/g-01-core-service`, `checkpoint/g-07-mcp-server`
+- E-01 run-orchestration validation: `tests/test_project_run_orchestration.py`
+- Existing checkpoints: `checkpoint/g-01-core-service`, `checkpoint/g-07-mcp-server`, `checkpoint/g-08-host-context-pack`, `checkpoint/e-01-run-orchestrator`
 
 ## Purpose
 
@@ -42,6 +43,9 @@ project and does not create state in the research source tree.
 | `coverage(project_id)` | `tools.coverage_report.generate_coverage_report` | local/path-bearing `CoverageReportResult` |
 | `coverage_view(project_id)` | `coverage(...)` plus host-safe projection | path-free `HostCoverageResult` |
 | `host_context_pack(project_id, max_bytes=...)` | `tools.host_context.assemble_host_context_pack` over host-safe Core DTOs and current registries | path-free `HostContextPackResult` |
+| `project_run_start(project_id, through_stage=...)` | `tools.project_orchestrator.ProjectRunOrchestrator.start` with current deterministic Core handlers | local/path-bearing `ProjectRunResult` |
+| `project_run_resume(project_id, run_id, through_stage=...)` | persisted checkpoint recovery without repeating succeeded stages | local/path-bearing `ProjectRunResult` |
+| `project_run_status(project_id, run_id)` | strict read-only run loading | local/path-bearing `ProjectRunResult` |
 | `source_open(...)` | `tools.source_access.open_source` or `open_evidence` | local/path-bearing `SourceOpenResult` |
 | `source_open_view(...)` | policy-enforced `source_open(...)` plus host-safe projection | path-free `HostSourceOpenResult` |
 
@@ -74,6 +78,31 @@ a dedicated Schema v1 `ProjectContextResult`. It retains:
 It intentionally omits source/workspace/machine/knowledge paths, `project.yaml`
 location, storage records, Git root, and Git origin URL. It performs no scan and
 does not expose the raw `ProjectRegistrationResult`.
+
+### Persisted project runs
+
+```python
+started = core.project_run_start(
+    registration.project_id,
+    through_stage="classify",
+)
+resumed = core.project_run_resume(started.project_id, started.run_id)
+report = core.project_run_status(resumed.project_id, resumed.run_id)
+```
+
+These E-01 methods expose the persisted, resumable orchestration state machine
+without placing parsing or transport behavior in the service. The default Core
+stage mapping validates registration, runs the current policy-aware inventory,
+and derives classification coverage. Later unimplemented stages remain explicit
+`unavailable` results. Run machine state lives only below
+`.llmwiki/projects/<project_id>/runs/`; the source project remains read-only.
+
+A retry retains its `run_id`, records interruption/failure history, and does not
+execute stages that already reached `succeeded`. See
+[`project-run-orchestration.md`](project-run-orchestration.md) for the closed
+Schema v1 record, status transitions, CLI, and acceptance evidence. This E-01
+addition is not the complete E-08 `project understand` workflow and does not
+claim extraction, 15-artifact synthesis, Hook, model, or Web behavior.
 
 ### Scan
 

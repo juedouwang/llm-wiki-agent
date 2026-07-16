@@ -13,6 +13,7 @@ from typing import Sequence
 if __package__:
     from .host_context import HOST_CONTEXT_DEFAULT_MAX_BYTES
     from .project_layout import LayoutError
+    from .project_runs import PROJECT_UNDERSTAND_STAGES
     from .research_core import ResearchCoreService
     from .scan_policy import ScanPolicyError
     from .source_access import SourceAccessError, deserialize_locator, locate_source
@@ -24,6 +25,9 @@ else:
         HOST_CONTEXT_DEFAULT_MAX_BYTES,
     )
     from project_layout import LayoutError  # type: ignore[no-redef]
+    from project_runs import (  # type: ignore[no-redef]
+        PROJECT_UNDERSTAND_STAGES,
+    )
     from research_core import ResearchCoreService  # type: ignore[no-redef]
     from scan_policy import ScanPolicyError  # type: ignore[no-redef]
     from source_access import (  # type: ignore[no-redef]
@@ -181,6 +185,71 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Research Core workspace (default: this repository)",
     )
     coverage.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+
+    run = subparsers.add_parser(
+        "run",
+        help="Start, resume, or inspect persisted project-understanding runs.",
+    )
+    run_subparsers = run.add_subparsers(dest="run_command", required=True)
+    run_start = run_subparsers.add_parser(
+        "start",
+        help="Create and execute a new logical run.",
+    )
+    run_start.add_argument("project_id", help="B-01 registered project ID")
+    run_start.add_argument(
+        "--through",
+        dest="through_stage",
+        choices=PROJECT_UNDERSTAND_STAGES,
+        help="Pause after this canonical stage instead of running to the end",
+    )
+    run_start.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    run_start.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+    run_resume = run_subparsers.add_parser(
+        "resume",
+        help="Resume a persisted run without repeating succeeded stages.",
+    )
+    run_resume.add_argument("project_id", help="B-01 registered project ID")
+    run_resume.add_argument("run_id", help="Existing E-01 run ID")
+    run_resume.add_argument(
+        "--through",
+        dest="through_stage",
+        choices=PROJECT_UNDERSTAND_STAGES,
+        help="Pause after this canonical stage instead of running to the end",
+    )
+    run_resume.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    run_resume.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+    run_show = run_subparsers.add_parser(
+        "show",
+        help="Load a run report without executing any stage.",
+    )
+    run_show.add_argument("project_id", help="B-01 registered project ID")
+    run_show.add_argument("run_id", help="Existing E-01 run ID")
+    run_show.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    run_show.add_argument(
         "--json",
         action="store_true",
         help="Print a machine-readable JSON result",
@@ -479,6 +548,61 @@ def _run_coverage(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_project_run_result(result: object, *, as_json: bool) -> int:
+    payload = result.as_dict()
+    if as_json:
+        print(json.dumps({"ok": True, **payload}, indent=2, ensure_ascii=False))
+        return 0
+
+    run = payload["run"]
+    print(f"Project run: {run['run_id']}")
+    print(f"Project:     {run['project_id']}")
+    print(f"Status:      {run['status']}")
+    print(f"Revision:    {run['revision']}")
+    print(f"Run file:    {payload['run_file']}")
+    print("Stages:")
+    for stage in run["stages"]:
+        print(
+            f"  {stage['ordinal'] + 1:>2}. {stage['stage_id']}: "
+            f"{stage['status']} ({len(stage['attempts'])} attempt(s))"
+        )
+    return 0
+
+
+def _run_project_run_start(args: argparse.Namespace) -> int:
+    try:
+        result = ResearchCoreService(args.workspace_root).project_run_start(
+            project_id=args.project_id,
+            through_stage=args.through_stage,
+        )
+    except (LayoutError, OSError) as exc:
+        return _print_command_error(exc, as_json=args.json)
+    return _print_project_run_result(result, as_json=args.json)
+
+
+def _run_project_run_resume(args: argparse.Namespace) -> int:
+    try:
+        result = ResearchCoreService(args.workspace_root).project_run_resume(
+            project_id=args.project_id,
+            run_id=args.run_id,
+            through_stage=args.through_stage,
+        )
+    except (LayoutError, OSError) as exc:
+        return _print_command_error(exc, as_json=args.json)
+    return _print_project_run_result(result, as_json=args.json)
+
+
+def _run_project_run_show(args: argparse.Namespace) -> int:
+    try:
+        result = ResearchCoreService(args.workspace_root).project_run_status(
+            project_id=args.project_id,
+            run_id=args.run_id,
+        )
+    except (LayoutError, OSError) as exc:
+        return _print_command_error(exc, as_json=args.json)
+    return _print_project_run_result(result, as_json=args.json)
+
+
 def _run_source_sync(args: argparse.Namespace) -> int:
     try:
         result = sync_source_registry(
@@ -720,6 +844,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_inventory(args)
     if args.command == "coverage":
         return _run_coverage(args)
+    if args.command == "run" and args.run_command == "start":
+        return _run_project_run_start(args)
+    if args.command == "run" and args.run_command == "resume":
+        return _run_project_run_resume(args)
+    if args.command == "run" and args.run_command == "show":
+        return _run_project_run_show(args)
     if args.command == "source" and args.source_command == "sync":
         return _run_source_sync(args)
     if args.command == "source" and args.source_command == "history":

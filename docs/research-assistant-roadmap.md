@@ -48,7 +48,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | J-01 R1 basic-chain acceptance | complete (R1 slice) | `73070f1` | `checkpoint/j-01-r1-e2e` |
 | G-01 Research Core service facade | complete | `baa9625` | `checkpoint/g-01-core-service` |
 | G-07 minimal MCP server | complete | `7b0eef9` | `checkpoint/g-07-mcp-server` |
-| G-08 budget-bounded Host Context Pack | complete | this task commit | `checkpoint/g-08-host-context-pack` |
+| G-08 budget-bounded Host Context Pack | complete | `3721fb5` | `checkpoint/g-08-host-context-pack` |
+| E-01 resumable staged run orchestration | complete | this task commit | `checkpoint/e-01-run-orchestrator` |
 
 ## 3. 后续最小改动计划
 
@@ -347,13 +348,19 @@ and real MCP client validation are documented in
 Pack contract and its path-free omission/filtering behavior are documented in
 [`host-context-pack.md`](host-context-pack.md).
 
+E-01 is complete at `checkpoint/e-01-run-orchestrator`. Its persisted,
+resumable run state machine, closed Schema v1 attempt ledger, interruption
+recovery, source-read-only boundary, Core/CLI entry points, and honest
+`unavailable` stage semantics are documented in
+[`project-run-orchestration.md`](project-run-orchestration.md).
+
 The next executable roadmap task is:
 
-> **E-01: staged run orchestration skeleton**
+> **E-08 (initial deterministic R2 slice): expose the current run prefix as one user action**
 
-Its initial R2 scope is to define a persisted, resumable run state machine and
-stage boundaries for deterministic project-understanding work. It must reuse the
-registered project layout and existing Core operations, record versioned machine
-state under `.llmwiki/projects/<project_id>/runs/`, leave the source project
-read-only, and avoid claiming extraction, 15-artifact synthesis, Hook, Web, or
-model-driven stages that have not yet landed.
+This narrow slice must call the E-01 orchestrator rather than duplicate its
+state machine, execute only the already implemented deterministic
+`register ? inventory ? classify` prefix, return the durable run report, and
+remain resumable. It must not claim extraction, 15 Markdown artifacts, Web
+rendering/`--open`, Hook behavior, or model-driven understanding. Those remain
+explicitly unavailable until their owning roadmap tasks land.

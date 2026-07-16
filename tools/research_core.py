@@ -29,12 +29,22 @@ if __package__:
         HostContextPackResult,
         assemble_host_context_pack,
     )
-    from .project_inventory import ProjectInventoryResult, inventory_project
+    from .project_inventory import (
+        PROJECT_MANIFEST_VERSION,
+        ProjectInventoryResult,
+        inventory_project,
+    )
+    from .project_orchestrator import (
+        ProjectRunOrchestrator,
+        StageContext,
+        StageRunner,
+    )
     from .project_registry import (
         ProjectRegistrationResult,
         load_registered_project,
         register_project,
     )
+    from .project_runs import ProjectRunResult, StageOutcome
     from .scan_policy import ScanPolicyConfig, ScanPolicyError
     from .source_access import (
         SourceLocatorError,
@@ -61,13 +71,23 @@ else:
         assemble_host_context_pack,
     )
     from project_inventory import (  # type: ignore[no-redef]
+        PROJECT_MANIFEST_VERSION,
         ProjectInventoryResult,
         inventory_project,
+    )
+    from project_orchestrator import (  # type: ignore[no-redef]
+        ProjectRunOrchestrator,
+        StageContext,
+        StageRunner,
     )
     from project_registry import (  # type: ignore[no-redef]
         ProjectRegistrationResult,
         load_registered_project,
         register_project,
+    )
+    from project_runs import (  # type: ignore[no-redef]
+        ProjectRunResult,
+        StageOutcome,
     )
     from scan_policy import (  # type: ignore[no-redef]
         ScanPolicyConfig,
@@ -531,6 +551,98 @@ class ResearchCoreService:
             deadline=onboarding["deadline"],
             daily_available_hours=onboarding["daily_available_hours"],
         )
+
+    def _project_run_stage_runners(self) -> dict[str, StageRunner]:
+        return {
+            "register": self._run_registration_stage,
+            "inventory": self._run_inventory_stage,
+            "classify": self._run_classification_stage,
+        }
+
+    def _run_registration_stage(self, context: StageContext) -> StageOutcome:
+        project = self.project_context(context.project_id)
+        return StageOutcome.succeeded(
+            input_versions={"project_context_version": PROJECT_CONTEXT_VERSION},
+            artifacts=(
+                {
+                    "artifact_type": "project-registration",
+                    "artifact_id": project.project_id,
+                    "relative_path": "project.yaml",
+                    "content_hash": None,
+                },
+            ),
+        )
+
+    def _run_inventory_stage(self, context: StageContext) -> StageOutcome:
+        inventory = self.scan(context.project_id)
+        return StageOutcome.succeeded(
+            input_versions={"inventory_contract": PROJECT_MANIFEST_VERSION},
+            artifacts=(
+                {
+                    "artifact_type": "project-manifest",
+                    "artifact_id": f"manifest-generation-{inventory.scan_generation}",
+                    "relative_path": "manifest.jsonl",
+                    "content_hash": None,
+                },
+            ),
+        )
+
+    def _run_classification_stage(self, context: StageContext) -> StageOutcome:
+        coverage = self.coverage(context.project_id)
+        manifest = coverage.report["manifest"]
+        return StageOutcome.succeeded(
+            input_versions={
+                "manifest_version": manifest["manifest_version"],
+                "manifest_scan_generation": manifest["scan_generation"],
+                "coverage_report_version": COVERAGE_REPORT_VERSION,
+            },
+            artifacts=(
+                {
+                    "artifact_type": "classification-coverage",
+                    "artifact_id": (
+                        f"coverage-generation-{manifest['scan_generation']}"
+                    ),
+                    "relative_path": "indexes/coverage-report.json",
+                    "content_hash": None,
+                },
+            ),
+        )
+
+    def project_run_start(
+        self,
+        project_id: str,
+        *,
+        through_stage: str | None = None,
+    ) -> ProjectRunResult:
+        """Start a persisted run using currently available Core stages."""
+
+        return ProjectRunOrchestrator(
+            self.workspace_root,
+            runners=self._project_run_stage_runners(),
+        ).start(project_id, through_stage=through_stage)
+
+    def project_run_resume(
+        self,
+        project_id: str,
+        run_id: str,
+        *,
+        through_stage: str | None = None,
+    ) -> ProjectRunResult:
+        """Resume one run while preserving successful stage checkpoints."""
+
+        return ProjectRunOrchestrator(
+            self.workspace_root,
+            runners=self._project_run_stage_runners(),
+        ).resume(project_id, run_id, through_stage=through_stage)
+
+    def project_run_status(
+        self,
+        project_id: str,
+        run_id: str,
+    ) -> ProjectRunResult:
+        """Load one persisted run report without executing any stage."""
+
+        return ProjectRunOrchestrator(self.workspace_root).status(project_id, run_id)
 
     def scan(
         self,
