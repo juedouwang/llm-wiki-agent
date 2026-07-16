@@ -115,9 +115,9 @@ Hooks 可能被禁用、未信任、配置错误或因宿主版本不同而不�
 ├─ sources.jsonl
 ├─ evidence.jsonl          # 规划项；由后续 D 阶段实现
 ├─ relations.jsonl         # 规划项；可从知识与 Evidence 重建
-├─ events.jsonl            # 规划项；宿主事件与增量同步账本
+├─ events.jsonl            # H-04 implemented: append-only host-event ledger
 ├─ extracted/
-├─ indexes/
+├─ indexes/                 # includes rebuildable H-04 dirty-paths.json
 └─ runs/
 ```
 
@@ -375,6 +375,15 @@ status:
 5. 把受影响知识标为 `stale`；
 6. 重新生成并核验受影响内容；
 7. 刷新 Markdown、索引和网页。
+
+Implementation status on 2026-07-16: H-04 completes only the deterministic
+input layer in step 1. Codex, Claude Code, or another host can idempotently
+append a closed file-event record to `events.jsonl`; Core rebuilds
+`indexes/dirty-paths.json` from the complete ledger. Events are unverified
+hints: they do not read source content, mutate curated knowledge, or count as
+reconciliation. Steps 2--7, Stop/explicit synchronization, missed-event
+full-scan fallback, and selective refresh remain H-07, H-01--H-03, and
+H-05--H-06 work. See [`host-event-ledger.md`](host-event-ledger.md).
 
 只有以下情况需要全量扫描：
 

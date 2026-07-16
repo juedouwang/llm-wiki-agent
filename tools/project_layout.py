@@ -311,12 +311,20 @@ class ProjectLayout:
         return self.machine_root / "evidence.jsonl"
 
     @property
+    def events_file(self) -> Path:
+        return self.machine_root / "events.jsonl"
+
+    @property
     def extracted_dir(self) -> Path:
         return self.machine_root / "extracted"
 
     @property
     def indexes_dir(self) -> Path:
         return self.machine_root / "indexes"
+
+    @property
+    def dirty_paths_file(self) -> Path:
+        return self.indexes_dir / "dirty-paths.json"
 
     @property
     def runs_dir(self) -> Path:

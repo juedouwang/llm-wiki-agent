@@ -58,6 +58,8 @@ ingest report.pdf                          # auto-converts in memory, then inges
 ingest slides.pptx notes.docx              # batch, mixed formats
 python tools/project.py register /path/to/project --json  # register only; no scan
 python tools/project.py inventory <project_id> --json       # accountable incremental Manifest
+python -m tools.project event submit <project_id> --event-id evt-1 --producer codex --occurred-at 2026-07-16T09:00:00Z --operation modified --path src/model.py --json
+python -m tools.project event show <project_id> --json       # validate/rebuild the dirty-path projection
 python tools/raw_md.py /path/to/project     # legacy full-project raw-md evidence layer
 query: what are the main themes?           # synthesize answer from wiki pages
 lint                                       # find orphans, contradictions, gaps
@@ -170,6 +172,13 @@ This currently performs only `register -> inventory -> classify`, persists a
 resumable run report, and leaves later stages pending. It does **not** yet
 produce the 15-artifact package or local Web dashboard and has no `--open`
 option.
+
+Registered projects also accept host-neutral file-change signals through the
+append-only H-04 event ledger. `event submit` records an idempotent event under
+`.llmwiki/projects/<project_id>/events.jsonl`; `event show` validates that ledger
+and deterministically repairs `indexes/dirty-paths.json`. These signals do not
+scan source files, mutate curated knowledge, or claim reconciliation. See
+[`docs/host-event-ledger.md`](docs/host-event-ledger.md).
 
 The current R2 transport can be started for any MCP-capable host with:
 

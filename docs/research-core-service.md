@@ -1,4 +1,4 @@
-# Research Core Service Facade (G-01, extended through the E-08 R2 slice)
+# Research Core Service Facade (G-01, extended through H-04)
 
 - G-01 status: implemented and accepted
 - Public module: `tools.research_core`
@@ -8,7 +8,8 @@
 - G-08 Host Context Pack validation: `tests/test_host_context_pack.py`
 - E-01 run-orchestration validation: `tests/test_project_run_orchestration.py`
 - E-08 deterministic-action validation: `tests/test_project_understand.py`
-- Existing checkpoints: `checkpoint/g-01-core-service`, `checkpoint/g-07-mcp-server`, `checkpoint/g-08-host-context-pack`, `checkpoint/e-01-run-orchestrator`, `checkpoint/e-08-deterministic-understand`
+- H-04 host-event validation: `tests/test_host_events.py`
+- Existing checkpoints: `checkpoint/g-01-core-service`, `checkpoint/g-07-mcp-server`, `checkpoint/g-08-host-context-pack`, `checkpoint/e-01-run-orchestrator`, `checkpoint/e-08-deterministic-understand`; H-04 is completed by this task commit and checkpointed as `checkpoint/h-04-host-event-ledger`
 
 ## Purpose
 
@@ -40,6 +41,8 @@ project and does not create state in the research source tree.
 |---|---|---|
 | `register(...)` | `tools.project_registry.register_project` | `ProjectRegistrationResult` |
 | `project_context(project_id)` | validated `tools.project_registry.load_registered_project` projection | path-free `ProjectContextResult` |
+| `host_event_submit(project_id, ...)` | `tools.host_events.submit_host_event` append plus deterministic projection | path-free `HostEventSubmitResult` |
+| `dirty_path_queue(project_id)` | `tools.host_events.load_dirty_path_queue` ledger validation and projection repair | path-free `DirtyPathQueueResult` |
 | `scan(...)` | `tools.project_inventory.inventory_project` with `ScanPolicyConfig` | `ProjectInventoryResult` |
 | `coverage(project_id)` | `tools.coverage_report.generate_coverage_report` | local/path-bearing `CoverageReportResult` |
 | `coverage_view(project_id)` | `coverage(...)` plus host-safe projection | path-free `HostCoverageResult` |
@@ -80,6 +83,34 @@ a dedicated Schema v1 `ProjectContextResult`. It retains:
 It intentionally omits source/workspace/machine/knowledge paths, `project.yaml`
 location, storage records, Git root, and Git origin URL. It performs no scan and
 does not expose the raw `ProjectRegistrationResult`.
+
+### Host event ledger and dirty-path queue
+
+```python
+submitted = core.host_event_submit(
+    "study-0123456789ab",
+    event_id="codex:evt-001",
+    producer="codex",
+    occurred_at="2026-07-16T09:00:00Z",
+    operation="modified",
+    paths=["src/model.py"],
+)
+queue = core.dirty_path_queue("study-0123456789ab")
+```
+
+H-04 accepts a closed host-neutral event model, assigns contiguous ingestion
+sequences, and appends canonical Schema v1 JSONL to `events.jsonl`. Exact retries
+are idempotent; reuse of an event ID with a different canonical payload fails
+closed. The queue is a deterministic, atomically replaceable projection bound to
+the exact ledger bytes by SHA-256. Missing or stale current-schema projections
+are rebuilt from the ledger, while legacy and future schemas fail closed.
+
+Both results expose only project IDs, project-relative paths, relative artifact
+names, event metadata, and queue aggregates. Submission performs lexical path
+validation only: it does not scan, stat, hash, open, or mutate source files and
+never updates curated knowledge. H-07 reconciliation and Hook reliability remain
+separate. The complete contract is documented in
+[`host-event-ledger.md`](host-event-ledger.md).
 
 ### One-action deterministic project understanding
 
@@ -260,6 +291,8 @@ python -m tools.project context ... --json       -> core.project_context(...)
 python -m tools.project context-pack ... --json  -> core.host_context_pack(...)
 python -m tools.project inventory ... --json     -> core.scan(...)
 python -m tools.project coverage ... --json      -> core.coverage(...)
+python -m tools.project event submit ... --json  -> core.host_event_submit(...)
+python -m tools.project event show ... --json    -> core.dirty_path_queue(...)
 python -m tools.project source open ... --json   -> core.source_open(...)
 ```
 
@@ -278,8 +311,9 @@ CLI's absolute paths.
 - Curated knowledge stays under the configured
   `wiki/projects/<project_id>/`-equivalent knowledge root.
 - The registered research source project remains read-only.
-- Host-safe DTOs add no persisted record and do not rewrite legacy data; Host
-  Context assembly only triggers the existing deterministic coverage-report write.
+- Host-safe DTOs do not rewrite legacy data; Host Context assembly only triggers
+  the existing deterministic coverage-report write. H-04 persists only its
+  append-only event ledger and rebuildable dirty-path projection.
 - All schema/version checks continue through `tools.project_layout` and accepted
   R1 modules; future unsupported versions fail closed.
 - No source content is sent externally by this deterministic service path.
@@ -296,21 +330,24 @@ python -B -m pytest -q `
   tests/test_source_access.py `
   tests/test_research_mcp_server.py `
   tests/test_host_context_pack.py `
-  tests/test_project_understand.py
+  tests/test_project_understand.py `
+  tests/test_host_events.py
 ```
 
 They cover direct service operations, real CLI delegation, complete scan-policy
 mapping, host-safe DTO redaction, Manifest source-content authorization, exact
 source/evidence reopening, Host Context byte accounting and deterministic
-truncation, output-schema fail-closed behavior, source-project
-hash/size/mtime/mode preservation, and the absence of LLM/network/Web calls.
+truncation, host-event idempotency and projection repair, output-schema
+fail-closed behavior, source-project hash/size/mtime/mode preservation, and the
+absence of LLM/network/Web calls.
 
 ## Explicit non-goals
 
-The accepted R2 Core slices do not yet implement Hooks, the H-04 event
-ledger, H-07 reconciliation, full extraction/synthesis, 15-artifact rendering,
-Web rendering/`--open`, Verified Query, or the I-02 task store and planning
-pipeline. The initial E-08 action is only the deterministic
+The accepted R2 Core slices now include the H-04 host-event ledger, but do not
+yet implement Hook installation or reliability, H-07 reconciliation, selective
+refresh, full extraction/synthesis, 15-artifact rendering, Web rendering/`--open`,
+Verified Query, or the I-02 task store and planning pipeline. The initial E-08
+action is only the deterministic
 `register -> inventory -> classify` prefix. G-07 supplies the minimal MCP
 adapter documented in [`research-mcp-server.md`](research-mcp-server.md); later
 capabilities remain separate roadmap tasks.

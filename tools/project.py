@@ -247,6 +247,74 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print a machine-readable JSON result",
     )
 
+    event = subparsers.add_parser(
+        "event",
+        help="Record or inspect host-neutral dirty-path events.",
+    )
+    event_subparsers = event.add_subparsers(
+        dest="event_command",
+        required=True,
+    )
+    event_submit = event_subparsers.add_parser(
+        "submit",
+        help="Append one idempotent host event without reconciling knowledge.",
+    )
+    event_submit.add_argument("project_id", help="B-01 registered project ID")
+    event_submit.add_argument(
+        "--event-id",
+        required=True,
+        help="Producer-stable idempotency key",
+    )
+    event_submit.add_argument(
+        "--producer",
+        required=True,
+        help="Lowercase host-neutral producer code",
+    )
+    event_submit.add_argument(
+        "--occurred-at",
+        required=True,
+        help="Event occurrence time as timezone-aware ISO-8601",
+    )
+    event_submit.add_argument(
+        "--operation",
+        required=True,
+        choices=("created", "modified", "deleted", "moved", "unknown"),
+        help="Closed host-neutral file operation",
+    )
+    event_submit.add_argument(
+        "--path",
+        action="append",
+        required=True,
+        dest="paths",
+        metavar="PROJECT_RELATIVE_PATH",
+        help="Dirty project-relative path; repeat for multiple paths",
+    )
+    event_submit.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    event_submit.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+    event_show = event_subparsers.add_parser(
+        "show",
+        help="Load or repair the deterministic dirty-path queue.",
+    )
+    event_show.add_argument("project_id", help="B-01 registered project ID")
+    event_show.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    event_show.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+
     run = subparsers.add_parser(
         "run",
         help="Start, resume, or inspect persisted project-understanding runs.",
@@ -624,6 +692,56 @@ def _run_coverage(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_event_submit(args: argparse.Namespace) -> int:
+    try:
+        result = ResearchCoreService(args.workspace_root).host_event_submit(
+            project_id=args.project_id,
+            event_id=args.event_id,
+            producer=args.producer,
+            occurred_at=args.occurred_at,
+            operation=args.operation,
+            paths=args.paths,
+        )
+    except (LayoutError, OSError, ValueError) as exc:
+        return _print_command_error(exc, as_json=args.json)
+
+    payload = result.as_dict()
+    if args.json:
+        print(json.dumps({"ok": True, **payload}, indent=2, ensure_ascii=False))
+        return 0
+
+    print(f"Host event:       {result.disposition}")
+    print(f"Project:          {result.project_id}")
+    print(f"Event ID:         {result.event_id}")
+    print(f"Sequence:         {result.sequence}")
+    print(f"Dirty paths:      {result.queue.dirty_path_count}")
+    print(f"Queue rewritten:  {result.projection_updated}")
+    return 0
+
+
+def _run_event_show(args: argparse.Namespace) -> int:
+    try:
+        result = ResearchCoreService(args.workspace_root).dirty_path_queue(
+            project_id=args.project_id,
+        )
+    except (LayoutError, OSError, ValueError) as exc:
+        return _print_command_error(exc, as_json=args.json)
+
+    payload = result.as_dict()
+    if args.json:
+        print(json.dumps({"ok": True, **payload}, indent=2, ensure_ascii=False))
+        return 0
+
+    print(f"Dirty-path queue: {result.project_id}")
+    print(f"Ledger events:    {result.queue.ledger_event_count}")
+    print(f"Last sequence:    {result.queue.ledger_last_sequence}")
+    print(f"Dirty paths:      {result.queue.dirty_path_count}")
+    print(f"Queue rebuilt:    {result.projection_rebuilt}")
+    for entry in result.queue.dirty_paths:
+        print(f"  - {entry.path}")
+    return 0
+
+
 def _print_project_run_result(result: object, *, as_json: bool) -> int:
     payload = result.as_dict()
     if as_json:
@@ -922,6 +1040,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_inventory(args)
     if args.command == "coverage":
         return _run_coverage(args)
+    if args.command == "event" and args.event_command == "submit":
+        return _run_event_submit(args)
+    if args.command == "event" and args.event_command == "show":
+        return _run_event_show(args)
     if args.command == "run" and args.run_command == "start":
         return _run_project_run_start(args)
     if args.command == "run" and args.run_command == "resume":

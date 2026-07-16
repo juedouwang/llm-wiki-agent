@@ -362,14 +362,22 @@ durable resume behavior, and explicit capability limits are documented in
 [`project-understand.md`](project-understand.md). The full R3 E-08 contract--15
 Markdown artifacts plus Web rendering and `--open`--remains incomplete.
 
+H-04 is complete in this task commit and is checkpointed as
+`checkpoint/h-04-host-event-ledger`. The closed host-neutral Schema v1 ledger,
+contiguous ingestion ordering, canonical duplicate idempotency, collision
+handling, deterministic dirty-path projection, crash-repair ordering,
+source-read-only boundary, and Core/CLI parity are documented in
+[`host-event-ledger.md`](host-event-ledger.md). H-04 records untrusted signals
+only; it does not claim reconciliation, Hook reliability, or selective refresh.
+
 The next executable roadmap task is:
 
-> **H-04: append-only host event ledger and dirty-path queue**
+> **H-07: project reconciliation boundary and full-scan fallback**
 
-This task must define one host-neutral, versioned event model for Codex and
-Claude-style file-change signals, persist append-only events and a derived dirty
-path queue under the registered project machine-state tree, make duplicate
-submission idempotent, tolerate deterministic out-of-order ingestion, and keep
-events from directly mutating curated knowledge. It must preserve source
-read-only behavior and must not claim H-07 reconciliation, Hook reliability, or
-selective refresh before those later tasks land.
+This task must snapshot the queued host-event boundary, run the conservative
+Core inventory/classification path, acknowledge only the successfully covered
+snapshot, and retain events after failure or when they arrive after the
+snapshot. Explicit CLI and the reserved `llmwiki_reconcile` MCP operation must
+work even when Hooks are disabled or hints are absent/inconsistent, with a full
+scan as the correctness fallback. H-07 must not yet claim H-05 selective
+extraction or selective knowledge refresh.

@@ -9,10 +9,11 @@ Codex, or Claude Code dependencies.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 import re
 import unicodedata
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 # Support both ``import tools.research_core`` and direct sibling imports.
 if __package__:
@@ -28,6 +29,12 @@ if __package__:
         HOST_CONTEXT_DEFAULT_MAX_BYTES,
         HostContextPackResult,
         assemble_host_context_pack,
+    )
+    from .host_events import (
+        DirtyPathQueueResult,
+        HostEventSubmitResult,
+        load_dirty_path_queue,
+        submit_host_event,
     )
     from .project_inventory import (
         PROJECT_MANIFEST_VERSION,
@@ -69,6 +76,12 @@ else:
         HOST_CONTEXT_DEFAULT_MAX_BYTES,
         HostContextPackResult,
         assemble_host_context_pack,
+    )
+    from host_events import (  # type: ignore[no-redef]
+        DirtyPathQueueResult,
+        HostEventSubmitResult,
+        load_dirty_path_queue,
+        submit_host_event,
     )
     from project_inventory import (  # type: ignore[no-redef]
         PROJECT_MANIFEST_VERSION,
@@ -551,6 +564,46 @@ class ResearchCoreService:
             important_question=onboarding["important_question"],
             deadline=onboarding["deadline"],
             daily_available_hours=onboarding["daily_available_hours"],
+        )
+
+    def host_event_submit(
+        self,
+        project_id: str,
+        *,
+        event_id: str,
+        producer: str,
+        occurred_at: str | datetime,
+        operation: str,
+        paths: Iterable[str | Path] | str | Path,
+        clock: Callable[[], datetime] | None = None,
+        lock_timeout_seconds: float = 5.0,
+    ) -> HostEventSubmitResult:
+        """Record one host-neutral dirty-path signal without reconciliation."""
+
+        return submit_host_event(
+            self.workspace_root,
+            project_id,
+            event_id=event_id,
+            producer=producer,
+            occurred_at=occurred_at,
+            operation=operation,
+            paths=paths,
+            clock=clock,
+            lock_timeout_seconds=lock_timeout_seconds,
+        )
+
+    def dirty_path_queue(
+        self,
+        project_id: str,
+        *,
+        lock_timeout_seconds: float = 5.0,
+    ) -> DirtyPathQueueResult:
+        """Load or repair the deterministic queue derived from host events."""
+
+        return load_dirty_path_queue(
+            self.workspace_root,
+            project_id,
+            lock_timeout_seconds=lock_timeout_seconds,
         )
 
     def _project_run_stage_runners(self) -> dict[str, StageRunner]:
