@@ -49,6 +49,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | D-05 source relocation recovery | complete | `a49c6a8` | `checkpoint/d-05-source-relocation` |
 | D-06 source and Evidence health | complete | `9b38353` | `checkpoint/d-06-source-health` |
 | J-01 R1 basic-chain acceptance | complete (R1 slice) | `73070f1` | `checkpoint/j-01-r1-e2e` |
+| J-03 阶段 A：开发监督驾驶舱基础 | 部分完成（完整产品驾驶舱仍未完成；2026-07-17 验证） | `e876060` | `checkpoint/j-03-dashboard-foundation` |
 | G-01 Research Core service facade | complete | `baa9625` | `checkpoint/g-01-core-service` |
 | G-07 minimal MCP server | complete | `7b0eef9` | `checkpoint/g-07-mcp-server` |
 | G-08 budget-bounded Host Context Pack | complete | `3721fb5` | `checkpoint/g-08-host-context-pack` |
