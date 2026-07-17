@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
@@ -28,18 +29,29 @@ BASE_BRANCH = "research-assistant"
 SCHEMA_VERSION = 1
 SNAPSHOT_KIND = "development-dashboard-snapshot"
 LEDGER_KIND = "development-dashboard-progress-ledger"
+UNIT_CATALOG_KIND = "development-dashboard-unit-catalog"
 MAX_COMMITS = 800
 MAX_FILES = 80
 MAX_RECORDS = 500
+MAX_UNITS = 240
+MAX_UNIT_COMMITS = 30
+MAX_UNIT_CHECKPOINTS = 30
+MAX_UNIT_ARTIFACTS = 20
+MAX_ARTIFACT_BYTES = 256 * 1024
 TASK_ID_RE = re.compile(r"^[A-Z]-\d{2}$")
 UNIT_ID_RE = re.compile(r"^[A-Z]-\d{2}[A-Z]?$")
-TASK_BRANCH_RE = re.compile(
-    r"^task/(?P<task>[a-z]-\d{2})(?:-(?P<slug>[a-z0-9][a-z0-9-]*))?$"
+WORK_REF_RE = re.compile(
+    r"^(?P<kind>task|checkpoint)/(?P<task>[a-z]-\d{2})(?P<unit>[a-z]?)"
+    r"(?:-(?P<slug>[a-z0-9][a-z0-9-]*))?$"
 )
-CHECKPOINT_RE = re.compile(r"^checkpoint/(?P<task>[a-z]-\d{2})(?:-|$)")
-COMMIT_TASK_RE = re.compile(r"\(([a-j]-\d{2})\)", re.I)
+COMMIT_TASK_RE = re.compile(r"\(([a-z]-\d{2})\)", re.I)
 MILESTONE_RE = re.compile(r"^###\s+(R(?:0(?:\.5)?|[1-6]))[\uFF1A:]\s*(.*?)\s*$", re.M)
-INLINE_TASK_RE = re.compile(r"(?:[A-Z]-\d{2}|P-05)")
+INLINE_TASK_RE = re.compile(r"[A-Z]-\d{2}")
+GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$", re.I)
+PROGRESS_COMMIT_RE = re.compile(r"^(?:[0-9a-f]{7,40})?$", re.I)
+ARTIFACT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+ARTIFACT_TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
+PROTECTED_ARTIFACT_COMPONENTS = {"raw", ".git", ".llmwiki"}
 AREA_LABELS = {
     "A": "\u5de5\u7a0b\u57fa\u7ebf",
     "B": "\u9879\u76ee\u626b\u63cf",
@@ -76,7 +88,11 @@ UNIT_ALIASES = {
     ("J-03", "dashboard-foundation"): (
         "J-03A",
         "\u5f00\u53d1\u76d1\u7763\u9a7e\u9a76\u8231\u57fa\u7840",
-    )
+    ),
+    ("J-03", "unit-visualization"): (
+        "J-03B",
+        "\u5355\u5143\u8bc1\u636e\u53ef\u89c6\u5316",
+    ),
 }
 
 
@@ -85,6 +101,18 @@ class DashboardError(RuntimeError):
 
 
 class DashboardStateError(DashboardError):
+    pass
+
+
+class DashboardArtifactNotFound(DashboardError):
+    pass
+
+
+class DashboardArtifactTooLarge(DashboardError):
+    pass
+
+
+class DashboardArtifactEncodingError(DashboardError):
     pass
 
 
@@ -451,22 +479,222 @@ def validate_text(value: Any, name: str, limit: int) -> str:
     return value
 
 
+def validate_keys(value: Mapping[str, Any], allowed: set[str], name: str) -> None:
+    unknown = set(value) - allowed
+    if unknown:
+        raise DashboardStateError(f"{name} contains unsupported fields.")
+
+
+def task_id_for_unit(unit_id: str) -> str:
+    if not UNIT_ID_RE.fullmatch(unit_id):
+        raise DashboardStateError("Unit identifier is invalid.")
+    return unit_id[:4]
+
+
+def validate_artifact_path(value: Any) -> str:
+    path = validate_text(value, "artifact.path", 320)
+    if (
+        not path
+        or path.startswith("/")
+        or "\\" in path
+        or ":" in path
+        or "\x00" in path
+    ):
+        raise DashboardStateError("Artifact path is not a safe repository path.")
+    parts = path.split("/")
+    folded = [part.casefold() for part in parts]
+    if any(part in {"", ".", ".."} for part in parts) or any(
+        part in PROTECTED_ARTIFACT_COMPONENTS for part in folded
+    ):
+        raise DashboardStateError("Artifact path is protected or non-canonical.")
+    return "/".join(parts)
+
+
+def artifact_token(unit_id: str, artifact: Mapping[str, Any]) -> str:
+    material = "\x00".join(
+        (
+            str(SCHEMA_VERSION),
+            unit_id,
+            str(artifact["artifact_id"]),
+            str(artifact["commit"]),
+            str(artifact["path"]),
+        )
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def validate_unit_catalog(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise DashboardStateError("unit_catalog must be an object.")
+    validate_keys(payload, {"schema_version", "kind", "units"}, "unit_catalog")
+    if payload.get("schema_version") != SCHEMA_VERSION:
+        raise DashboardStateError("Unsupported unit_catalog schema_version.")
+    if payload.get("kind") != UNIT_CATALOG_KIND:
+        raise DashboardStateError("Unexpected unit_catalog kind.")
+    units_payload = payload.get("units")
+    if not isinstance(units_payload, list) or len(units_payload) > MAX_UNITS:
+        raise DashboardStateError("unit_catalog units are invalid.")
+
+    units = []
+    seen_units: set[str] = set()
+    seen_tokens: set[str] = set()
+    for unit in units_payload:
+        if not isinstance(unit, dict):
+            raise DashboardStateError("Catalog unit must be an object.")
+        validate_keys(
+            unit,
+            {
+                "task_id",
+                "unit_id",
+                "title",
+                "summary",
+                "commits",
+                "checkpoints",
+                "artifacts",
+            },
+            "catalog unit",
+        )
+        task_id = validate_text(unit.get("task_id"), "unit.task_id", 8).upper()
+        unit_id = validate_text(unit.get("unit_id"), "unit.unit_id", 8).upper()
+        if (
+            not TASK_ID_RE.fullmatch(task_id)
+            or not UNIT_ID_RE.fullmatch(unit_id)
+            or task_id_for_unit(unit_id) != task_id
+            or unit_id in seen_units
+        ):
+            raise DashboardStateError("Catalog task or unit identifier is invalid.")
+        seen_units.add(unit_id)
+
+        commits_payload = unit.get("commits", [])
+        if (
+            not isinstance(commits_payload, list)
+            or len(commits_payload) > MAX_UNIT_COMMITS
+        ):
+            raise DashboardStateError("Catalog unit commits are invalid.")
+        commits = []
+        for value in commits_payload:
+            commit = validate_text(value, "unit.commit", 40).lower()
+            if not GIT_COMMIT_RE.fullmatch(commit):
+                raise DashboardStateError(
+                    "Catalog commits must be explicit full Git commit hashes."
+                )
+            commits.append(commit)
+        commits = dedupe(commits)
+
+        checkpoints_payload = unit.get("checkpoints", [])
+        if (
+            not isinstance(checkpoints_payload, list)
+            or len(checkpoints_payload) > MAX_UNIT_CHECKPOINTS
+        ):
+            raise DashboardStateError("Catalog unit checkpoints are invalid.")
+        checkpoints = []
+        for value in checkpoints_payload:
+            checkpoint = validate_text(value, "unit.checkpoint", 160)
+            parsed = work_unit(checkpoint, expected_kind="checkpoint")
+            if (
+                not parsed
+                or parsed["task_id"] != task_id
+                or parsed["unit_id"] != unit_id
+            ):
+                raise DashboardStateError(
+                    "Catalog checkpoint does not identify its declared unit."
+                )
+            checkpoints.append(checkpoint)
+        checkpoints = dedupe(checkpoints)
+
+        artifacts_payload = unit.get("artifacts", [])
+        if (
+            not isinstance(artifacts_payload, list)
+            or len(artifacts_payload) > MAX_UNIT_ARTIFACTS
+        ):
+            raise DashboardStateError("Catalog unit artifacts are invalid.")
+        artifacts = []
+        seen_artifacts: set[str] = set()
+        for artifact in artifacts_payload:
+            if not isinstance(artifact, dict):
+                raise DashboardStateError("Catalog artifact must be an object.")
+            validate_keys(
+                artifact,
+                {"artifact_id", "label", "description", "path", "commit"},
+                "catalog artifact",
+            )
+            artifact_id = validate_text(
+                artifact.get("artifact_id"), "artifact.artifact_id", 64
+            )
+            if (
+                not ARTIFACT_ID_RE.fullmatch(artifact_id)
+                or artifact_id in seen_artifacts
+            ):
+                raise DashboardStateError("Catalog artifact identifier is invalid.")
+            seen_artifacts.add(artifact_id)
+            commit = validate_text(
+                artifact.get("commit"), "artifact.commit", 40
+            ).lower()
+            if not GIT_COMMIT_RE.fullmatch(commit) or commit not in commits:
+                raise DashboardStateError(
+                    "Catalog artifact commit must be one of the unit's explicit commits."
+                )
+            validated_artifact = {
+                "artifact_id": artifact_id,
+                "label": validate_text(
+                    artifact.get("label", artifact_id), "artifact.label", 120
+                ),
+                "description": validate_text(
+                    artifact.get("description", ""), "artifact.description", 300
+                ),
+                "path": validate_artifact_path(artifact.get("path")),
+                "commit": commit,
+            }
+            token = artifact_token(unit_id, validated_artifact)
+            if token in seen_tokens:
+                raise DashboardStateError("Catalog artifact route collision detected.")
+            seen_tokens.add(token)
+            artifacts.append(validated_artifact)
+
+        units.append(
+            {
+                "task_id": task_id,
+                "unit_id": unit_id,
+                "title": validate_text(unit.get("title", unit_id), "unit.title", 160),
+                "summary": validate_text(unit.get("summary", ""), "unit.summary", 500),
+                "commits": commits,
+                "checkpoints": checkpoints,
+                "artifacts": artifacts,
+            }
+        )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": UNIT_CATALOG_KIND,
+        "units": units,
+    }
+
+
 def validate_ledger(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict) or payload.get("schema_version") != SCHEMA_VERSION:
         raise DashboardStateError("Unsupported progress ledger schema_version.")
+    validate_keys(
+        payload,
+        {"schema_version", "kind", "records", "unit_catalog"},
+        "progress ledger",
+    )
     if payload.get("kind") != LEDGER_KIND:
         raise DashboardStateError("Unexpected progress ledger kind.")
     records = payload.get("records")
     if not isinstance(records, list) or len(records) > MAX_RECORDS:
         raise DashboardStateError("Progress ledger records are invalid.")
     validated = []
+    seen_record_ids: set[str] = set()
     for record in records:
         if not isinstance(record, dict):
             raise DashboardStateError("Progress record must be an object.")
-        task_id = validate_text(record.get("task_id"), "task_id", 8)
-        unit_id = validate_text(record.get("unit_id"), "unit_id", 8)
+        task_id = validate_text(record.get("task_id"), "task_id", 8).upper()
+        unit_id = validate_text(record.get("unit_id"), "unit_id", 8).upper()
         status = validate_text(record.get("status"), "status", 32)
-        if not TASK_ID_RE.fullmatch(task_id) or not UNIT_ID_RE.fullmatch(unit_id):
+        if (
+            not TASK_ID_RE.fullmatch(task_id)
+            or not UNIT_ID_RE.fullmatch(unit_id)
+            or task_id_for_unit(unit_id) != task_id
+        ):
             raise DashboardStateError("Progress record task identifiers are invalid.")
         if status not in PROGRESS_STATUSES:
             raise DashboardStateError("Progress record status is invalid.")
@@ -493,9 +721,16 @@ def validate_ledger(payload: Any) -> dict[str, Any]:
                     ),
                 }
             )
+        record_id = validate_text(record.get("record_id"), "record_id", 80)
+        if not record_id or record_id in seen_record_ids:
+            raise DashboardStateError("Progress record_id is invalid or duplicated.")
+        seen_record_ids.add(record_id)
+        commit = validate_text(record.get("commit", ""), "commit", 40).lower()
+        if not PROGRESS_COMMIT_RE.fullmatch(commit):
+            raise DashboardStateError("Progress record commit is invalid.")
         validated.append(
             {
-                "record_id": validate_text(record.get("record_id"), "record_id", 80),
+                "record_id": record_id,
                 "recorded_at": validate_text(
                     record.get("recorded_at"), "recorded_at", 40
                 ),
@@ -504,11 +739,18 @@ def validate_ledger(payload: Any) -> dict[str, Any]:
                 "status": status,
                 "summary": validate_text(record.get("summary", ""), "summary", 500),
                 "branch": validate_text(record.get("branch", ""), "branch", 160),
-                "commit": validate_text(record.get("commit", ""), "commit", 40),
+                "commit": commit,
                 "checks": checks,
             }
         )
-    return {"schema_version": SCHEMA_VERSION, "kind": LEDGER_KIND, "records": validated}
+    result = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": LEDGER_KIND,
+        "records": validated,
+    }
+    if "unit_catalog" in payload:
+        result["unit_catalog"] = validate_unit_catalog(payload["unit_catalog"])
+    return result
 
 
 def load_ledger(path: Path) -> dict[str, Any]:
@@ -566,33 +808,57 @@ def append_record(
         "commit": commit,
         "checks": [dict(c) for c in checks],
     }
-    candidate = validate_ledger(
-        {
-            "schema_version": SCHEMA_VERSION,
-            "kind": LEDGER_KIND,
-            "records": [*ledger["records"], record],
-        }
-    )
+    candidate_payload: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": LEDGER_KIND,
+        "records": [*ledger["records"], record],
+    }
+    if "unit_catalog" in ledger:
+        candidate_payload["unit_catalog"] = ledger["unit_catalog"]
+    candidate = validate_ledger(candidate_payload)
     atomic_json(path, candidate)
     return candidate["records"][-1]
 
 
+def work_unit(value: str, *, expected_kind: str | None = None) -> dict[str, str] | None:
+    match = WORK_REF_RE.fullmatch(value)
+    if not match or (expected_kind and match.group("kind") != expected_kind):
+        return None
+    task_id = match.group("task").upper()
+    suffix = match.group("unit").upper()
+    slug = match.group("slug") or ""
+    alias = UNIT_ALIASES.get((task_id, slug)) if not suffix else None
+    unit_id, title = (
+        alias
+        if alias
+        else (
+            f"{task_id}{suffix}" if suffix else task_id,
+            slug.replace("-", " ").strip() or f"{task_id}{suffix}",
+        )
+    )
+    return {
+        "kind": match.group("kind"),
+        "task_id": task_id,
+        "unit_id": unit_id,
+        "slug": slug,
+        "title": title,
+    }
+
+
 def checkpoint_task(tag: str) -> str | None:
-    match = CHECKPOINT_RE.match(tag)
-    return match.group("task").upper() if match else None
+    parsed = work_unit(tag, expected_kind="checkpoint")
+    return parsed["task_id"] if parsed else None
+
+
+def checkpoint_unit(tag: str) -> dict[str, str] | None:
+    return work_unit(tag, expected_kind="checkpoint")
 
 
 def branch_unit(branch: str) -> dict[str, str] | None:
-    match = TASK_BRANCH_RE.fullmatch(branch)
-    if not match:
+    parsed = work_unit(branch, expected_kind="task")
+    if not parsed:
         return None
-    task_id = match.group("task").upper()
-    slug = match.group("slug") or ""
-    alias = UNIT_ALIASES.get((task_id, slug))
-    unit_id, title = (
-        alias if alias else (task_id, slug.replace("-", " ").strip() or task_id)
-    )
-    return {"task_id": task_id, "unit_id": unit_id, "slug": slug, "title": title}
+    return {key: parsed[key] for key in ("task_id", "unit_id", "slug", "title")}
 
 
 def active_status(git: Mapping[str, Any], progress: Mapping[str, Any] | None) -> str:
@@ -641,9 +907,12 @@ def task_checkpoints(
     for name in dedupe(names):
         commit_hash = tags.get(name, "")
         commit = commit_index.get(commit_hash, {})
+        parsed = checkpoint_unit(name)
         records.append(
             {
                 "name": name,
+                "task_id": parsed["task_id"] if parsed else task_id,
+                "unit_id": parsed["unit_id"] if parsed else None,
                 "commit": commit_hash[:12],
                 "committed_at": commit.get("committed_at", ""),
                 "subject": commit.get("subject", ""),
@@ -652,6 +921,280 @@ def task_checkpoints(
     return sorted(
         records, key=lambda item: (item["committed_at"], item["name"]), reverse=True
     )
+
+
+def unit_display_status(
+    latest: Mapping[str, Any] | None,
+    checkpoints: Sequence[Mapping[str, Any]],
+    active: Mapping[str, Any] | None,
+    unit_id: str,
+) -> str:
+    if active and active.get("unit_id") == unit_id:
+        return str(active["status"])
+    if latest:
+        return {
+            "passed": "completed",
+            "failed": "needs_changes",
+        }.get(str(latest["status"]), str(latest["status"]))
+    return "partial" if checkpoints else "not_started"
+
+
+def resolve_explicit_commits(
+    references: Sequence[tuple[str, str]],
+    commits: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    resolved: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for reference, source in references:
+        if not reference:
+            continue
+        matches = [
+            commit
+            for commit in commits
+            if str(commit["hash"]).startswith(reference)
+            or str(commit["short_hash"]).startswith(reference)
+        ]
+        commit = matches[0] if len(matches) == 1 else None
+        key = str(commit["hash"]) if commit else reference
+        if key not in resolved:
+            resolved[key] = {
+                "commit": key,
+                "short_hash": str(commit["short_hash"]) if commit else reference[:12],
+                "committed_at": str(commit.get("committed_at", "")) if commit else "",
+                "subject": str(commit.get("subject", "")) if commit else "",
+                "sources": [],
+            }
+            order.append(key)
+        if source not in resolved[key]["sources"]:
+            resolved[key]["sources"].append(source)
+    return [resolved[key] for key in order]
+
+
+def public_artifact(unit_id: str, artifact: Mapping[str, Any]) -> dict[str, Any]:
+    token = artifact_token(unit_id, artifact)
+    route = f"/api/artifacts/{token}"
+    return {
+        "artifact_id": artifact["artifact_id"],
+        "label": artifact["label"],
+        "description": artifact["description"],
+        "path": artifact["path"],
+        "commit": str(artifact["commit"])[:12],
+        "route": route,
+        "url": route,
+        "byte_limit": MAX_ARTIFACT_BYTES,
+    }
+
+
+def build_unit_payloads(
+    ledger: Mapping[str, Any],
+    git: Mapping[str, Any],
+    active: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    declarations = {
+        unit["unit_id"]: unit
+        for unit in ledger.get("unit_catalog", {}).get("units", [])
+    }
+    records_by_unit: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    order: list[str] = []
+    task_ids: dict[str, str] = {}
+    titles: dict[str, str] = {}
+
+    def remember(unit_id: str, task_id: str, title: str = "") -> None:
+        if unit_id not in task_ids:
+            order.append(unit_id)
+            task_ids[unit_id] = task_id
+        if title and unit_id not in titles:
+            titles[unit_id] = title
+
+    for declaration in declarations.values():
+        remember(
+            str(declaration["unit_id"]),
+            str(declaration["task_id"]),
+            str(declaration["title"]),
+        )
+    for record in ledger["records"]:
+        unit_id = str(record["unit_id"])
+        remember(unit_id, str(record["task_id"]))
+        records_by_unit[unit_id].append(dict(record))
+    checkpoint_names: dict[str, list[str]] = defaultdict(list)
+    for name in git["tags"]:
+        parsed = checkpoint_unit(name)
+        if not parsed:
+            continue
+        remember(parsed["unit_id"], parsed["task_id"], parsed["title"])
+        checkpoint_names[parsed["unit_id"]].append(name)
+    if active:
+        remember(
+            str(active["unit_id"]),
+            str(active["task_id"]),
+            str(active.get("title", "")),
+        )
+
+    commit_index = {str(commit["hash"]): commit for commit in git["commits"]}
+    payloads = []
+    for unit_id in order:
+        declaration = declarations.get(unit_id)
+        records = records_by_unit.get(unit_id, [])
+        catalog_checkpoints = declaration["checkpoints"] if declaration else []
+        names = dedupe([*catalog_checkpoints, *checkpoint_names.get(unit_id, [])])
+        checkpoints = []
+        for name in names:
+            commit_hash = str(git["tags"].get(name, ""))
+            commit = commit_index.get(commit_hash, {})
+            checkpoints.append(
+                {
+                    "name": name,
+                    "task_id": task_ids[unit_id],
+                    "unit_id": unit_id,
+                    "commit": commit_hash[:12],
+                    "committed_at": commit.get("committed_at", ""),
+                    "subject": commit.get("subject", ""),
+                    "catalog_declared": name in catalog_checkpoints,
+                }
+            )
+        checkpoints.sort(
+            key=lambda item: (item["committed_at"], item["name"]), reverse=True
+        )
+        references = []
+        if declaration:
+            references.extend((commit, "catalog") for commit in declaration["commits"])
+        references.extend(
+            (str(record["commit"]), "record")
+            for record in records
+            if record.get("commit")
+        )
+        commits = resolve_explicit_commits(references, git["commits"])
+        checks = []
+        for record in records:
+            for check in record["checks"]:
+                checks.append(
+                    {
+                        **check,
+                        "record_id": record["record_id"],
+                        "recorded_at": record["recorded_at"],
+                    }
+                )
+        artifacts = (
+            [
+                public_artifact(unit_id, artifact)
+                for artifact in declaration["artifacts"]
+            ]
+            if declaration
+            else []
+        )
+        latest = records[-1] if records else None
+        status = unit_display_status(latest, checkpoints, active, unit_id)
+        summary = (
+            str(declaration["summary"])
+            if declaration and declaration["summary"]
+            else str(latest.get("summary", ""))
+            if latest
+            else ""
+        )
+        payloads.append(
+            {
+                "task_id": task_ids[unit_id],
+                "unit_id": unit_id,
+                "title": (
+                    str(declaration["title"])
+                    if declaration
+                    else titles.get(unit_id, unit_id)
+                ),
+                "summary": summary,
+                "status": status,
+                "status_label": STATUS_LABELS[status],
+                "catalog_declared": declaration is not None,
+                "latest_record": latest,
+                "records": records,
+                "checks": checks,
+                "commits": commits,
+                "explicit_commits": commits,
+                "checkpoints": checkpoints,
+                "artifacts": artifacts,
+            }
+        )
+    return payloads
+
+
+def artifact_declaration_index(ledger: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    result = {}
+    for unit in ledger.get("unit_catalog", {}).get("units", []):
+        for artifact in unit["artifacts"]:
+            token = artifact_token(str(unit["unit_id"]), artifact)
+            result[token] = {
+                "task_id": unit["task_id"],
+                "unit_id": unit["unit_id"],
+                **artifact,
+            }
+    return result
+
+
+def run_git_bytes(root: Path, args: Sequence[str], *, timeout: float = 10) -> bytes:
+    env = os.environ.copy()
+    env.update({"GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C.UTF-8", "LANG": "C.UTF-8"})
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise DashboardArtifactNotFound("Artifact Git object is unavailable.") from exc
+    if result.returncode:
+        raise DashboardArtifactNotFound("Artifact Git object is unavailable.")
+    return result.stdout
+
+
+def read_git_text_blob(root: Path, artifact: Mapping[str, Any]) -> bytes:
+    commit = str(artifact["commit"])
+    path = str(artifact["path"])
+    try:
+        commit_type = run_git(root, ["cat-file", "-t", commit], allow_failure=True)
+    except DashboardError as exc:
+        raise DashboardArtifactNotFound("Artifact commit is unavailable.") from exc
+    if commit_type != "commit":
+        raise DashboardArtifactNotFound("Artifact commit is unavailable.")
+    tree = run_git_bytes(root, ["ls-tree", "-z", "--full-tree", commit, "--", path])
+    matching: list[tuple[str, str, str]] = []
+    for raw_entry in tree.split(b"\x00"):
+        if not raw_entry:
+            continue
+        metadata, separator, raw_path = raw_entry.partition(b"\t")
+        if not separator:
+            continue
+        try:
+            returned_path = raw_path.decode("utf-8", errors="strict")
+            mode, object_type, object_id = metadata.decode("ascii").split(" ", 2)
+        except (UnicodeError, ValueError):
+            continue
+        if returned_path == path:
+            matching.append((mode, object_type, object_id))
+    if len(matching) != 1:
+        raise DashboardArtifactNotFound("Artifact blob is unavailable.")
+    mode, object_type, object_id = matching[0]
+    if object_type != "blob" or mode not in {"100644", "100755"}:
+        raise DashboardArtifactNotFound("Artifact is not a regular Git blob.")
+    try:
+        size = int(run_git(root, ["cat-file", "-s", object_id]))
+    except (DashboardError, ValueError) as exc:
+        raise DashboardArtifactNotFound("Artifact size is unavailable.") from exc
+    if size < 0 or size > MAX_ARTIFACT_BYTES:
+        raise DashboardArtifactTooLarge("Artifact exceeds the preview limit.")
+    body = run_git_bytes(root, ["cat-file", "blob", object_id])
+    if len(body) != size or len(body) > MAX_ARTIFACT_BYTES:
+        raise DashboardArtifactTooLarge("Artifact exceeds the preview limit.")
+    try:
+        body.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise DashboardArtifactEncodingError(
+            "Artifact is not strict UTF-8 text."
+        ) from exc
+    return body
 
 
 class DashboardSnapshotBuilder:
@@ -692,6 +1235,16 @@ class DashboardSnapshotBuilder:
         self._cache_lock = threading.Lock()
         self._cache: tuple[float, dict[str, Any]] | None = None
 
+    def read_artifact(self, token: str) -> tuple[dict[str, Any], bytes]:
+        if not ARTIFACT_TOKEN_RE.fullmatch(token):
+            raise DashboardArtifactNotFound("Artifact route is not allowlisted.")
+        ledger = load_ledger(self.state_path)
+        artifact = artifact_declaration_index(ledger).get(token)
+        if not artifact:
+            raise DashboardArtifactNotFound("Artifact route is not allowlisted.")
+        body = read_git_text_blob(self.repo_root, artifact)
+        return public_artifact(str(artifact["unit_id"]), artifact), body
+
     def build(self, *, use_cache: bool = True) -> dict[str, Any]:
         now = self.clock()
         key = now.timestamp()
@@ -705,9 +1258,24 @@ class DashboardSnapshotBuilder:
         git = collect_git_state(self.repo_root)
         ledger = load_ledger(self.state_path)
         latest = {record["unit_id"]: record for record in ledger["records"]}
+        catalog = {
+            unit["unit_id"]: unit
+            for unit in ledger.get("unit_catalog", {}).get("units", [])
+        }
         commit_index = {commit["hash"]: commit for commit in git["commits"]}
         active = branch_unit(git["branch"])
         if active:
+            branch_records = [
+                record
+                for record in ledger["records"]
+                if record["branch"] == git["branch"]
+                and record["task_id"] == active["task_id"]
+            ]
+            if branch_records:
+                active["unit_id"] = branch_records[-1]["unit_id"]
+            declaration = catalog.get(active["unit_id"])
+            if declaration:
+                active["title"] = declaration["title"]
             progress = latest.get(active["unit_id"])
             active = {
                 **active,
@@ -716,6 +1284,12 @@ class DashboardSnapshotBuilder:
                 "progress": progress,
             }
             active["status_label"] = STATUS_LABELS[active["status"]]
+
+        units = build_unit_payloads(ledger, git, active)
+        units_by_task: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for unit in units:
+            units_by_task[unit["task_id"]].append(unit)
+
         payloads = []
         statuses = {}
         for task_id, task in roadmap["tasks"].items():
@@ -749,6 +1323,7 @@ class DashboardSnapshotBuilder:
                         for commit in commits
                     ],
                     "changes": changes,
+                    "units": units_by_task.get(task_id, []),
                 }
             )
         milestone_payloads = []
@@ -799,10 +1374,12 @@ class DashboardSnapshotBuilder:
         checkpoints = []
         for name, commit_hash in git["tags"].items():
             commit = commit_index.get(commit_hash, {})
+            parsed = checkpoint_unit(name)
             checkpoints.append(
                 {
                     "name": name,
-                    "task_id": checkpoint_task(name),
+                    "task_id": parsed["task_id"] if parsed else None,
+                    "unit_id": parsed["unit_id"] if parsed else None,
                     "commit": commit_hash[:12],
                     "committed_at": commit.get("committed_at", ""),
                     "subject": commit.get("subject", ""),
@@ -812,6 +1389,13 @@ class DashboardSnapshotBuilder:
             key=lambda item: (item["committed_at"], item["name"]), reverse=True
         )
         public_git = {k: v for k, v in git.items() if k not in {"commits", "tags"}}
+        unit_groups = [
+            {
+                "task_id": task_id,
+                "units": grouped,
+            }
+            for task_id, grouped in units_by_task.items()
+        ]
         snapshot = {
             "schema_version": SCHEMA_VERSION,
             "kind": SNAPSHOT_KIND,
@@ -821,6 +1405,8 @@ class DashboardSnapshotBuilder:
                 "task_count": len(payloads),
                 "counts": counts,
                 "checkpoint_count": len(checkpoints),
+                "unit_count": len(units),
+                "artifact_count": sum(len(unit["artifacts"]) for unit in units),
                 "accepted_milestone_count": sum(
                     m["accepted"] for m in milestone_payloads
                 ),
@@ -829,6 +1415,8 @@ class DashboardSnapshotBuilder:
             "active_unit": active,
             "milestones": milestone_payloads,
             "tasks": sorted(payloads, key=lambda item: item["order"]),
+            "units": units,
+            "unit_groups": unit_groups,
             "checkpoints": checkpoints[:80],
             "progress_records": ledger["records"][-100:],
         }
@@ -972,7 +1560,8 @@ def make_handler(
         def serve(self, *, head: bool = False) -> None:
             if not self.allowed():
                 return
-            path = urlsplit(self.path).path
+            parsed_request = urlsplit(self.path)
+            path = parsed_request.path
             if path == "/api/health":
                 self.send_json(
                     200,
@@ -1001,6 +1590,56 @@ def make_handler(
                     )
                     return
                 self.send_json(200, snapshot, head=head)
+                return
+            artifact_match = re.fullmatch(r"/api/artifacts/([0-9a-f]{64})", path)
+            if artifact_match:
+                reader = getattr(builder, "read_artifact", None)
+                if parsed_request.query or reader is None:
+                    self.send_json(
+                        404,
+                        {"schema_version": SCHEMA_VERSION, "error": "not_found"},
+                        head=head,
+                    )
+                    return
+                try:
+                    _, body = reader(artifact_match.group(1))
+                except DashboardArtifactTooLarge:
+                    self.send_json(
+                        413,
+                        {
+                            "schema_version": SCHEMA_VERSION,
+                            "error": "artifact_too_large",
+                        },
+                        head=head,
+                    )
+                    return
+                except DashboardArtifactEncodingError:
+                    self.send_json(
+                        415,
+                        {
+                            "schema_version": SCHEMA_VERSION,
+                            "error": "artifact_not_utf8",
+                        },
+                        head=head,
+                    )
+                    return
+                except (DashboardArtifactNotFound, DashboardStateError):
+                    self.send_json(
+                        404,
+                        {
+                            "schema_version": SCHEMA_VERSION,
+                            "error": "artifact_not_found",
+                        },
+                        head=head,
+                    )
+                    return
+                self.send_bytes(
+                    200,
+                    body,
+                    "text/plain; charset=utf-8",
+                    api=True,
+                    head=head,
+                )
                 return
             route = routes.get(path)
             if route is None:

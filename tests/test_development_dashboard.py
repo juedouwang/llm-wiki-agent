@@ -175,6 +175,67 @@ def fake_git_state(
     }
 
 
+def unit_catalog_fixture(
+    *,
+    commit: str = "a" * 40,
+    path: str = "docs/development-dashboard.md",
+    checkpoints: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "schema_version": dashboard.SCHEMA_VERSION,
+        "kind": dashboard.UNIT_CATALOG_KIND,
+        "units": [
+            {
+                "task_id": "J-03",
+                "unit_id": "J-03B",
+                "title": "Unit evidence visualization",
+                "summary": "Group bounded validation evidence by unit.",
+                "commits": [commit],
+                "checkpoints": (
+                    ["checkpoint/j-03-unit-visualization"]
+                    if checkpoints is None
+                    else checkpoints
+                ),
+                "artifacts": [
+                    {
+                        "artifact_id": "dashboard-doc",
+                        "label": "Dashboard documentation",
+                        "description": "Committed dashboard contract.",
+                        "path": path,
+                        "commit": commit,
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def progress_record_fixture(
+    *,
+    task_id: str = "J-03",
+    unit_id: str = "J-03B",
+    commit: str = "a" * 12,
+    status: str = "passed",
+) -> dict[str, object]:
+    return {
+        "record_id": f"{unit_id.lower()}-record",
+        "recorded_at": "2026-07-17T06:15:00Z",
+        "task_id": task_id,
+        "unit_id": unit_id,
+        "status": status,
+        "summary": "Focused dashboard validation passed.",
+        "branch": "task/j-03-unit-visualization",
+        "commit": commit,
+        "checks": [
+            {
+                "id": "dashboard-tests",
+                "status": "passed",
+                "summary": "focused tests passed",
+            }
+        ],
+    }
+
+
 class RoadmapParsingTests(unittest.TestCase):
     def test_fixture_distinguishes_complete_partial_and_milestones(self) -> None:
         parsed = dashboard.parse_roadmap(ROADMAP_FIXTURE)
@@ -220,6 +281,33 @@ class RoadmapParsingTests(unittest.TestCase):
             with self.subTest(expected=expected):
                 state = fake_git_state(clean=clean, ahead=ahead)
                 self.assertEqual(dashboard.active_status(state, progress), expected)
+
+    def test_parses_p08_and_f01_subunits_from_branches_and_checkpoints(self) -> None:
+        cases = [
+            ("task/p-08-agent-native-architecture", "P-08", "P-08"),
+            ("task/f-01a-knowledge-artifact-contract", "F-01", "F-01A"),
+            ("task/f-01b-canonical-knowledge-layout", "F-01", "F-01B"),
+            ("task/j-03-unit-visualization", "J-03", "J-03B"),
+        ]
+        for reference, task_id, unit_id in cases:
+            with self.subTest(reference=reference):
+                parsed = dashboard.branch_unit(reference)
+                self.assertIsNotNone(parsed)
+                self.assertEqual(parsed["task_id"], task_id)
+                self.assertEqual(parsed["unit_id"], unit_id)
+
+                checkpoint = reference.replace("task/", "checkpoint/", 1)
+                parsed_checkpoint = dashboard.checkpoint_unit(checkpoint)
+                self.assertIsNotNone(parsed_checkpoint)
+                self.assertEqual(parsed_checkpoint["task_id"], task_id)
+                self.assertEqual(parsed_checkpoint["unit_id"], unit_id)
+                self.assertEqual(dashboard.checkpoint_task(checkpoint), task_id)
+
+        commit_log = (
+            f"\x1e{'b' * 40}\x1f{'b' * 12}\x1f2026-07-17T06:00:00+00:00"
+            "\x1ffeat(p-08): establish agent-native architecture\n"
+        )
+        self.assertEqual(dashboard.parse_git_log(commit_log)[0]["task_ids"], ["P-08"])
 
 
 class GitAggregationTests(unittest.TestCase):
@@ -329,6 +417,7 @@ class LedgerTests(unittest.TestCase):
     def test_invalid_task_status_and_check_are_rejected(self) -> None:
         invalid = [
             {"task_id": "j03"},
+            {"task_id": "F-01", "unit_id": "J-03A"},
             {"unit_id": "J-03-ESCAPE"},
             {"status": "complete"},
             {"checks": [{"id": "ruff", "status": "unknown", "summary": ""}]},
@@ -338,6 +427,93 @@ class LedgerTests(unittest.TestCase):
             with self.subTest(override=override):
                 with self.assertRaises(dashboard.DashboardStateError):
                     self.append(**override)
+
+    def test_optional_catalog_is_strict_and_append_preserves_prior_records(
+        self,
+    ) -> None:
+        first = self.append()
+        payload = dashboard.load_ledger(self.path)
+        payload["unit_catalog"] = unit_catalog_fixture()
+        dashboard.atomic_json(self.path, dashboard.validate_ledger(payload))
+        before = dashboard.load_ledger(self.path)
+
+        second = self.append(
+            unit_id="J-03B",
+            branch="task/j-03-unit-visualization",
+            commit="a" * 12,
+        )
+        after = dashboard.load_ledger(self.path)
+
+        self.assertEqual(after["records"], [first, second])
+        self.assertEqual(after["records"][0], before["records"][0])
+        self.assertEqual(after["unit_catalog"], before["unit_catalog"])
+
+        base = {
+            "schema_version": dashboard.SCHEMA_VERSION,
+            "kind": dashboard.LEDGER_KIND,
+            "records": [],
+            "unit_catalog": unit_catalog_fixture(),
+        }
+        invalid_payloads = []
+        for location, key, value in [
+            (("unit_catalog",), "extra", True),
+            (("unit_catalog", "units", 0), "extra", True),
+            (("unit_catalog", "units", 0, "artifacts", 0), "extra", True),
+        ]:
+            candidate = json.loads(json.dumps(base))
+            target = candidate
+            for part in location:
+                target = target[part]
+            target[key] = value
+            invalid_payloads.append(candidate)
+
+        future = json.loads(json.dumps(base))
+        future["unit_catalog"]["schema_version"] = dashboard.SCHEMA_VERSION + 1
+        invalid_payloads.append(future)
+        short_commit = json.loads(json.dumps(base))
+        short_commit["unit_catalog"]["units"][0]["commits"] = ["a" * 12]
+        invalid_payloads.append(short_commit)
+        undeclared_artifact_commit = json.loads(json.dumps(base))
+        undeclared_artifact_commit["unit_catalog"]["units"][0]["artifacts"][0][
+            "commit"
+        ] = "b" * 40
+        invalid_payloads.append(undeclared_artifact_commit)
+        mismatched_unit = json.loads(json.dumps(base))
+        mismatched_unit["unit_catalog"]["units"][0]["task_id"] = "F-01"
+        invalid_payloads.append(mismatched_unit)
+
+        for candidate in invalid_payloads:
+            with self.subTest(candidate=candidate):
+                with self.assertRaises(dashboard.DashboardStateError):
+                    dashboard.validate_ledger(candidate)
+
+    def test_artifact_paths_reject_workspace_external_and_protected_targets(
+        self,
+    ) -> None:
+        self.assertEqual(
+            dashboard.validate_artifact_path("docs/development-dashboard.md"),
+            "docs/development-dashboard.md",
+        )
+        invalid = [
+            "",
+            "/etc/passwd",
+            "C:/Windows/win.ini",
+            r"\\server\share\file.txt",
+            "https://example.invalid/file.txt",
+            "../tracked.txt",
+            "docs/../tracked.txt",
+            r"docs\tracked.txt",
+            "raw/source.md",
+            "docs/raw/source.md",
+            ".git/config",
+            "docs/.git/config",
+            ".llmwiki/state.json",
+            "docs/.llmwiki/state.json",
+        ]
+        for value in invalid:
+            with self.subTest(value=value):
+                with self.assertRaises(dashboard.DashboardStateError):
+                    dashboard.validate_artifact_path(value)
 
     def test_builder_rejects_state_paths_outside_llmwiki(self) -> None:
         repo = init_repository(self.root)
@@ -396,6 +572,172 @@ class SnapshotTests(unittest.TestCase):
         statuses = {item["id"]: item["status"] for item in snapshot["tasks"]}
         self.assertEqual(statuses["A-01"], "completed")
         self.assertEqual(statuses["B-01"], "partial")
+
+    def test_snapshot_groups_catalog_records_checks_commits_checkpoints_and_artifacts(
+        self,
+    ) -> None:
+        builder = dashboard.DashboardSnapshotBuilder(self.repo, clock=self.clock)
+        ledger = {
+            "schema_version": dashboard.SCHEMA_VERSION,
+            "kind": dashboard.LEDGER_KIND,
+            "records": [progress_record_fixture()],
+            "unit_catalog": unit_catalog_fixture(),
+        }
+        dashboard.atomic_json(builder.state_path, dashboard.validate_ledger(ledger))
+        state = fake_git_state(tags={"checkpoint/j-03-unit-visualization": "a" * 40})
+
+        with patch.object(dashboard, "collect_git_state", return_value=state):
+            snapshot = builder.build(use_cache=False)
+
+        task = next(item for item in snapshot["tasks"] if item["id"] == "J-03")
+        unit = next(item for item in task["units"] if item["unit_id"] == "J-03B")
+        group = next(
+            item for item in snapshot["unit_groups"] if item["task_id"] == "J-03"
+        )
+        self.assertEqual(snapshot["summary"]["unit_count"], 1)
+        self.assertEqual(snapshot["summary"]["artifact_count"], 1)
+        self.assertEqual(group["units"][0]["unit_id"], "J-03B")
+        self.assertEqual(unit["records"][0]["record_id"], "j-03b-record")
+        self.assertEqual(unit["checks"][0]["id"], "dashboard-tests")
+        self.assertEqual(unit["explicit_commits"][0]["commit"], "a" * 40)
+        self.assertEqual(unit["explicit_commits"][0]["sources"], ["catalog", "record"])
+        self.assertEqual(unit["checkpoints"][0]["unit_id"], "J-03B")
+        self.assertRegex(
+            unit["artifacts"][0]["route"],
+            r"^/api/artifacts/[0-9a-f]{64}$",
+        )
+        self.assertEqual(unit["status"], "completed")
+
+
+class ArtifactPreviewTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.repo = init_repository(Path(self.temp_dir.name))
+
+    def commit_bytes(self, relative: str, content: bytes, subject: str) -> str:
+        path = self.repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        run_git(self.repo, "add", relative)
+        run_git(self.repo, "commit", "-m", subject)
+        return run_git(self.repo, "rev-parse", "HEAD")
+
+    def test_opaque_route_serves_only_bounded_strict_utf8_from_explicit_commits(
+        self,
+    ) -> None:
+        committed_body = "committed preview\n".encode()
+        text_commit = self.commit_bytes(
+            "docs/unit-preview.txt",
+            committed_body,
+            "feat(j-03): add committed preview",
+        )
+        (self.repo / "docs/unit-preview.txt").write_text(
+            "workspace override\n", encoding="utf-8"
+        )
+        binary_commit = self.commit_bytes(
+            "docs/non-utf8.bin",
+            b"\xff\xfe",
+            "feat(j-03): add non utf8 fixture",
+        )
+        large_commit = self.commit_bytes(
+            "docs/too-large.txt",
+            b"x" * (dashboard.MAX_ARTIFACT_BYTES + 1),
+            "feat(j-03): add oversized fixture",
+        )
+
+        catalog = unit_catalog_fixture(
+            commit=text_commit, path="docs/unit-preview.txt", checkpoints=[]
+        )
+        unit = catalog["units"][0]
+        unit["commits"] = [text_commit, binary_commit, large_commit]
+        unit["artifacts"] = [
+            {
+                "artifact_id": "preview",
+                "label": "Preview",
+                "description": "Committed UTF-8 preview.",
+                "path": "docs/unit-preview.txt",
+                "commit": text_commit,
+            },
+            {
+                "artifact_id": "non-utf8",
+                "label": "Binary",
+                "description": "Encoding rejection fixture.",
+                "path": "docs/non-utf8.bin",
+                "commit": binary_commit,
+            },
+            {
+                "artifact_id": "too-large",
+                "label": "Large",
+                "description": "Size rejection fixture.",
+                "path": "docs/too-large.txt",
+                "commit": large_commit,
+            },
+        ]
+        builder = dashboard.DashboardSnapshotBuilder(self.repo)
+        ledger = {
+            "schema_version": dashboard.SCHEMA_VERSION,
+            "kind": dashboard.LEDGER_KIND,
+            "records": [],
+            "unit_catalog": catalog,
+        }
+        dashboard.atomic_json(builder.state_path, dashboard.validate_ledger(ledger))
+        snapshot = builder.build(use_cache=False)
+        artifacts = {
+            item["artifact_id"]: item
+            for item in next(
+                item for item in snapshot["units"] if item["unit_id"] == "J-03B"
+            )["artifacts"]
+        }
+
+        server = dashboard.create_server(builder, host="127.0.0.1", port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = server.server_address[1]
+
+            def request(path: str) -> tuple[int, dict[str, str], bytes]:
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                connection.request("GET", path, headers={"Host": "127.0.0.1"})
+                response = connection.getresponse()
+                body = response.read()
+                headers = {
+                    name.casefold(): value for name, value in response.getheaders()
+                }
+                status = response.status
+                connection.close()
+                return status, headers, body
+
+            status, headers, body = request(artifacts["preview"]["route"])
+            self.assertEqual(status, 200)
+            self.assertEqual(body, committed_body)
+            self.assertNotIn(b"workspace override", body)
+            self.assertEqual(headers["content-type"], "text/plain; charset=utf-8")
+            self.assertEqual(headers["cache-control"], "no-store")
+
+            status, _, body = request(artifacts["non-utf8"]["route"])
+            self.assertEqual(status, 415)
+            self.assertEqual(json.loads(body)["error"], "artifact_not_utf8")
+
+            status, _, body = request(artifacts["too-large"]["route"])
+            self.assertEqual(status, 413)
+            self.assertEqual(json.loads(body)["error"], "artifact_too_large")
+
+            for route in [
+                artifacts["preview"]["route"] + "?path=tracked.txt",
+                "/api/artifacts/" + "0" * 64,
+            ]:
+                with self.subTest(route=route):
+                    status, _, body = request(route)
+                    self.assertEqual(status, 404)
+                    self.assertIn(
+                        json.loads(body)["error"],
+                        {"not_found", "artifact_not_found"},
+                    )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
 
 class HostValidationTests(unittest.TestCase):
@@ -539,6 +881,21 @@ class FrontendAssetTests(unittest.TestCase):
                 self.assertNotIn("//cdn", text.casefold())
         for dangerous in ["innerHTML", "outerHTML", "insertAdjacentHTML", "eval("]:
             self.assertNotIn(dangerous, script)
+        for marker in [
+            "function openUnit(",
+            "unit-button",
+            "artifact-viewer",
+            "api\\/artifacts",
+            "content.textContent",
+        ]:
+            self.assertIn(marker, script)
+        for marker in [
+            ".unit-button-grid",
+            ".unit-detail",
+            ".check-list",
+            ".artifact-viewer",
+        ]:
+            self.assertIn(marker, styles)
         for element_id in [
             "summary-grid",
             "active-content",
