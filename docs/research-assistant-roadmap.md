@@ -40,7 +40,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | C-03 Notebook extractor | 已完成 | `946d05a`, `daf1330` | `checkpoint/c-03-notebook-extractor`, `checkpoint/c-03-notebook-payload-bounds` |
 | C-04 PDF page extractor | 已完成 | `66a7ba7` | `checkpoint/c-04-pdf-extractor` |
 | C-05 visual/OCR extraction | complete (2026-07-17 validation) | `bb045cf` | `checkpoint/c-05-visual-ocr` |
-| C-06 locator-preserving Office/tabular extraction | complete (2026-07-17 validation) | `this commit` | pending checkpoint |
+| C-06 locator-preserving Office/tabular extraction | complete (2026-07-17 validation) | `7ebe966` | `checkpoint/c-06-office-tabular-extraction` |
 | C-08 定位保真分块 | 已完成 | `1eb64a2`, `6f01136` | `checkpoint/c-08-locator-chunking`, `checkpoint/c-08-locator-chunking-hardening` |
 | D-01 persistent source identity | complete | `a11fe6d` | `checkpoint/d-01-source-identity` |
 | D-02 source versions and path history | complete | `1230ac2` | `checkpoint/d-02-source-versions` |
@@ -466,7 +466,7 @@ Result: **83 passed, 1 skipped**. Full validation produced **408 passed,
 9 skipped**, `pip check` reported no broken requirements, UTF-8 health reported
 zero structural issues, focused Ruff passed, and `git diff --check` passed.
 
-C-06 implementation completed on **2026-07-17** in `this commit`; the completed
+C-06 implementation completed on **2026-07-17** in `7ebe966`; the completed
 implementation and validation state is designated by
 `checkpoint/c-06-office-tabular-extraction`. It adds bounded, deterministic,
 source-read-only CSV/TSV/XLSX, DOCX, and PPTX extraction with exact
