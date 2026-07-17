@@ -1,0 +1,104 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="LLM Wiki Agent development supervision dashboard">
+  <title>LLM Wiki / Build Control</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
+  <header class="topbar">
+    <a class="brand" href="#top" aria-label="LLM Wiki Build Control">
+      <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+      <span><strong>LLM WIKI</strong><small>BUILD CONTROL</small></span>
+    </a>
+    <div class="top-actions">
+      <span class="live-pill"><i></i><span id="live-label">LIVE</span></span>
+      <time id="updated-at">--</time>
+      <button id="refresh-button" class="icon-button" type="button" title="Refresh" aria-label="Refresh dashboard">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow"><span></span> DEVELOPMENT SUPERVISION</p>
+        <h1>&#35753;&#27599;&#19968;&#27493;&#65292;<em>&#37117;&#26377;&#35777;&#25454;&#12290;</em></h1>
+        <p class="hero-subtitle">&#36335;&#32447;&#12289;&#24046;&#24322;&#12289;&#27979;&#35797;&#19982; checkpoint &#38598;&#20013;&#22312;&#19968;&#20010;&#21482;&#35835;&#35270;&#22270;&#20013;&#12290;</p>
+      </div>
+      <div class="hero-seal" aria-label="read only loopback dashboard">
+        <span>LOCAL</span><strong>01</strong><span>READ ONLY</span>
+      </div>
+    </section>
+
+    <section id="summary-grid" class="summary-grid" aria-label="Repository summary"></section>
+
+    <section class="active-panel panel">
+      <div class="panel-heading">
+        <div><p class="section-kicker">CURRENT UNIT</p><h2>&#24403;&#21069;&#25191;&#34892;&#21333;&#20803;</h2></div>
+        <span id="active-status" class="status-chip status-not_started">--</span>
+      </div>
+      <div id="active-content" class="active-content skeleton-block"></div>
+    </section>
+
+    <section class="roadmap-section">
+      <div class="section-heading">
+        <div><p class="section-kicker">MILESTONE RAIL</p><h2>&#37324;&#31243;&#30865;&#36335;&#32447;</h2></div>
+        <p>&#28857;&#20987;&#37324;&#31243;&#30865;&#21487;&#31579;&#36873;&#20219;&#21153;</p>
+      </div>
+      <div id="milestone-rail" class="milestone-rail" role="list"></div>
+    </section>
+
+    <section class="workbench">
+      <div class="tasks-column panel">
+        <div class="panel-heading tasks-heading">
+          <div><p class="section-kicker">TASK LEDGER</p><h2>&#20219;&#21153;&#21488;&#36134;</h2></div>
+          <span id="visible-count" class="count-label">--</span>
+        </div>
+        <div class="filters">
+          <label class="search-box">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+            <input id="task-search" type="search" placeholder="&#25628;&#32034;&#20219;&#21153;&#12289;&#39046;&#22495;&#25110;&#25552;&#20132;" autocomplete="off">
+          </label>
+          <select id="status-filter" aria-label="Filter by status"><option value="all">&#20840;&#37096;&#29366;&#24577;</option></select>
+          <select id="area-filter" aria-label="Filter by area"><option value="all">&#20840;&#37096;&#39046;&#22495;</option></select>
+        </div>
+        <div id="task-list" class="task-list" role="list"></div>
+      </div>
+
+      <aside class="evidence-column">
+        <section class="panel sticky-panel">
+          <div class="panel-heading"><div><p class="section-kicker">DIFF &amp; EVIDENCE</p><h2>&#24046;&#24322;&#19982;&#35777;&#25454;</h2></div></div>
+          <div id="task-detail" class="task-detail empty-state">
+            <div class="empty-glyph">&#8599;</div><p>&#36873;&#25321;&#19968;&#20010;&#20219;&#21153;&#65292;&#26597;&#30475;&#35745;&#21010;&#12289;&#23454;&#38469;&#25913;&#21160;&#12289;&#27979;&#35797;&#21644; checkpoint&#12290;</p>
+          </div>
+        </section>
+      </aside>
+    </section>
+
+    <section class="lower-grid">
+      <div class="panel">
+        <div class="panel-heading"><div><p class="section-kicker">VALIDATION</p><h2>&#39564;&#35777;&#35760;&#24405;</h2></div></div>
+        <div id="validation-list" class="timeline"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-heading"><div><p class="section-kicker">CHECKPOINTS</p><h2>&#26368;&#26032;&#26816;&#26597;&#28857;</h2></div></div>
+        <div id="checkpoint-list" class="checkpoint-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>LLM Wiki Agent</span>
+    <span>&#21482;&#30417;&#21548; loopback &middot; &#21482;&#35835; &middot; &#19981;&#26292;&#38706;&#32477;&#23545;&#36335;&#24452;</span>
+  </footer>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

@@ -168,6 +168,7 @@ The `research-assistant` branch is evolving this repository into a local-first, 
 - [Minimal MCP stdio server](docs/research-mcp-server.md)
 - [Codex reference adapter package](docs/codex-reference-adapter.md)
 - [B-02 explainable scan-policy contract](docs/scan-policy.md)
+- [J-03A development supervision dashboard](docs/development-dashboard.md)
 
 - [B-03 project inventory and accountable directory contract](docs/project-inventory.md)
 - [B-04 file fingerprints and incremental Manifest contract](docs/file-fingerprints.md)
@@ -187,8 +188,17 @@ python -B -m tools.project understand /path/to/research-project \
 This currently performs only `register -> inventory -> classify`, persists a
 resumable run report, and leaves later stages pending. It does **not** call the
 standalone B-07 `prioritize` operation or advance the canonical `adaptive-read`
-stage. It also does **not** yet produce the 15-artifact package or local Web
-dashboard and has no `--open` option.
+stage. It also does **not** yet produce the 15-artifact package or the full J-03
+research-product dashboard, and it has no `--open` option. A separate J-03A
+loopback-only development supervision dashboard is available with:
+
+```bash
+python -B tools/development_dashboard.py serve
+```
+
+Open `http://127.0.0.1:8765/` to supervise roadmap, Git, checkpoint, and local
+validation progress. This read-only development view does not scan registered
+research projects and must not be treated as completion of the full J-03 task.
 
 The J-05 Codex reference package lives at `plugins/llmwiki-research/`. It
 contains a validated Plugin manifest, Skill, MCP configuration, portable Core

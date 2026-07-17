@@ -1,3 +1,6 @@
 # Project machine state can contain local paths, hashes, indexes, and run data.
 projects/*
 !projects/.gitkeep
+
+# Local development supervision state and validation records.
+development-dashboard/
