@@ -1,10 +1,13 @@
-# Project Knowledge Artifact Contract (F-01A, Schema v1)
+# Project Knowledge Artifact Contract (F-01A / F-02A, Schema v2)
 
-F-01A defines the deterministic frontmatter and project-relative path contract
-for curated Markdown under `<knowledge_projects_root>/<project_id>/`. It is an
+F-01A defines the deterministic project-relative path contract for curated
+Markdown under `<knowledge_projects_root>/<project_id>/`. F-02A advances the
+current frontmatter contract to Knowledge Schema v2 with directional Evidence
+references and a structural gate for verified key Claim pages. This remains an
 in-memory validation layer only: it does not create directories, read a research
-source, write a real knowledge page, synthesize prose, resolve Evidence, or expose
-CLI/MCP/Hook/Skill/Web behavior.
+source, write a real knowledge page, synthesize prose, resolve an Evidence
+registry, check source health/currentness, or expose CLI/MCP/Hook/Skill/Web
+behavior.
 
 The implementation is [`tools/knowledge_artifacts.py`](../tools/knowledge_artifacts.py).
 Later controlled writers and renderers must use this contract instead of guessing
@@ -15,51 +18,61 @@ an artifact's role from body text or ad hoc filenames.
 The host Agent remains responsible for understanding the user's goal, deciding
 what a page means, drafting or revising its body, and proposing source/Evidence
 links. Research Core is responsible for deterministic checks: whether a path is
-canonical, the page type matches that path, the frontmatter has the exact current
-schema, IDs and timestamps are structurally valid, and a future schema fails
-closed.
+canonical, the page type matches that path, Schema v2 directional reference
+entries are structurally valid, key Claim verification has the required supporting
+reference and timestamp, and a future schema fails closed.
 
-F-01A therefore exposes no MCP tool. Schema parsing is an internal Core primitive,
-not a task-level operation for the host. It uses no LLM, keyword scoring, or
-semantic heuristic, and it does not claim F-02 Claim–Evidence validation or F-05
-controlled mixed/user-body protection.
+F-01A/F-02A expose no MCP tool. Schema parsing is an internal Core primitive, not
+a task-level operation for the host. It uses no LLM, keyword scoring, or semantic
+heuristic. F-02A does not establish Evidence registry existence, source health, or
+currentness; that remains F-02B. F-05 controlled mixed/user-body protection also
+remains separate.
 
 ## Required frontmatter
 
-Every F-01A project knowledge page has exactly these top-level fields:
+Every current Schema v2 project knowledge page has exactly these top-level fields:
 
 ```yaml
 ---
-schema_version: 1
+schema_version: 2
 kind: llmwiki-project-knowledge-page
 project_id: tiny-study-0123456789ab
-artifact_type: overview
-title: Tiny Study Overview
-status: draft
+artifact_type: claim
+title: Model Improves Recall
+status: verified
 ownership: generated
 source_ids: []
-evidence_ids: []
+evidence_refs:
+  - evidence_id: evd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    stance: supporting
 generated_at: '2026-07-17T08:00:00Z'
-updated_at: '2026-07-17T08:00:00Z'
-last_verified_at: null
+updated_at: '2026-07-17T08:30:00Z'
+last_verified_at: '2026-07-17T08:30:00Z'
 ---
 ```
 
-Unknown or missing top-level fields fail closed. `schema_version` must be the
-integer `1`; missing, legacy, malformed, and future versions are rejected rather
-than silently upgraded. `kind` is fixed to `llmwiki-project-knowledge-page`, and
-`project_id` uses the existing path-safe project identity contract.
+Unknown or missing top-level fields fail closed. Current validation and
+serialization require integer `schema_version: 2`. `kind` is fixed to
+`llmwiki-project-knowledge-page`, and `project_id` uses the existing path-safe
+project identity contract.
 
 `title` is non-empty human-readable text without outer whitespace or control
-characters. `source_ids` and `evidence_ids` are duplicate-free YAML sequences
-using the existing Core forms:
+characters. `source_ids` is a duplicate-free YAML sequence of `src-` plus 32
+lowercase hexadecimal digits. `evidence_refs` is a YAML sequence whose entries
+contain exactly `evidence_id` and `stance`: the ID is `evd-` plus 64 lowercase
+hexadecimal digits, the stance is `supporting`, `opposing`, or `context`, and an
+Evidence ID may appear only once regardless of stance.
 
-- `src-` plus 32 lowercase hexadecimal digits;
-- `evd-` plus 64 lowercase hexadecimal digits.
+For Schema v2, a verified key Claim must have a non-null `last_verified_at` and at
+least one `supporting` reference. Canonical `claims/<slug>.md` detail pages are key;
+`claims/index.md` is not. A pathless `artifact_type: claim` is conservatively
+validated as key. These checks are structural only: F-02A does not open an
+Evidence registry or source-health state and does not prove that a referenced ID
+exists or is current. F-02 remains partial pending F-02B currentness validation.
 
-F-01A validates identifiers only. It does not open the source/Evidence registries,
-check Evidence currentness, or require a verified Claim to have Evidence; those
-are F-02 and later integration responsibilities.
+Schema v1 pages retain strict read-only parsing compatibility with their exact
+`evidence_ids` field. The current validator and serializer reject v1, never infer
+stances, and never rewrite or migrate a v1 page. Schema v3 and later fail closed.
 
 ## Types, status, and ownership
 
@@ -103,9 +116,10 @@ Statuses are closed to:
 draft | verified | stale | conflicting | rejected
 ```
 
-`verified` is not model confidence. F-01A only requires a structurally valid,
-non-null `last_verified_at` for that state; it never grants or converts the state.
-Source-version/Evidence currentness remains a later Core check.
+`verified` is not model confidence. Every verified page requires a structurally
+valid, non-null `last_verified_at`; verified key Claims also require a supporting
+Schema v2 reference. The validator never grants or converts the state, and
+source-version/Evidence currentness remains F-02B work.
 
 Ownership is closed to:
 
@@ -172,7 +186,9 @@ indexes.
 | `sources/<slug>.md` | `source` | detail |
 
 The path identifies only a structural role and expected type. It does not infer a
-paper, method, claim, or other research meaning from page contents.
+paper, method, claim, or other research meaning from page contents. F-02A uses
+only the canonical Claim role to distinguish `claims/index.md` from key
+`claims/<slug>.md` details; a pathless Claim fails closed as key.
 
 ## Empty directory initialization boundary
 
@@ -202,24 +218,26 @@ unknown directories, symbolic-link entries, and content inside the unregistered
 skeleton fail closed rather than being overwritten or adopted.
 
 Directory initialization creates no Markdown page, does not read source or
-research-binary content, does not change Schema v1, and does not decide research
+research-binary content, does not create or rewrite a knowledge Schema, and does not decide research
 semantics.
 
 ## Strict parsing and canonical serialization
 
 `parse_knowledge_page(payload, path=...)` accepts bytes so it can enforce strict
-UTF-8. A page must begin with exact `---` delimiters. Parsing uses a restricted
-PyYAML `SafeLoader` variant and rejects duplicate keys at any mapping level, YAML
-aliases, merge keys, unsafe/unknown tags, non-string mapping keys, malformed YAML,
-and NUL content. YAML timestamp auto-construction is disabled so timestamp fields
-are validated explicitly as strings.
+UTF-8 and reads strict Schema v1 or v2 without migration. A page must begin with
+exact `---` delimiters. Parsing uses a restricted PyYAML `SafeLoader` variant and
+rejects duplicate keys at any mapping level, YAML aliases, merge keys,
+unsafe/unknown tags, non-string mapping keys, malformed YAML, and NUL content.
+YAML timestamp auto-construction is disabled so timestamp fields are validated
+explicitly as strings.
 
-`validate_knowledge_frontmatter(value, path=...)` returns an immutable validated
-frontmatter object and verifies that `artifact_type` agrees with the path.
-`artifact_contract_for_path(path)` performs the pure path mapping.
-`serialize_knowledge_frontmatter(value, path=...)` returns a deterministic,
-LF-only in-memory frontmatter block; it does not write a file or serialize a page
-body.
+`validate_knowledge_frontmatter(value, path=...)` validates current Schema v2 only,
+returns an immutable object, and verifies that `artifact_type` agrees with the
+path. `artifact_contract_for_path(path)` performs the pure path mapping.
+`serialize_knowledge_frontmatter(value, path=...)` emits deterministic LF-only
+Schema v2 frontmatter and rejects v1 rather than rewriting it. The immutable
+object exposes `evidence_ids` as a derived read-only view; this does not infer a
+stance for legacy pages. No function writes a file or serializes a page body.
 
 ## Explicit exclusions
 
@@ -230,11 +248,14 @@ Combined F-01 does not:
 - create or alter real `wiki/projects/<project_id>/*.md` files;
 - generate any of the 15 page bodies or a unified index;
 - add source-project or research-binary reads;
-- implement Claim–Evidence semantics, relationships, stale propagation, retrieval,
-  controlled mixed/user writes, or migration;
+- load an Evidence registry or source-health state, establish Evidence currentness,
+  propagate stale state, retrieve sources, perform migration, or control mixed/user
+  writes;
 - add a ResearchCoreService facade method, CLI command, MCP tool, Skill, Hook,
   Plugin, or Web surface.
 
-Claim–Evidence semantics remain F-02 work. Controlled mixed/user Markdown writes,
-conflict audit records, and protection of user-confirmed content remain F-05
-work. Those capabilities require their own authorization.
+F-02A is the structural directional-reference slice only. Overall F-02 remains
+partial until F-02B adds registry/source currentness validation. Controlled
+mixed/user Markdown writes, conflict audit records, and protection of
+user-confirmed content remain F-05 work. Those capabilities require their own
+authorization.

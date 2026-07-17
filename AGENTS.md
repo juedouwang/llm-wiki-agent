@@ -41,7 +41,7 @@ tools/        # Standalone Python scripts
 
 ---
 
-## Project-Scoped Storage Contract (Schema v1)
+## Project-Scoped Storage Contract (machine Schema v1 / Knowledge Schema v2)
 
 New research-project features must keep machine state and human-readable knowledge separate:
 
@@ -60,9 +60,9 @@ Rules:
 5. Do not place local paths, hashes, indexes, or run state in `wiki/projects/`.
 6. Do not place curated research summaries or plans in `.llmwiki/`.
 7. Use `tools/project_layout.py` for path validation, initialization, version checks, and legacy resolution.
-8. Project-scoped Markdown under `wiki/projects/<project_id>/` uses the strict F-01 Schema v1 and canonical project-relative path mapping in `tools/knowledge_artifacts.py`; see `docs/knowledge-artifact-contract.md`.
-9. Parse project knowledge from bytes with strict UTF-8 and safe YAML, reject unknown/future fields, and validate `artifact_type` against the path before any later writer persists a page.
-10. F-01B layout initialization creates only the canonical empty directory skeleton. It must not be described as generating the 15 page bodies, enforcing F-02 Claim-Evidence currentness, or protecting F-05 mixed/user body regions.
+8. Project-scoped Markdown under `wiki/projects/<project_id>/` uses the strict current Knowledge Schema v2 and canonical project-relative path mapping in `tools/knowledge_artifacts.py`; Schema v1 pages are strict read-only compatibility only. See `docs/knowledge-artifact-contract.md`.
+9. Parse project knowledge from bytes with strict UTF-8 and safe YAML, reject unknown/future fields, validate `artifact_type` against the path, and never infer directional stance or rewrite Schema v1. The current validator/serializer accept and emit Schema v2 only; Schema v3 fails closed.
+10. F-01B layout initialization creates only the canonical empty directory skeleton. F-02A is structural only: `evidence_refs` entries are exactly `{evidence_id, stance}`, Evidence IDs are duplicate-free, and a verified key `claims/<slug>.md` (or pathless Claim) needs `last_verified_at` plus a supporting ref; `claims/index.md` is not key. Do not claim Evidence registry/source currentness until F-02B, and do not claim F-05 mixed/user body protection.
 
 Register an external research project with:
 

@@ -3,12 +3,16 @@ from __future__ import annotations
 import unittest
 from copy import deepcopy
 
+import yaml
+
 from tools.knowledge_artifacts import (
     ARTIFACT_TYPES,
+    EVIDENCE_STANCES,
     KNOWLEDGE_OWNERSHIPS,
     KNOWLEDGE_PAGE_KIND,
     KNOWLEDGE_SCHEMA_VERSION,
     KNOWLEDGE_STATUSES,
+    LEGACY_KNOWLEDGE_SCHEMA_VERSION,
     KnowledgeArtifactPathError,
     KnowledgeFrontmatterError,
     UnsupportedKnowledgeSchemaVersionError,
@@ -21,6 +25,15 @@ from tools.knowledge_artifacts import (
 
 SOURCE_ID = "src-0123456789abcdef0123456789abcdef"
 EVIDENCE_ID = "evd-" + "a" * 64
+SECOND_EVIDENCE_ID = "evd-" + "b" * 64
+STRUCTURALLY_VALID_UNKNOWN_EVIDENCE_ID = "evd-" + "f" * 64
+
+
+def evidence_ref(
+    evidence_id: str = EVIDENCE_ID,
+    stance: str = "context",
+) -> dict[str, str]:
+    return {"evidence_id": evidence_id, "stance": stance}
 
 
 def valid_frontmatter(**overrides: object) -> dict[str, object]:
@@ -30,6 +43,25 @@ def valid_frontmatter(**overrides: object) -> dict[str, object]:
         "project_id": "tiny-study-0123456789ab",
         "artifact_type": "overview",
         "title": "Tiny Study Overview",
+        "status": "draft",
+        "ownership": "generated",
+        "source_ids": [SOURCE_ID],
+        "evidence_refs": [evidence_ref()],
+        "generated_at": "2026-07-17T08:00:00Z",
+        "updated_at": "2026-07-17T09:00:00Z",
+        "last_verified_at": None,
+    }
+    value.update(overrides)
+    return value
+
+
+def legacy_v1_frontmatter(**overrides: object) -> dict[str, object]:
+    value: dict[str, object] = {
+        "schema_version": LEGACY_KNOWLEDGE_SCHEMA_VERSION,
+        "kind": KNOWLEDGE_PAGE_KIND,
+        "project_id": "tiny-study-0123456789ab",
+        "artifact_type": "overview",
+        "title": "Legacy Tiny Study Overview",
         "status": "draft",
         "ownership": "generated",
         "source_ids": [SOURCE_ID],
@@ -44,6 +76,18 @@ def valid_frontmatter(**overrides: object) -> dict[str, object]:
 
 def page_bytes(frontmatter: dict[str, object], body: str = "# Body\n") -> bytes:
     return (serialize_knowledge_frontmatter(frontmatter) + body).encode("utf-8")
+
+
+def raw_page_bytes(frontmatter: dict[str, object], body: str = "# Body\n") -> bytes:
+    yaml_text = yaml.safe_dump(
+        frontmatter,
+        allow_unicode=True,
+        default_flow_style=False,
+        sort_keys=False,
+        width=1000,
+        line_break="\n",
+    )
+    return f"---\n{yaml_text}---\n{body}".encode("utf-8")
 
 
 class KnowledgeArtifactPathTests(unittest.TestCase):
@@ -148,7 +192,7 @@ class KnowledgeArtifactPathTests(unittest.TestCase):
 
 
 class KnowledgeFrontmatterTests(unittest.TestCase):
-    def test_type_status_and_ownership_sets_are_closed(self) -> None:
+    def test_type_status_ownership_and_stance_sets_are_closed(self) -> None:
         self.assertEqual(
             ARTIFACT_TYPES,
             {
@@ -178,19 +222,30 @@ class KnowledgeFrontmatterTests(unittest.TestCase):
             {"draft", "verified", "stale", "conflicting", "rejected"},
         )
         self.assertEqual(KNOWLEDGE_OWNERSHIPS, {"generated", "mixed", "user"})
+        self.assertEqual(EVIDENCE_STANCES, {"supporting", "opposing", "context"})
 
-    def test_valid_frontmatter_is_canonicalized_without_semantic_inference(self) -> None:
+    def test_valid_v2_frontmatter_is_canonicalized_without_semantic_inference(self) -> None:
         value = valid_frontmatter(
             generated_at="2026-07-17T16:00:00+08:00",
             updated_at="2026-07-17T17:00:00+08:00",
             ownership="mixed",
+            evidence_refs=[
+                evidence_ref(EVIDENCE_ID, "supporting"),
+                evidence_ref(SECOND_EVIDENCE_ID, "opposing"),
+            ],
         )
         validated = validate_knowledge_frontmatter(value, path="overview.md")
+        self.assertEqual(validated.schema_version, 2)
         self.assertEqual(validated.project_id, "tiny-study-0123456789ab")
         self.assertEqual(validated.artifact_type, "overview")
         self.assertEqual(validated.ownership, "mixed")
         self.assertEqual(validated.source_ids, (SOURCE_ID,))
-        self.assertEqual(validated.evidence_ids, (EVIDENCE_ID,))
+        self.assertIsNotNone(validated.evidence_refs)
+        self.assertEqual(
+            [(ref.evidence_id, ref.stance) for ref in validated.evidence_refs or ()],
+            [(EVIDENCE_ID, "supporting"), (SECOND_EVIDENCE_ID, "opposing")],
+        )
+        self.assertEqual(validated.evidence_ids, (EVIDENCE_ID, SECOND_EVIDENCE_ID))
         self.assertEqual(validated.generated_at, "2026-07-17T08:00:00Z")
         self.assertEqual(validated.updated_at, "2026-07-17T09:00:00Z")
 
@@ -201,7 +256,7 @@ class KnowledgeFrontmatterTests(unittest.TestCase):
                 path="overview.md",
             )
 
-    def test_schema_is_closed_and_future_versions_fail_closed(self) -> None:
+    def test_v2_schema_is_closed_v1_is_read_only_and_v3_fails_closed(self) -> None:
         missing = valid_frontmatter()
         del missing["kind"]
         with self.assertRaisesRegex(KnowledgeFrontmatterError, "missing fields: kind"):
@@ -211,15 +266,18 @@ class KnowledgeFrontmatterTests(unittest.TestCase):
         with self.assertRaisesRegex(KnowledgeFrontmatterError, "unknown fields"):
             validate_knowledge_frontmatter(unknown)
 
-        for version in (None, True, "1", 1.0, 0, -1):
+        for version in (None, True, "2", 2.0, 0, -1):
             with self.subTest(version=version):
                 with self.assertRaises(KnowledgeFrontmatterError):
                     validate_knowledge_frontmatter(
                         valid_frontmatter(schema_version=version)
                     )
 
+        with self.assertRaisesRegex(KnowledgeFrontmatterError, "read-only"):
+            validate_knowledge_frontmatter(legacy_v1_frontmatter())
+
         with self.assertRaises(UnsupportedKnowledgeSchemaVersionError):
-            validate_knowledge_frontmatter(valid_frontmatter(schema_version=2))
+            validate_knowledge_frontmatter(valid_frontmatter(schema_version=3))
 
     def test_fixed_kind_project_id_title_and_enums_are_validated(self) -> None:
         invalid_values = (
@@ -238,21 +296,48 @@ class KnowledgeFrontmatterTests(unittest.TestCase):
                 with self.assertRaises(KnowledgeFrontmatterError):
                     validate_knowledge_frontmatter(valid_frontmatter(**overrides))
 
-    def test_source_and_evidence_ids_are_strict_unique_yaml_sequences(self) -> None:
+    def test_source_ids_are_strict_unique_yaml_sequences(self) -> None:
         invalid_values = (
-            {"source_ids": SOURCE_ID},
-            {"source_ids": (SOURCE_ID,)},
-            {"source_ids": ["src-bad"]},
-            {"source_ids": [SOURCE_ID, SOURCE_ID]},
-            {"evidence_ids": EVIDENCE_ID},
-            {"evidence_ids": (EVIDENCE_ID,)},
-            {"evidence_ids": ["evd-bad"]},
-            {"evidence_ids": [EVIDENCE_ID, EVIDENCE_ID]},
+            SOURCE_ID,
+            (SOURCE_ID,),
+            ["src-bad"],
+            [SOURCE_ID, SOURCE_ID],
         )
-        for overrides in invalid_values:
-            with self.subTest(overrides=overrides):
+        for source_ids in invalid_values:
+            with self.subTest(source_ids=source_ids):
                 with self.assertRaises(KnowledgeFrontmatterError):
-                    validate_knowledge_frontmatter(valid_frontmatter(**overrides))
+                    validate_knowledge_frontmatter(
+                        valid_frontmatter(source_ids=source_ids)
+                    )
+
+    def test_evidence_refs_are_strict_directional_and_duplicate_free(self) -> None:
+        invalid_values: tuple[object, ...] = (
+            EVIDENCE_ID,
+            (evidence_ref(),),
+            {"evidence_id": EVIDENCE_ID, "stance": "supporting"},
+            [EVIDENCE_ID],
+            [{"stance": "supporting"}],
+            [{"evidence_id": EVIDENCE_ID}],
+            [{"evidence_id": "evd-bad", "stance": "supporting"}],
+            [{"evidence_id": EVIDENCE_ID, "stance": "supports"}],
+            [
+                {
+                    "evidence_id": EVIDENCE_ID,
+                    "stance": "supporting",
+                    "confidence": 1,
+                }
+            ],
+            [
+                evidence_ref(EVIDENCE_ID, "supporting"),
+                evidence_ref(EVIDENCE_ID, "opposing"),
+            ],
+        )
+        for refs in invalid_values:
+            with self.subTest(refs=refs):
+                with self.assertRaises(KnowledgeFrontmatterError):
+                    validate_knowledge_frontmatter(
+                        valid_frontmatter(evidence_refs=refs)
+                    )
 
     def test_timestamp_relations_and_verified_structure_are_enforced(self) -> None:
         invalid_values = (
@@ -282,28 +367,171 @@ class KnowledgeFrontmatterTests(unittest.TestCase):
         self.assertEqual(verified.status, "verified")
         self.assertEqual(verified.last_verified_at, "2026-07-17T08:30:00Z")
 
-    def test_f01a_does_not_require_evidence_for_verified_claims(self) -> None:
+    def test_verified_key_claim_detail_requires_supporting_ref_and_verification_time(self) -> None:
+        base = {
+            "artifact_type": "claim",
+            "title": "The model improves recall",
+            "status": "verified",
+            "last_verified_at": "2026-07-17T08:30:00Z",
+        }
+        for refs in (
+            [],
+            [evidence_ref(EVIDENCE_ID, "opposing")],
+            [evidence_ref(EVIDENCE_ID, "context")],
+            [
+                evidence_ref(EVIDENCE_ID, "opposing"),
+                evidence_ref(SECOND_EVIDENCE_ID, "context"),
+            ],
+        ):
+            with self.subTest(refs=refs):
+                with self.assertRaisesRegex(
+                    KnowledgeFrontmatterError,
+                    "supporting evidence_ref",
+                ):
+                    validate_knowledge_frontmatter(
+                        valid_frontmatter(**base, evidence_refs=refs),
+                        path="claims/model-improves-recall.md",
+                    )
+
+        with self.assertRaisesRegex(KnowledgeFrontmatterError, "last_verified_at"):
+            validate_knowledge_frontmatter(
+                valid_frontmatter(
+                    **{
+                        **base,
+                        "evidence_refs": [evidence_ref(EVIDENCE_ID, "supporting")],
+                        "last_verified_at": None,
+                    }
+                ),
+                path="claims/model-improves-recall.md",
+            )
+
+        verified = validate_knowledge_frontmatter(
+            valid_frontmatter(
+                **base,
+                evidence_refs=[
+                    evidence_ref(EVIDENCE_ID, "opposing"),
+                    evidence_ref(SECOND_EVIDENCE_ID, "supporting"),
+                ],
+            ),
+            path="claims/model-improves-recall.md",
+        )
+        self.assertEqual(verified.status, "verified")
+        self.assertEqual(verified.evidence_ids, (EVIDENCE_ID, SECOND_EVIDENCE_ID))
+
+    def test_claims_index_is_not_key_but_pathless_claim_fails_closed_as_key(self) -> None:
         value = valid_frontmatter(
             artifact_type="claim",
-            title="A structurally verified claim",
+            title="Claim Index",
             status="verified",
-            source_ids=[],
-            evidence_ids=[],
+            evidence_refs=[],
             last_verified_at="2026-07-17T08:30:00Z",
         )
-        validated = validate_knowledge_frontmatter(value, path="claims/example.md")
-        self.assertEqual(validated.status, "verified")
-        self.assertEqual(validated.evidence_ids, ())
+        index = validate_knowledge_frontmatter(value, path="claims/index.md")
+        self.assertEqual(index.evidence_refs, ())
+
+        with self.assertRaisesRegex(KnowledgeFrontmatterError, "supporting evidence_ref"):
+            validate_knowledge_frontmatter(value)
+
+    def test_structural_validation_does_not_claim_registry_or_source_currentness(self) -> None:
+        validated = validate_knowledge_frontmatter(
+            valid_frontmatter(
+                artifact_type="claim",
+                title="Structurally grounded only",
+                status="verified",
+                source_ids=[],
+                evidence_refs=[
+                    evidence_ref(
+                        STRUCTURALLY_VALID_UNKNOWN_EVIDENCE_ID,
+                        "supporting",
+                    )
+                ],
+                last_verified_at="2026-07-17T08:30:00Z",
+            ),
+            path="claims/structurally-grounded-only.md",
+        )
+        self.assertEqual(
+            validated.evidence_ids,
+            (STRUCTURALLY_VALID_UNKNOWN_EVIDENCE_ID,),
+        )
+
+
+class KnowledgeSchemaV1CompatibilityTests(unittest.TestCase):
+    def test_parser_reads_strict_v1_without_inventing_directional_stance(self) -> None:
+        body = "# Legacy page\n\nNo migration occurred.\n"
+        parsed = parse_knowledge_page(
+            raw_page_bytes(legacy_v1_frontmatter(), body),
+            path="overview.md",
+        )
+        self.assertEqual(parsed.frontmatter.schema_version, 1)
+        self.assertEqual(parsed.frontmatter.evidence_ids, (EVIDENCE_ID,))
+        self.assertIsNone(parsed.frontmatter.evidence_refs)
+        self.assertEqual(parsed.frontmatter.as_dict(), legacy_v1_frontmatter())
+        self.assertEqual(parsed.body, body)
+
+    def test_v1_verified_claim_compatibility_does_not_apply_v2_stance_rules(self) -> None:
+        parsed = parse_knowledge_page(
+            raw_page_bytes(
+                legacy_v1_frontmatter(
+                    artifact_type="claim",
+                    title="Legacy verified claim",
+                    status="verified",
+                    evidence_ids=[],
+                    last_verified_at="2026-07-17T08:30:00Z",
+                )
+            ),
+            path="claims/legacy-verified-claim.md",
+        )
+        self.assertEqual(parsed.frontmatter.status, "verified")
+        self.assertEqual(parsed.frontmatter.evidence_ids, ())
+        self.assertIsNone(parsed.frontmatter.evidence_refs)
+
+    def test_v1_compatibility_remains_closed_and_duplicate_free(self) -> None:
+        with self.assertRaisesRegex(KnowledgeFrontmatterError, "unknown fields"):
+            parse_knowledge_page(
+                raw_page_bytes(
+                    legacy_v1_frontmatter(
+                        evidence_refs=[evidence_ref(EVIDENCE_ID, "supporting")]
+                    )
+                ),
+                path="overview.md",
+            )
+
+        with self.assertRaisesRegex(KnowledgeFrontmatterError, "duplicates"):
+            parse_knowledge_page(
+                raw_page_bytes(
+                    legacy_v1_frontmatter(evidence_ids=[EVIDENCE_ID, EVIDENCE_ID])
+                ),
+                path="overview.md",
+            )
+
+    def test_v1_cannot_be_current_validated_or_serialized(self) -> None:
+        payload = raw_page_bytes(legacy_v1_frontmatter())
+        parsed = parse_knowledge_page(payload, path="overview.md")
+
+        with self.assertRaisesRegex(KnowledgeFrontmatterError, "read-only"):
+            validate_knowledge_frontmatter(legacy_v1_frontmatter())
+        with self.assertRaisesRegex(KnowledgeFrontmatterError, "read-only"):
+            serialize_knowledge_frontmatter(legacy_v1_frontmatter())
+        with self.assertRaisesRegex(KnowledgeFrontmatterError, "read-only"):
+            serialize_knowledge_frontmatter(parsed.frontmatter)
+
+    def test_v3_pages_fail_closed_before_field_reinterpretation(self) -> None:
+        with self.assertRaises(UnsupportedKnowledgeSchemaVersionError):
+            parse_knowledge_page(
+                raw_page_bytes(valid_frontmatter(schema_version=3)),
+                path="overview.md",
+            )
 
 
 class KnowledgePageParsingTests(unittest.TestCase):
-    def test_parse_strict_utf8_page_preserves_body(self) -> None:
-        body = "# 项目介绍\n\nHuman and Agent content remains outside the parser.\n"
+    def test_parse_strict_utf8_v2_page_preserves_body(self) -> None:
+        body = "# ????\n\nHuman and Agent content remains outside the parser.\n"
         parsed = parse_knowledge_page(
             page_bytes(valid_frontmatter(), body),
             path="overview.md",
         )
         self.assertEqual(parsed.frontmatter.title, "Tiny Study Overview")
+        self.assertEqual(parsed.frontmatter.schema_version, 2)
         self.assertEqual(parsed.body, body)
 
     def test_parser_accepts_crlf_delimiters_and_normalizes_only_frontmatter_values(self) -> None:
@@ -320,9 +548,9 @@ class KnowledgePageParsingTests(unittest.TestCase):
         with self.assertRaises(KnowledgeFrontmatterError):
             parse_knowledge_page(b"no frontmatter\n", path="overview.md")
         with self.assertRaises(KnowledgeFrontmatterError):
-            parse_knowledge_page(b"---\nschema_version: 1\n", path="overview.md")
+            parse_knowledge_page(b"---\nschema_version: 2\n", path="overview.md")
         with self.assertRaises(KnowledgeFrontmatterError):
-            parse_knowledge_page(b"--- \nschema_version: 1\n---\n", path="overview.md")
+            parse_knowledge_page(b"--- \nschema_version: 2\n---\n", path="overview.md")
         with self.assertRaises(KnowledgeFrontmatterError):
             parse_knowledge_page(b"\xef\xbb\xbf---\n---\n", path="overview.md")
         with self.assertRaisesRegex(KnowledgeFrontmatterError, "NUL"):
@@ -331,12 +559,20 @@ class KnowledgePageParsingTests(unittest.TestCase):
     def test_safe_yaml_rejects_duplicates_aliases_merges_and_unsafe_tags(self) -> None:
         base = serialize_knowledge_frontmatter(valid_frontmatter())
         duplicate = base.replace(
-            "schema_version: 1\n",
-            "schema_version: 1\nschema_version: 1\n",
+            "schema_version: 2\n",
+            "schema_version: 2\nschema_version: 2\n",
             1,
         )
         with self.assertRaisesRegex(KnowledgeFrontmatterError, "duplicate YAML key"):
             parse_knowledge_page(duplicate.encode("utf-8"), path="overview.md")
+
+        nested_duplicate = base.replace(
+            "  stance: context\n",
+            f"  stance: context\n  evidence_id: {SECOND_EVIDENCE_ID}\n",
+            1,
+        )
+        with self.assertRaisesRegex(KnowledgeFrontmatterError, "duplicate YAML key"):
+            parse_knowledge_page(nested_duplicate.encode("utf-8"), path="overview.md")
 
         alias = base.replace(
             "title: Tiny Study Overview\n",
@@ -347,8 +583,8 @@ class KnowledgePageParsingTests(unittest.TestCase):
             parse_knowledge_page(alias.encode("utf-8"), path="overview.md")
 
         merge = base.replace(
-            "schema_version: 1\n",
-            "schema_version: 1\n<<: {extra: value}\n",
+            "schema_version: 2\n",
+            "schema_version: 2\n<<: {extra: value}\n",
             1,
         )
         with self.assertRaisesRegex(KnowledgeFrontmatterError, "merge keys"):
@@ -368,12 +604,12 @@ class KnowledgePageParsingTests(unittest.TestCase):
         self.assertIsInstance(parsed.frontmatter.generated_at, str)
         self.assertEqual(parsed.frontmatter.generated_at, "2026-07-17T08:00:00Z")
 
-    def test_serialization_is_deterministic_lf_only_and_round_trips(self) -> None:
+    def test_v2_serialization_is_deterministic_lf_only_and_round_trips(self) -> None:
         source = valid_frontmatter(
-            title="中文项目概览",
+            title="??????",
             ownership="user",
             source_ids=[],
-            evidence_ids=[],
+            evidence_refs=[],
             generated_at="2026-07-17T16:00:00+08:00",
             updated_at="2026-07-17T16:30:00+08:00",
         )
@@ -382,14 +618,17 @@ class KnowledgePageParsingTests(unittest.TestCase):
         second = serialize_knowledge_frontmatter(source, path="overview.md")
         self.assertEqual(first, second)
         self.assertEqual(source, source_before)
-        self.assertTrue(first.startswith("---\nschema_version: 1\n"))
+        self.assertTrue(first.startswith("---\nschema_version: 2\n"))
         self.assertTrue(first.endswith("---\n"))
         self.assertNotIn("\r", first)
+        self.assertIn("evidence_refs: []", first)
+        self.assertNotIn("evidence_ids:", first)
         self.assertIn("generated_at: '2026-07-17T08:00:00Z'", first)
 
         parsed = parse_knowledge_page((first + "Body\n").encode("utf-8"), path="overview.md")
-        self.assertEqual(parsed.frontmatter.title, "中文项目概览")
+        self.assertEqual(parsed.frontmatter.title, "??????")
         self.assertEqual(parsed.frontmatter.ownership, "user")
+        self.assertEqual(parsed.frontmatter.evidence_ids, ())
         self.assertEqual(parsed.body, "Body\n")
 
 

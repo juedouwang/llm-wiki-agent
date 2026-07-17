@@ -58,6 +58,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | E-01 resumable staged run orchestration | complete | `146fc0f` | `checkpoint/e-01-run-orchestrator` |
 | E-08 deterministic one-action prefix (R2 slice) | complete | `b2e04ca` | `checkpoint/e-08-deterministic-understand` |
 | F-01 项目知识页面契约 | complete after F-01A/F-01B validation on 2026-07-17 | `829cb54` | `checkpoint/f-01b-canonical-knowledge-layout` |
+| F-02A Knowledge Schema v2 directional references | complete in authorized R3-BATCH unit on 2026-07-17 | pending integration | pending integration |
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
 | J-05 Codex reference adapter package | complete after validation on 2026-07-16 | `62ccbdc` | `checkpoint/j-05-codex-plugin` |
@@ -121,7 +122,8 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | ID | 最小改动 | 独立验证 | 改动前 → 改动后 |
 |---|---|---|---|
 | F-01 `P0/M` | 定义 15 类页面 frontmatter、目录契约和生成/用户所有权字段 | 所有页面 Schema 校验；错误类型和 future version fail closed | 页面格式松散 → 长期知识可升级和审计 |
-| F-02 `P0/M` | 建立 Claim–Evidence 模型，重要结论保存支持/反对证据和核验时间 | 无 Evidence 的关键 Claim 不能标 `verified` | 摘要文字不可审计 → 结论成为可核验资产 |
+| F-02A `P0/S` | Add strict Schema v2 directional `evidence_refs`; verified key Claim details require supporting Evidence and verification time; retain v1 read-only parsing | Focused v2/v1/future-version, duplicate-ID, Claim-index, and pathless-Claim tests | Undirected Evidence IDs -> structurally auditable directional references |
+| F-02B `P0/M` | Validate Evidence registry/source health and currentness, including stale-state closure | Missing or stale Evidence cannot retain a current verified state | Structural gate -> current-version Evidence gate |
 | F-03 `P1/M` | 增加 paper/method/dataset/experiment/metric/result/decision/question 等实体和关系 | 关系约束、反向链接和项目索引测试 | 通用 entity/concept → 可表达科研工作流 |
 | F-04 `P1/M` | 支持 `draft/verified/stale/conflicting/rejected` 和冲突并存 | 冲突实验产生两个结果与冲突状态，不覆盖旧结论 | 新结论覆盖旧结论 → 历史与冲突清晰 |
 | F-05 `P0/M` | 受控 Markdown 写入器，保护用户确认区和网站编辑内容 | 重新生成不覆盖用户确认；冲突写入产生审计记录 | 生成器可覆盖人工知识 → 人机协作内容可长期保留 |
@@ -255,7 +257,7 @@ As of 2026-07-16, R2 is complete. J-05 packages the validated Core boundary as a
 B-07（已完成）
 → C-05 (complete) → C-06 (complete)
 → C-07（用户决定暂缓，保持 not_started）
-→ F-01（complete：F-01A Schema/path + F-01B canonical layout）→ F-02 → F-03 → F-04 → F-05
+→ F-01（complete：F-01A Schema/path + F-01B canonical layout）→ F-02A (complete: structural) -> F-02B → F-03 → F-04 → F-05
 → E-02 → E-03 → E-04 → E-05 → E-06 → E-07 → E-08（完整）
 → I-01 → I-02 → I-03 → I-04
 → J-03 → J-04
@@ -567,8 +569,9 @@ check` reported no broken requirements, UTF-8 health reported zero structural
 issues, focused Ruff and compile checks passed, 11 relevant local Markdown links
 passed, and `git diff --check` passed.
 
-F-01 is now **complete**. F-02 Claim–Evidence semantics and F-05 controlled
-mixed/user Markdown writing remain `not_started`; neither capability was pulled
-into F-01B. C-07 remains `not_started` by the user's decision, and no research-
-binary reader or dependency was added. No later Roadmap unit is authorized by
-this record.
+F-01 is now **complete**. F-02A completed the structural Knowledge Schema v2
+slice: directional references, duplicate-free Evidence IDs, the verified key-Claim
+gate, strict v1 read-only parsing, and future-version fail-closed behavior. It does
+not load Evidence registry/source-health state or establish currentness. Overall
+F-02 remains **partial** pending F-02B. F-05 controlled mixed/user Markdown writing
+and C-07 remain `not_started`; no research-binary reader or dependency was added.

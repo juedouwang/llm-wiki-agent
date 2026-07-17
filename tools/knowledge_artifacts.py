@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Strict Schema v1 contract for project-scoped Markdown knowledge pages.
+"""Strict project-scoped Markdown knowledge contract for Schemas v1/v2.
 
-F-01A deliberately stops at an in-memory contract.  This module does not open
-or write a project knowledge file, synthesize page content, resolve Evidence,
-or expose a CLI/MCP surface.  It gives later controlled writers deterministic
-frontmatter and project-relative path validation.
+F-01A and F-02A deliberately stop at an in-memory structural contract.  This
+module does not open or write a project knowledge file, synthesize page content,
+resolve Evidence registry state, check source health/currentness, or expose a
+CLI/MCP/Web surface.  It gives later controlled writers deterministic current
+Schema v2 frontmatter and project-relative path validation while retaining
+strict, read-only parsing compatibility for Schema v1 pages.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import yaml
 from yaml.events import AliasEvent
@@ -22,7 +24,8 @@ from yaml.nodes import MappingNode
 from tools.project_layout import InvalidProjectIdError, validate_project_id
 
 
-KNOWLEDGE_SCHEMA_VERSION = 1
+LEGACY_KNOWLEDGE_SCHEMA_VERSION = 1
+KNOWLEDGE_SCHEMA_VERSION = 2
 KNOWLEDGE_PAGE_KIND = "llmwiki-project-knowledge-page"
 
 ArtifactType = Literal[
@@ -48,6 +51,7 @@ ArtifactType = Literal[
 ]
 KnowledgeStatus = Literal["draft", "verified", "stale", "conflicting", "rejected"]
 KnowledgeOwnership = Literal["generated", "mixed", "user"]
+EvidenceStance = Literal["supporting", "opposing", "context"]
 ArtifactPageRole = Literal[
     "project_index",
     "singleton",
@@ -84,8 +88,9 @@ KNOWLEDGE_STATUSES: frozenset[str] = frozenset(
     {"draft", "verified", "stale", "conflicting", "rejected"}
 )
 KNOWLEDGE_OWNERSHIPS: frozenset[str] = frozenset({"generated", "mixed", "user"})
+EVIDENCE_STANCES: frozenset[str] = frozenset({"supporting", "opposing", "context"})
 
-_FRONTMATTER_FIELDS = (
+_COMMON_FRONTMATTER_FIELDS = (
     "schema_version",
     "kind",
     "project_id",
@@ -94,12 +99,24 @@ _FRONTMATTER_FIELDS = (
     "status",
     "ownership",
     "source_ids",
+)
+_V1_FRONTMATTER_FIELDS = (
+    *_COMMON_FRONTMATTER_FIELDS,
     "evidence_ids",
     "generated_at",
     "updated_at",
     "last_verified_at",
 )
-_FRONTMATTER_FIELD_SET = frozenset(_FRONTMATTER_FIELDS)
+_V2_FRONTMATTER_FIELDS = (
+    *_COMMON_FRONTMATTER_FIELDS,
+    "evidence_refs",
+    "generated_at",
+    "updated_at",
+    "last_verified_at",
+)
+_V1_FRONTMATTER_FIELD_SET = frozenset(_V1_FRONTMATTER_FIELDS)
+_V2_FRONTMATTER_FIELD_SET = frozenset(_V2_FRONTMATTER_FIELDS)
+_EVIDENCE_REF_FIELDS = frozenset({"evidence_id", "stance"})
 _SOURCE_ID_PATTERN = re.compile(r"src-[0-9a-f]{32}")
 _EVIDENCE_ID_PATTERN = re.compile(r"evd-[0-9a-f]{64}")
 _RFC3339_PATTERN = re.compile(
@@ -138,11 +155,11 @@ _AUXILIARY_DIRECTORIES: dict[str, ArtifactType] = {
 
 
 class KnowledgeArtifactError(ValueError):
-    """Base error for invalid F-01A knowledge artifacts."""
+    """Base error for invalid project knowledge artifacts."""
 
 
 class KnowledgeFrontmatterError(KnowledgeArtifactError):
-    """Raised when project-page YAML frontmatter violates Schema v1."""
+    """Raised when project-page YAML frontmatter violates its schema contract."""
 
 
 class UnsupportedKnowledgeSchemaVersionError(KnowledgeFrontmatterError):
@@ -212,8 +229,21 @@ class ArtifactPathContract:
 
 
 @dataclass(frozen=True)
+class EvidenceRef:
+    """One strict Schema v2 directional reference to an Evidence record ID."""
+
+    evidence_id: str
+    stance: EvidenceStance
+
+    def as_dict(self) -> dict[str, str]:
+        """Return the canonical two-field mapping used by Schema v2."""
+
+        return {"evidence_id": self.evidence_id, "stance": self.stance}
+
+
+@dataclass(frozen=True)
 class KnowledgeFrontmatter:
-    """Validated, canonical Schema v1 frontmatter."""
+    """Validated Schema v2 or strict read-only Schema v1 frontmatter."""
 
     schema_version: int
     kind: str
@@ -223,15 +253,26 @@ class KnowledgeFrontmatter:
     status: KnowledgeStatus
     ownership: KnowledgeOwnership
     source_ids: tuple[str, ...]
-    evidence_ids: tuple[str, ...]
+    evidence_refs: tuple[EvidenceRef, ...] | None
     generated_at: str
     updated_at: str
     last_verified_at: str | None
+    _legacy_evidence_ids: tuple[str, ...] = field(default=(), repr=False)
+
+    @property
+    def evidence_ids(self) -> tuple[str, ...]:
+        """Return referenced IDs without inventing directional stance for v1."""
+
+        if self.schema_version == LEGACY_KNOWLEDGE_SCHEMA_VERSION:
+            return self._legacy_evidence_ids
+        if self.evidence_refs is None:
+            return ()
+        return tuple(reference.evidence_id for reference in self.evidence_refs)
 
     def as_dict(self) -> dict[str, Any]:
-        """Return fields in canonical serialization order."""
+        """Return the original schema's fields in canonical order without migration."""
 
-        return {
+        common: dict[str, Any] = {
             "schema_version": self.schema_version,
             "kind": self.kind,
             "project_id": self.project_id,
@@ -240,11 +281,25 @@ class KnowledgeFrontmatter:
             "status": self.status,
             "ownership": self.ownership,
             "source_ids": list(self.source_ids),
-            "evidence_ids": list(self.evidence_ids),
-            "generated_at": self.generated_at,
-            "updated_at": self.updated_at,
-            "last_verified_at": self.last_verified_at,
         }
+        if self.schema_version == LEGACY_KNOWLEDGE_SCHEMA_VERSION:
+            common["evidence_ids"] = list(self._legacy_evidence_ids)
+        elif self.schema_version == KNOWLEDGE_SCHEMA_VERSION:
+            common["evidence_refs"] = [
+                reference.as_dict() for reference in self.evidence_refs or ()
+            ]
+        else:  # Defensive only; constructors in this module fail closed first.
+            raise UnsupportedKnowledgeSchemaVersionError(
+                f"knowledge schema_version {self.schema_version} is not supported"
+            )
+        common.update(
+            {
+                "generated_at": self.generated_at,
+                "updated_at": self.updated_at,
+                "last_verified_at": self.last_verified_at,
+            }
+        )
+        return common
 
 
 @dataclass(frozen=True)
@@ -253,6 +308,20 @@ class KnowledgePage:
 
     frontmatter: KnowledgeFrontmatter
     body: str
+
+
+@dataclass(frozen=True)
+class _ValidatedCommonFrontmatter:
+    project_id: str
+    artifact_type: ArtifactType
+    title: str
+    status: KnowledgeStatus
+    ownership: KnowledgeOwnership
+    source_ids: tuple[str, ...]
+    generated_at: str
+    updated_at: str
+    last_verified_at: str | None
+    path_contract: ArtifactPathContract | None
 
 
 def _is_integer(value: object) -> bool:
@@ -289,6 +358,60 @@ def _stable_id_list(
             raise KnowledgeFrontmatterError(f"{field_name} must not contain duplicates")
         seen.add(item)
         result.append(item)
+    return tuple(result)
+
+
+def _evidence_ref_list(value: object) -> tuple[EvidenceRef, ...]:
+    if not isinstance(value, list):
+        raise KnowledgeFrontmatterError("evidence_refs must be a YAML sequence")
+    result: list[EvidenceRef] = []
+    seen_ids: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise KnowledgeFrontmatterError(
+                f"evidence_refs[{index}] must be a YAML mapping"
+            )
+        if not all(isinstance(key, str) for key in item):
+            raise KnowledgeFrontmatterError(
+                f"evidence_refs[{index}] mapping keys must be strings"
+            )
+        keys = frozenset(item.keys())
+        missing = _EVIDENCE_REF_FIELDS - keys
+        unknown = keys - _EVIDENCE_REF_FIELDS
+        if missing or unknown:
+            details: list[str] = []
+            if missing:
+                details.append(f"missing fields: {', '.join(sorted(missing))}")
+            if unknown:
+                details.append(f"unknown fields: {', '.join(sorted(unknown))}")
+            raise KnowledgeFrontmatterError(
+                f"evidence_refs[{index}] must contain exactly evidence_id and stance ("
+                + "; ".join(details)
+                + ")"
+            )
+
+        evidence_id = item["evidence_id"]
+        if (
+            not isinstance(evidence_id, str)
+            or _EVIDENCE_ID_PATTERN.fullmatch(evidence_id) is None
+        ):
+            raise KnowledgeFrontmatterError(
+                "evidence_refs evidence_id values must use 'evd-' plus 64 lowercase "
+                "hexadecimal digits"
+            )
+        if evidence_id in seen_ids:
+            raise KnowledgeFrontmatterError(
+                "evidence_refs must not contain duplicate evidence_id values"
+            )
+
+        stance = item["stance"]
+        if not isinstance(stance, str) or stance not in EVIDENCE_STANCES:
+            raise KnowledgeFrontmatterError(
+                "evidence_refs stance must be one of "
+                + ", ".join(sorted(EVIDENCE_STANCES))
+            )
+        seen_ids.add(evidence_id)
+        result.append(EvidenceRef(evidence_id=evidence_id, stance=stance))
     return tuple(result)
 
 
@@ -428,20 +551,43 @@ def artifact_contract_for_path(path: object) -> ArtifactPathContract:
     )
 
 
-def validate_knowledge_frontmatter(
-    value: object,
-    *,
-    path: object | None = None,
-) -> KnowledgeFrontmatter:
-    """Validate a Schema v1 mapping and optionally bind it to its path."""
-
+def _require_frontmatter_mapping(value: object) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise KnowledgeFrontmatterError("knowledge frontmatter must be a YAML mapping")
-    keys = frozenset(value.keys())
     if not all(isinstance(key, str) for key in value):
         raise KnowledgeFrontmatterError("knowledge frontmatter keys must be strings")
-    missing = _FRONTMATTER_FIELD_SET - keys
-    unknown = keys - _FRONTMATTER_FIELD_SET
+    return cast(Mapping[str, object], value)
+
+
+def _read_schema_version(value: Mapping[str, object]) -> int:
+    if "schema_version" not in value:
+        raise KnowledgeFrontmatterError(
+            "knowledge frontmatter is missing fields: schema_version"
+        )
+    version = value["schema_version"]
+    if not _is_integer(version):
+        raise KnowledgeFrontmatterError("schema_version must be integer 1 or 2")
+    if version > KNOWLEDGE_SCHEMA_VERSION:
+        raise UnsupportedKnowledgeSchemaVersionError(
+            f"knowledge schema_version {version} is newer than supported "
+            f"version {KNOWLEDGE_SCHEMA_VERSION}"
+        )
+    if version not in {LEGACY_KNOWLEDGE_SCHEMA_VERSION, KNOWLEDGE_SCHEMA_VERSION}:
+        raise KnowledgeFrontmatterError(
+            "knowledge schema_version is legacy or unsupported; migration must be explicit"
+        )
+    return version
+
+
+def _require_exact_fields(
+    value: Mapping[str, object],
+    *,
+    expected_fields: frozenset[str],
+    schema_version: int,
+) -> None:
+    keys = frozenset(value.keys())
+    missing = expected_fields - keys
+    unknown = keys - expected_fields
     if missing or unknown:
         details: list[str] = []
         if missing:
@@ -449,24 +595,18 @@ def validate_knowledge_frontmatter(
         if unknown:
             details.append(f"unknown fields: {', '.join(sorted(unknown))}")
         raise KnowledgeFrontmatterError(
-            "knowledge frontmatter must contain exactly the Schema v1 fields ("
+            f"knowledge frontmatter must contain exactly the Schema v{schema_version} "
+            "fields ("
             + "; ".join(details)
             + ")"
         )
 
-    version = value["schema_version"]
-    if not _is_integer(version):
-        raise KnowledgeFrontmatterError("schema_version must be integer 1")
-    if version > KNOWLEDGE_SCHEMA_VERSION:
-        raise UnsupportedKnowledgeSchemaVersionError(
-            f"knowledge schema_version {version} is newer than supported "
-            f"version {KNOWLEDGE_SCHEMA_VERSION}"
-        )
-    if version != KNOWLEDGE_SCHEMA_VERSION:
-        raise KnowledgeFrontmatterError(
-            "knowledge schema_version is legacy or unsupported; migration must be explicit"
-        )
 
+def _validate_common_frontmatter(
+    value: Mapping[str, object],
+    *,
+    path: object | None,
+) -> _ValidatedCommonFrontmatter:
     if value["kind"] != KNOWLEDGE_PAGE_KIND:
         raise KnowledgeFrontmatterError(f"kind must be {KNOWLEDGE_PAGE_KIND!r}")
 
@@ -475,35 +615,39 @@ def validate_knowledge_frontmatter(
     except (InvalidProjectIdError, TypeError) as exc:
         raise KnowledgeFrontmatterError(str(exc)) from exc
 
-    artifact_type = value["artifact_type"]
-    if not isinstance(artifact_type, str) or artifact_type not in ARTIFACT_TYPES:
+    artifact_type_value = value["artifact_type"]
+    if (
+        not isinstance(artifact_type_value, str)
+        or artifact_type_value not in ARTIFACT_TYPES
+    ):
         raise KnowledgeFrontmatterError(
             f"artifact_type must be one of {', '.join(sorted(ARTIFACT_TYPES))}"
         )
+    artifact_type = cast(ArtifactType, artifact_type_value)
     title = _non_empty_human_text(value["title"], "title")
 
-    status = value["status"]
-    if not isinstance(status, str) or status not in KNOWLEDGE_STATUSES:
+    status_value = value["status"]
+    if not isinstance(status_value, str) or status_value not in KNOWLEDGE_STATUSES:
         raise KnowledgeFrontmatterError(
             f"status must be one of {', '.join(sorted(KNOWLEDGE_STATUSES))}"
         )
-    ownership = value["ownership"]
-    if not isinstance(ownership, str) or ownership not in KNOWLEDGE_OWNERSHIPS:
+    status = cast(KnowledgeStatus, status_value)
+
+    ownership_value = value["ownership"]
+    if (
+        not isinstance(ownership_value, str)
+        or ownership_value not in KNOWLEDGE_OWNERSHIPS
+    ):
         raise KnowledgeFrontmatterError(
             f"ownership must be one of {', '.join(sorted(KNOWLEDGE_OWNERSHIPS))}"
         )
+    ownership = cast(KnowledgeOwnership, ownership_value)
 
     source_ids = _stable_id_list(
         value["source_ids"],
         field_name="source_ids",
         pattern=_SOURCE_ID_PATTERN,
         expected_form="'src-' plus 32 lowercase hexadecimal digits",
-    )
-    evidence_ids = _stable_id_list(
-        value["evidence_ids"],
-        field_name="evidence_ids",
-        pattern=_EVIDENCE_ID_PATTERN,
-        expected_form="'evd-' plus 64 lowercase hexadecimal digits",
     )
 
     generated_at, generated_time = _parse_rfc3339(value["generated_at"], "generated_at")
@@ -527,6 +671,7 @@ def validate_knowledge_frontmatter(
             "verified pages must record a non-null last_verified_at"
         )
 
+    path_contract: ArtifactPathContract | None = None
     if path is not None:
         path_contract = artifact_contract_for_path(path)
         if artifact_type != path_contract.artifact_type:
@@ -535,20 +680,121 @@ def validate_knowledge_frontmatter(
                 f"{path_contract.path!r} ({path_contract.artifact_type!r})"
             )
 
-    return KnowledgeFrontmatter(
-        schema_version=KNOWLEDGE_SCHEMA_VERSION,
-        kind=KNOWLEDGE_PAGE_KIND,
+    return _ValidatedCommonFrontmatter(
         project_id=project_id,
         artifact_type=artifact_type,
         title=title,
         status=status,
         ownership=ownership,
         source_ids=source_ids,
-        evidence_ids=evidence_ids,
         generated_at=generated_at,
         updated_at=updated_at,
         last_verified_at=last_verified_at,
+        path_contract=path_contract,
     )
+
+
+def _validate_v1_frontmatter(
+    value: Mapping[str, object],
+    *,
+    path: object | None,
+) -> KnowledgeFrontmatter:
+    """Validate one legacy page without adding stance or migrating its fields."""
+
+    _require_exact_fields(
+        value,
+        expected_fields=_V1_FRONTMATTER_FIELD_SET,
+        schema_version=LEGACY_KNOWLEDGE_SCHEMA_VERSION,
+    )
+    common = _validate_common_frontmatter(value, path=path)
+    evidence_ids = _stable_id_list(
+        value["evidence_ids"],
+        field_name="evidence_ids",
+        pattern=_EVIDENCE_ID_PATTERN,
+        expected_form="'evd-' plus 64 lowercase hexadecimal digits",
+    )
+    return KnowledgeFrontmatter(
+        schema_version=LEGACY_KNOWLEDGE_SCHEMA_VERSION,
+        kind=KNOWLEDGE_PAGE_KIND,
+        project_id=common.project_id,
+        artifact_type=common.artifact_type,
+        title=common.title,
+        status=common.status,
+        ownership=common.ownership,
+        source_ids=common.source_ids,
+        evidence_refs=None,
+        generated_at=common.generated_at,
+        updated_at=common.updated_at,
+        last_verified_at=common.last_verified_at,
+        _legacy_evidence_ids=evidence_ids,
+    )
+
+
+def _is_key_claim(common: _ValidatedCommonFrontmatter) -> bool:
+    if common.artifact_type != "claim":
+        return False
+    if common.path_contract is None:
+        return True
+    return common.path_contract.page_role == "detail"
+
+
+def _validate_v2_frontmatter(
+    value: Mapping[str, object],
+    *,
+    path: object | None,
+) -> KnowledgeFrontmatter:
+    _require_exact_fields(
+        value,
+        expected_fields=_V2_FRONTMATTER_FIELD_SET,
+        schema_version=KNOWLEDGE_SCHEMA_VERSION,
+    )
+    common = _validate_common_frontmatter(value, path=path)
+    evidence_refs = _evidence_ref_list(value["evidence_refs"])
+    if (
+        common.status == "verified"
+        and _is_key_claim(common)
+        and not any(reference.stance == "supporting" for reference in evidence_refs)
+    ):
+        raise KnowledgeFrontmatterError(
+            "verified key claims must include at least one supporting evidence_ref"
+        )
+
+    return KnowledgeFrontmatter(
+        schema_version=KNOWLEDGE_SCHEMA_VERSION,
+        kind=KNOWLEDGE_PAGE_KIND,
+        project_id=common.project_id,
+        artifact_type=common.artifact_type,
+        title=common.title,
+        status=common.status,
+        ownership=common.ownership,
+        source_ids=common.source_ids,
+        evidence_refs=evidence_refs,
+        generated_at=common.generated_at,
+        updated_at=common.updated_at,
+        last_verified_at=common.last_verified_at,
+    )
+
+
+def validate_knowledge_frontmatter(
+    value: object,
+    *,
+    path: object | None = None,
+) -> KnowledgeFrontmatter:
+    """Validate current Schema v2 frontmatter and optionally bind it to its path.
+
+    Schema v1 is intentionally excluded from this current-schema validator.  It
+    remains readable only through :func:`parse_knowledge_page`, so no caller can
+    accidentally turn legacy ``evidence_ids`` into directional references.
+    """
+
+    mapping = _require_frontmatter_mapping(value)
+    version = _read_schema_version(mapping)
+    if version == LEGACY_KNOWLEDGE_SCHEMA_VERSION:
+        raise KnowledgeFrontmatterError(
+            "Schema v1 knowledge frontmatter is read-only compatibility; current "
+            "validation requires schema_version 2 and explicit migration"
+        )
+    return _validate_v2_frontmatter(mapping, path=path)
 
 
 def _decode_page(payload: object) -> str:
@@ -592,11 +838,16 @@ def _load_frontmatter(yaml_text: str) -> object:
 
 
 def parse_knowledge_page(payload: object, *, path: object) -> KnowledgePage:
-    """Parse strict UTF-8 page bytes and validate frontmatter against its path."""
+    """Read strict Schema v1/v2 bytes and validate frontmatter against its path."""
 
     text = _decode_page(payload)
     yaml_text, body = _split_frontmatter(text)
-    frontmatter = validate_knowledge_frontmatter(_load_frontmatter(yaml_text), path=path)
+    mapping = _require_frontmatter_mapping(_load_frontmatter(yaml_text))
+    version = _read_schema_version(mapping)
+    if version == LEGACY_KNOWLEDGE_SCHEMA_VERSION:
+        frontmatter = _validate_v1_frontmatter(mapping, path=path)
+    else:
+        frontmatter = _validate_v2_frontmatter(mapping, path=path)
     return KnowledgePage(frontmatter=frontmatter, body=body)
 
 
@@ -605,9 +856,14 @@ def serialize_knowledge_frontmatter(
     *,
     path: object | None = None,
 ) -> str:
-    """Return a canonical LF-only YAML frontmatter block without writing it."""
+    """Return canonical current Schema v2 frontmatter without writing a file."""
 
     if isinstance(value, KnowledgeFrontmatter):
+        if value.schema_version != KNOWLEDGE_SCHEMA_VERSION:
+            raise KnowledgeFrontmatterError(
+                "Schema v1 knowledge frontmatter is read-only compatibility and cannot "
+                "be serialized; migration must be explicit"
+            )
         raw_value: object = value.as_dict()
     else:
         raw_value = value
