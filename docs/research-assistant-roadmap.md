@@ -57,7 +57,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | G-08 budget-bounded Host Context Pack | complete | `3721fb5` | `checkpoint/g-08-host-context-pack` |
 | E-01 resumable staged run orchestration | complete | `146fc0f` | `checkpoint/e-01-run-orchestrator` |
 | E-08 deterministic one-action prefix (R2 slice) | complete | `b2e04ca` | `checkpoint/e-08-deterministic-understand` |
-| F-01 项目知识页面契约（F-01A slice） | 部分完成（Schema/路径契约；后续 F-01 写入保护仍未完成） | `f987dc0` | `checkpoint/f-01a-knowledge-artifact-contract` |
+| F-01 项目知识页面契约 | complete after F-01A/F-01B validation on 2026-07-17 | `829cb54` | `checkpoint/f-01b-canonical-knowledge-layout` |
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
 | J-05 Codex reference adapter package | complete after validation on 2026-07-16 | `62ccbdc` | `checkpoint/j-05-codex-plugin` |
@@ -255,7 +255,7 @@ As of 2026-07-16, R2 is complete. J-05 packages the validated Core boundary as a
 B-07（已完成）
 → C-05 (complete) → C-06 (complete)
 → C-07（用户决定暂缓，保持 not_started）
-→ F-01A（已完成的部分切片）→ F-01 后续切片 → F-02 → F-03 → F-04 → F-05
+→ F-01（complete：F-01A Schema/path + F-01B canonical layout）→ F-02 → F-03 → F-04 → F-05
 → E-02 → E-03 → E-04 → E-05 → E-06 → E-07 → E-08（完整）
 → I-01 → I-02 → I-03 → I-04
 → J-03 → J-04
@@ -533,3 +533,42 @@ Result: **51 passed, 2 skipped**. Full validation produced **483 passed, 9 skipp
 This checkpoint keeps F-01 **partial**. C-07 remains `not_started` and is
 intentionally deferred by the user's product decision; no binary reader or
 binary dependency was added. No later Roadmap unit is authorized by this record.
+
+F-01B implementation completed on **2026-07-17** in `829cb54`; the
+completed F-01 implementation and validation state is designated by
+`checkpoint/f-01b-canonical-knowledge-layout`. It connects the F-01A Schema/path
+contract to `ProjectLayout` and B-01 registration. The deterministic empty
+knowledge skeleton now contains `papers/`, `methods/`, `datasets/`,
+`experiments/`, `results/`, `claims/`, `plans/`, `plans/daily/`, `decisions/`,
+and `sources/` under either the default or selected external knowledge root.
+
+Unregistered storage validation now understands the nested canonical tree. It
+accepts an empty legacy subset and fills missing directories, while unknown
+files, unknown directories, knowledge-directory symbolic links, and existing
+content fail closed. Initialization remains idempotent, creates no Markdown page,
+does not rewrite a registration record, and does not read or modify the research
+source project. See
+[`knowledge-artifact-contract.md`](knowledge-artifact-contract.md) and
+[`project-storage-layout.md`](project-storage-layout.md).
+
+Focused validation recorded on 2026-07-17:
+
+```powershell
+python -B -m pytest -q -p no:cacheprovider `
+  tests/test_project_layout.py `
+  tests/test_project_registration.py `
+  tests/test_knowledge_artifacts.py `
+  tests/test_health_baseline.py
+```
+
+Result: **53 passed, 3 skipped**. Full validation produced **485 passed,
+10 skipped**; the development-dashboard suite produced **18 passed**. `pip
+check` reported no broken requirements, UTF-8 health reported zero structural
+issues, focused Ruff and compile checks passed, 11 relevant local Markdown links
+passed, and `git diff --check` passed.
+
+F-01 is now **complete**. F-02 Claim–Evidence semantics and F-05 controlled
+mixed/user Markdown writing remain `not_started`; neither capability was pulled
+into F-01B. C-07 remains `not_started` by the user's decision, and no research-
+binary reader or dependency was added. No later Roadmap unit is authorized by
+this record.
