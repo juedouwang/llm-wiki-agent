@@ -102,9 +102,13 @@ when the source-access layer classified the failure.
 | `section` / `symbol` | C-02 supported text/code formats | `text-line-range` | The locator's inclusive source-line span; heading/symbol names remain binding metadata |
 | `pdf_page` | PDF readable by the pinned C-04 `pypdf` backend | `pdf-extracted-page-text` | The exact page text emitted by C-04; a truncated or nonexistent page fails |
 | `notebook_cell` | Supported Notebook v4 JSON | `notebook-cell-source` | Exact C-03 cell source; an optional persisted `cell_id` must still match |
-| `table_range` | OOXML workbook readable by `openpyxl>=3.1,<4.0` | `table-json-matrix-v1` | Inclusive rectangular cell values with formulas preserved (`data_only=False`) |
+| `table_range` | CSV, TSV, or OOXML XLSX | `table-json-matrix-v1` | Inclusive rectangular A1 range; CSV/TSV use logical sheets `CSV`/`TSV`, and XLSX formulas remain unevaluated (`data_only=False`) |
+| `paragraph` | DOCX main document body | `docx-paragraph-text` | Exact zero-based `w:p` text in main-body document order, including paragraphs nested in body tables |
+| `slide` | PPTX presentation | `pptx-slide-text` | Exact one-based slide text in presentation relationship order, preserving deterministic paragraph boundaries |
 
-Table excerpts are compact canonical JSON arrays of rows. Strings, finite
+Table excerpts are compact canonical JSON arrays of rows. CSV and TSV retain
+explicit empty fields as empty strings and pad absent cells in short rows with
+`null` inside an otherwise valid requested rectangle. XLSX strings, finite
 numbers, booleans, and null are emitted directly. Values that JSON cannot
 represent without losing their type use sorted-key objects:
 
@@ -117,9 +121,11 @@ represent without losing their type use sorted-key objects:
 ```
 
 Non-finite numbers and unsupported workbook value types fail instead of being
-silently coerced. A direct table request is limited to 100,000 cells and OOXML
-worksheet bounds; larger ranges fail before iteration. Legacy `.xls` workbooks
-are not opened by D-04.
+silently coerced. Direct reopening enforces the configured source-byte, decoded-
+text, row, column, cell, sheet, paragraph, slide, cell-character, block-
+character, and OOXML archive limits. A requested unit that would be truncated
+fails instead of being represented as exact Evidence. Legacy `.xls` workbooks
+and Office formats outside C-06 are not opened by D-04.
 
 ## Stable source-access reason codes
 
@@ -152,6 +158,6 @@ are not opened by D-04.
   `valid/stale/missing/ambiguous` pass documented in
   `docs/source-health.md`; query/synthesis, Claim propagation, and extraction
   scheduling remain out of scope.
-- Exact reopening is bounded by the existing deterministic C-02/C-03/C-04
+- Exact reopening is bounded by the existing deterministic C-02/C-03/C-04/C-06
   extractor safety limits. If a requested unit would be truncated, D-04 fails
   rather than returning a partial excerpt as exact Evidence.

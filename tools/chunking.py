@@ -21,8 +21,10 @@ from tools.extraction_schema import (
     LineRangeLocator,
     Locator,
     NotebookCellLocator,
+    ParagraphLocator,
     PdfPageLocator,
     SectionLocator,
+    SlideLocator,
     SymbolLocator,
     TableRangeLocator,
     locator_from_dict,
@@ -44,6 +46,8 @@ _ATOMIC_LOCATOR_TYPES = (
     PdfPageLocator,
     ImageRegionLocator,
     NotebookCellLocator,
+    ParagraphLocator,
+    SlideLocator,
     TableRangeLocator,
 )
 
@@ -505,8 +509,8 @@ def _validate_chunk_group(
     if isinstance(source_locator, _ATOMIC_LOCATOR_TYPES):
         if len(chunks) != 1 or chunks[0].locator != source_locator:
             raise ChunkingSchemaError(
-                "page, image-region, Notebook-cell, and table-range locators "
-                "are atomic"
+                "page, image-region, Notebook-cell, paragraph, slide, and "
+                "table-range locators are atomic"
             )
         return
     if not isinstance(source_locator, _LINE_LOCATOR_TYPES):

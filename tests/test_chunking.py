@@ -29,8 +29,10 @@ from tools.extraction_schema import (
     LineRangeLocator,
     Locator,
     NotebookCellLocator,
+    ParagraphLocator,
     PdfPageLocator,
     SectionLocator,
+    SlideLocator,
     SymbolLocator,
     TableRangeLocator,
 )
@@ -179,13 +181,17 @@ class ChunkingTests(unittest.TestCase):
         locators = (
             PdfPageLocator(2),
             NotebookCellLocator(3, "cell-3"),
+            ParagraphLocator(4),
+            SlideLocator(5),
             TableRangeLocator("Data", "A1", "B2"),
         )
         source = document_with(
             *(
                 Block(
                     block_id=f"atomic-{index}",
-                    block_type="table" if index == 2 else "text",
+                    block_type=(
+                        "table" if isinstance(locator, TableRangeLocator) else "text"
+                    ),
                     text="" if index < 2 else "x",
                     locator=locator,
                 )
@@ -198,12 +204,15 @@ class ChunkingTests(unittest.TestCase):
             limits=ChunkingLimits(max_chunk_utf8_bytes=1),
         )
 
-        self.assertEqual(len(result.chunks), 3)
+        self.assertEqual(len(result.chunks), len(locators))
         self.assertEqual([chunk.locator for chunk in result.chunks], list(locators))
-        self.assertEqual([chunk.text for chunk in result.chunks], ["", "", "x"])
+        self.assertEqual(
+            [chunk.text for chunk in result.chunks],
+            ["", "", "x", "x", "x"],
+        )
         self.assertEqual(
             [(chunk.start_utf8_byte, chunk.end_utf8_byte) for chunk in result.chunks],
-            [(0, 0), (0, 0), (0, 1)],
+            [(0, 0), (0, 0), (0, 1), (0, 1), (0, 1)],
         )
         validate_chunk_coverage(source, result)
 
@@ -250,6 +259,8 @@ class ChunkingTests(unittest.TestCase):
         for locator in (
             PdfPageLocator(1),
             NotebookCellLocator(0, None),
+            ParagraphLocator(0),
+            SlideLocator(1),
             TableRangeLocator("Data", "A1", "C3"),
         ):
             with self.subTest(locator=locator.locator_type):

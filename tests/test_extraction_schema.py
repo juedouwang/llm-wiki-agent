@@ -17,8 +17,10 @@ from tools.extraction_schema import (
     LineRangeLocator,
     Locator,
     NotebookCellLocator,
+    ParagraphLocator,
     PdfPageLocator,
     SectionLocator,
+    SlideLocator,
     SymbolLocator,
     TableRangeLocator,
     block_from_dict,
@@ -46,6 +48,8 @@ class ExtractionSchemaTests(unittest.TestCase):
                 height=480,
             ),
             NotebookCellLocator(cell_index=2, cell_id="cell-abc"),
+            ParagraphLocator(paragraph_index=4),
+            SlideLocator(slide_number=7),
             TableRangeLocator(sheet="Results", start_cell="A1", end_cell="C9"),
             SectionLocator(
                 heading_path=("Methods", "Training"),
@@ -128,12 +132,47 @@ class ExtractionSchemaTests(unittest.TestCase):
                 with self.assertRaises(ExtractionSchemaError):
                     locator_from_dict(invalid)
 
+    def test_office_locator_shapes_are_strict_schema_v1(self) -> None:
+        fixtures = (
+            (
+                ParagraphLocator(paragraph_index=0),
+                {"paragraph_index": 0},
+            ),
+            (
+                SlideLocator(slide_number=1),
+                {"slide_number": 1},
+            ),
+        )
+        for locator, fields in fixtures:
+            with self.subTest(locator_type=locator.locator_type):
+                payload = {
+                    "schema_version": EXTRACTION_SCHEMA_VERSION,
+                    "kind": LOCATOR_KIND,
+                    "locator_type": locator.locator_type,
+                    **fields,
+                }
+                self.assertEqual(locator.as_dict(), payload)
+                self.assertEqual(locator_from_dict(payload), locator)
+                invalid_payloads = (
+                    {key: value for key, value in payload.items() if key != "schema_version"},
+                    {**payload, "schema_version": EXTRACTION_SCHEMA_VERSION + 1},
+                    {**payload, "extra": True},
+                    {key: value for key, value in payload.items() if key not in fields},
+                )
+                for invalid in invalid_payloads:
+                    with self.assertRaises(ExtractionSchemaError):
+                        locator_from_dict(invalid)
+
     def test_invalid_locator_coordinates_fail_closed(self) -> None:
         factories = {
             "zero line": lambda: LineRangeLocator(0, 1),
             "reversed line": lambda: LineRangeLocator(4, 3),
             "boolean line": lambda: LineRangeLocator(True, 2),
             "zero page": lambda: PdfPageLocator(0),
+            "negative paragraph": lambda: ParagraphLocator(-1),
+            "boolean paragraph": lambda: ParagraphLocator(True),
+            "zero slide": lambda: SlideLocator(0),
+            "boolean slide": lambda: SlideLocator(True),
             "negative image frame": lambda: ImageRegionLocator(-1, 0, 0, 1, 1),
             "boolean image frame": lambda: ImageRegionLocator(True, 0, 0, 1, 1),
             "negative image x": lambda: ImageRegionLocator(0, -1, 0, 1, 1),

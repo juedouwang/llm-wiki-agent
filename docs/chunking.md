@@ -36,14 +36,16 @@ always produces the same boundaries.
   source lines. Each emitted locator has adjusted inclusive line bounds.
 - Section chunks retain the complete heading path.
 - Symbol chunks retain the exact symbol name.
-- `pdf_page`, `image_region`, `notebook_cell`, and `table_range` locators are
-  atomic. C-08 does not claim a smaller coordinate unless an extractor can
+- `pdf_page`, `image_region`, `notebook_cell`, `paragraph`, `slide`, and
+  `table_range` locators are atomic. C-08 does not claim a smaller coordinate
+  unless an extractor can
   prove one; therefore an oversized atomic block is rejected.
 - In particular, C-08 never slices OCR or vision text at arbitrary character
   offsets while retaining the same `image_region`. A producer must supply a
   truthful smaller region locator or a block that fits the configured byte
   limit.
-- Empty page, Notebook-cell, and table blocks remain one empty, located chunk.
+- Empty page, Notebook-cell, paragraph, slide, and table blocks remain one
+  empty, located chunk.
 - An empty line-oriented block is rejected because a positive line locator cannot
   truthfully identify zero source lines; it is never silently omitted.
 - A single source line larger than the byte limit is rejected instead of being

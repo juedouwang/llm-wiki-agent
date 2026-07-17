@@ -7,13 +7,10 @@ import hashlib
 import io
 import json
 import logging
-import math
 import re
 import threading
 import warnings
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
-from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -30,8 +27,10 @@ if __package__:
         LineRangeLocator,
         Locator,
         NotebookCellLocator,
+        ParagraphLocator,
         PdfPageLocator,
         SectionLocator,
+        SlideLocator,
         SymbolLocator,
         TableRangeLocator,
         locator_from_dict,
@@ -40,6 +39,12 @@ if __package__:
     from .notebook_extractor import (
         NotebookExtractionLimits,
         extract_notebook_bytes,
+    )
+    from .office_tabular_extractor import (
+        OfficeTabularExtractionError,
+        OfficeTabularFormatError,
+        OfficeTabularLocatorError,
+        reopen_office_locator_bytes,
     )
     from .pdf_extractor import PdfExtractionLimits, extract_pdf_bytes
     from .file_state import file_state_from_dict
@@ -66,8 +71,10 @@ else:
         LineRangeLocator,
         Locator,
         NotebookCellLocator,
+        ParagraphLocator,
         PdfPageLocator,
         SectionLocator,
+        SlideLocator,
         SymbolLocator,
         TableRangeLocator,
         locator_from_dict,
@@ -79,6 +86,12 @@ else:
     from notebook_extractor import (  # type: ignore[no-redef]
         NotebookExtractionLimits,
         extract_notebook_bytes,
+    )
+    from office_tabular_extractor import (  # type: ignore[no-redef]
+        OfficeTabularExtractionError,
+        OfficeTabularFormatError,
+        OfficeTabularLocatorError,
+        reopen_office_locator_bytes,
     )
     from pdf_extractor import (  # type: ignore[no-redef]
         PdfExtractionLimits,
@@ -114,10 +127,9 @@ SOURCE_ACCESS_VERSION = "source-access-v1"
 SOURCE_LOCATION_KIND = "llmwiki-source-location"
 SOURCE_OPEN_KIND = "llmwiki-source-open-result"
 TABLE_EXCERPT_FORMAT = "table-json-matrix-v1"
+DOCX_PARAGRAPH_EXCERPT_FORMAT = "docx-paragraph-text"
+PPTX_SLIDE_EXCERPT_FORMAT = "pptx-slide-text"
 IMAGE_REGION_EXCERPT_FORMAT = "image-region-rgba-sha256"
-MAX_TABLE_RANGE_CELLS = 100_000
-_MAX_SPREADSHEET_ROW = 1_048_576
-_MAX_SPREADSHEET_COLUMN = 16_384
 _PYPDF_LOG_LOCK = threading.RLock()
 
 _SOURCE_ID_PATTERN = re.compile(r"src-[0-9a-f]{32}")
@@ -646,101 +658,52 @@ def _notebook_cell_excerpt(
     raise SourceLocatorError(f"Notebook cell {locator.cell_index} does not exist")
 
 
-def _table_json_value(value: object) -> object:
-    if value is None or isinstance(value, (str, bool, int)):
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise SourceLocatorError("table range contains a non-finite number")
-        return value
-    if isinstance(value, datetime):
-        return {"type": "datetime", "value": value.isoformat()}
-    if isinstance(value, date):
-        return {"type": "date", "value": value.isoformat()}
-    if isinstance(value, time):
-        return {"type": "time", "value": value.isoformat()}
-    if isinstance(value, timedelta):
-        return {
-            "type": "timedelta",
-            "microseconds": (
-                value.days * 86_400_000_000
-                + value.seconds * 1_000_000
-                + value.microseconds
-            ),
-        }
-    if isinstance(value, Decimal):
-        return {"type": "decimal", "value": str(value)}
-    raise SourceLocatorError(
-        f"table range contains unsupported cell value type {type(value).__name__}"
-    )
-
-
-def _table_range_excerpt(data: bytes, *, locator: TableRangeLocator) -> str:
-    try:
-        from openpyxl import load_workbook
-        from openpyxl.utils.cell import range_boundaries
-    except ImportError as exc:
+def _office_locator_excerpt(
+    data: bytes,
+    *,
+    relative_path: str,
+    locator: TableRangeLocator | ParagraphLocator | SlideLocator,
+) -> str:
+    suffix = PurePosixPath(relative_path).suffix.lower()
+    format_by_suffix = {
+        ".csv": "csv",
+        ".tsv": "tsv",
+        ".xlsx": "xlsx",
+        ".docx": "docx",
+        ".pptx": "pptx",
+    }
+    format_value = format_by_suffix.get(suffix)
+    if format_value is None:
         raise SourceFormatError(
-            "openpyxl is required to reopen spreadsheet table ranges"
+            f"Office/tabular locators are unsupported for source suffix {suffix!r}"
+        )
+    expected_formats: set[str]
+    if isinstance(locator, TableRangeLocator):
+        expected_formats = {"csv", "tsv", "xlsx"}
+    elif isinstance(locator, ParagraphLocator):
+        expected_formats = {"docx"}
+    else:
+        expected_formats = {"pptx"}
+    if format_value not in expected_formats:
+        raise SourceFormatError(
+            f"{locator.locator_type} locators are unsupported for "
+            f"source format {format_value!r}"
+        )
+    try:
+        return reopen_office_locator_bytes(
+            data,
+            relative_path=relative_path,
+            format_value=format_value,
+            locator=locator,
+        )
+    except OfficeTabularLocatorError as exc:
+        raise SourceLocatorError(str(exc)) from exc
+    except OfficeTabularFormatError as exc:
+        raise SourceFormatError(str(exc)) from exc
+    except OfficeTabularExtractionError as exc:
+        raise SourceFormatError(
+            f"Office/tabular source could not be reopened safely: {exc}"
         ) from exc
-    try:
-        workbook = load_workbook(
-            io.BytesIO(data),
-            read_only=True,
-            data_only=False,
-            keep_links=False,
-        )
-    except Exception as exc:
-        raise SourceFormatError(f"spreadsheet could not be opened safely: {exc}") from exc
-    try:
-        if locator.sheet not in workbook.sheetnames:
-            raise SourceLocatorError(
-                f"spreadsheet sheet does not exist: {locator.sheet!r}"
-            )
-        worksheet = workbook[locator.sheet]
-        min_column, min_row, max_column, max_row = range_boundaries(
-            f"{locator.start_cell}:{locator.end_cell}"
-        )
-        if max_row > _MAX_SPREADSHEET_ROW or max_column > _MAX_SPREADSHEET_COLUMN:
-            raise SourceLocatorError(
-                "table range exceeds OOXML worksheet row or column bounds"
-            )
-        cell_count = (max_row - min_row + 1) * (max_column - min_column + 1)
-        if cell_count > MAX_TABLE_RANGE_CELLS:
-            raise SourceLocatorError(
-                "table range exceeds deterministic cell limit: "
-                f"{cell_count} cells requested; limit is {MAX_TABLE_RANGE_CELLS}"
-            )
-        try:
-            matrix = [
-                [_table_json_value(cell.value) for cell in row]
-                for row in worksheet.iter_rows(
-                    min_row=min_row,
-                    max_row=max_row,
-                    min_col=min_column,
-                    max_col=max_column,
-                )
-            ]
-        except SourceAccessError:
-            raise
-        except Exception as exc:
-            raise SourceFormatError(
-                f"spreadsheet cells could not be reopened safely: {exc}"
-            ) from exc
-        try:
-            return json.dumps(
-                matrix,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            )
-        except (TypeError, ValueError) as exc:
-            raise SourceLocatorError(
-                "table range cannot be serialized canonically"
-            ) from exc
-    finally:
-        workbook.close()
 
 
 def _image_region_excerpt(data: bytes, *, locator: ImageRegionLocator) -> str:
@@ -869,7 +832,32 @@ def _reopen_locator(
             "notebook-cell-source",
         )
     if isinstance(locator, TableRangeLocator):
-        return _table_range_excerpt(data, locator=locator), TABLE_EXCERPT_FORMAT
+        return (
+            _office_locator_excerpt(
+                data,
+                relative_path=relative_path,
+                locator=locator,
+            ),
+            TABLE_EXCERPT_FORMAT,
+        )
+    if isinstance(locator, ParagraphLocator):
+        return (
+            _office_locator_excerpt(
+                data,
+                relative_path=relative_path,
+                locator=locator,
+            ),
+            DOCX_PARAGRAPH_EXCERPT_FORMAT,
+        )
+    if isinstance(locator, SlideLocator):
+        return (
+            _office_locator_excerpt(
+                data,
+                relative_path=relative_path,
+                locator=locator,
+            ),
+            PPTX_SLIDE_EXCERPT_FORMAT,
+        )
     raise SourceFormatError(
         f"unsupported locator class {type(locator).__name__}"
     )

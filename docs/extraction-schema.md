@@ -33,6 +33,8 @@ Locators use exact, format-appropriate coordinates:
 - `image_region`: zero-based `frame_index`, zero-based top-left pixel `x` and
   `y`, and positive pixel `width` and `height`;
 - `notebook_cell`: zero-based `cell_index` and optional non-empty `cell_id`;
+- `paragraph`: zero-based `paragraph_index` in the DOCX main document body;
+- `slide`: one-based `slide_number` in presentation order;
 - `table_range`: sheet name and inclusive uppercase A1 cell range;
 - `section`: non-empty heading path plus inclusive source lines;
 - `symbol`: symbol name plus inclusive source lines.
@@ -48,8 +50,12 @@ normalized frame. First-version C-05 producers use whole-frame rectangles, but
 Schema v1 deliberately supports any in-bounds rectangle without inventing text
 line or PDF-page coordinates.
 
-Section and symbol locators retain line bounds so later chunking never replaces
-reopenable coordinates with an ungrounded label.
+Paragraph and slide locators reject negative, boolean, and zero (for slides)
+coordinates. They are atomic source positions: the paragraph index is defined by
+document-order `w:p` elements under the DOCX main body, and the slide number is
+defined by the PPTX presentation relationship order. Section and symbol locators
+retain line bounds so later chunking never replaces reopenable coordinates with
+an ungrounded label.
 
 ## Standalone raster reopening
 

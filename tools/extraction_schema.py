@@ -290,6 +290,50 @@ class NotebookCellLocator(Locator):
 
 
 @dataclass(frozen=True)
+class ParagraphLocator(Locator):
+    """Zero-based paragraph index in the main DOCX document body."""
+
+    locator_type: ClassVar[str] = "paragraph"
+    paragraph_index: int
+
+    def __post_init__(self) -> None:
+        if not _is_integer(self.paragraph_index) or self.paragraph_index < 0:
+            raise ExtractionSchemaError(
+                "paragraph_index must be a non-negative integer"
+            )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": EXTRACTION_SCHEMA_VERSION,
+            "kind": LOCATOR_KIND,
+            "locator_type": self.locator_type,
+            "paragraph_index": self.paragraph_index,
+        }
+
+
+@dataclass(frozen=True)
+class SlideLocator(Locator):
+    """One-based slide number in presentation order."""
+
+    locator_type: ClassVar[str] = "slide"
+    slide_number: int
+
+    def __post_init__(self) -> None:
+        if not _is_integer(self.slide_number) or self.slide_number < 1:
+            raise ExtractionSchemaError(
+                "slide_number must be a positive integer"
+            )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": EXTRACTION_SCHEMA_VERSION,
+            "kind": LOCATOR_KIND,
+            "locator_type": self.locator_type,
+            "slide_number": self.slide_number,
+        }
+
+
+@dataclass(frozen=True)
 class TableRangeLocator(Locator):
     """Inclusive A1 cell range within one named sheet."""
 
@@ -381,6 +425,8 @@ _LOCATOR_FIELDS = {
     "pdf_page": {"page_number"},
     "image_region": {"frame_index", "x", "y", "width", "height"},
     "notebook_cell": {"cell_index", "cell_id"},
+    "paragraph": {"paragraph_index"},
+    "slide": {"slide_number"},
     "table_range": {"sheet", "start_cell", "end_cell"},
     "section": {"heading_path", "start_line", "end_line"},
     "symbol": {"symbol", "start_line", "end_line"},
@@ -434,6 +480,10 @@ def locator_from_dict(value: object) -> Locator:
         )
     if locator_type == "notebook_cell":
         return NotebookCellLocator(record["cell_index"], record["cell_id"])
+    if locator_type == "paragraph":
+        return ParagraphLocator(record["paragraph_index"])
+    if locator_type == "slide":
+        return SlideLocator(record["slide_number"])
     if locator_type == "table_range":
         return TableRangeLocator(
             record["sheet"],

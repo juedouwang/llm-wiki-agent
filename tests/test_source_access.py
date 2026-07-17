@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 from collections import Counter
 from datetime import datetime, timedelta
@@ -28,7 +29,9 @@ from tools.extraction_schema import (
     ImageRegionLocator,
     LineRangeLocator,
     NotebookCellLocator,
+    ParagraphLocator,
     PdfPageLocator,
+    SlideLocator,
     TableRangeLocator,
 )
 from tools.pdf_extractor import extract_pdf_bytes
@@ -95,6 +98,14 @@ class SourceAccessTests(unittest.TestCase):
             page[NameObject("/Contents")] = writer._add_object(content)
         destination = io.BytesIO()
         writer.write(destination)
+        return destination.getvalue()
+
+    @staticmethod
+    def ooxml_bytes(entries: dict[str, str]) -> bytes:
+        destination = io.BytesIO()
+        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, value in entries.items():
+                archive.writestr(name, value.encode("utf-8"))
         return destination.getvalue()
 
     def setUp(self) -> None:
@@ -176,6 +187,81 @@ class SourceAccessTests(unittest.TestCase):
         workbook.save(self.workbook_path)
         workbook.close()
 
+        self.csv_path = self.project / "tables" / "results.csv"
+        self.csv_path.write_bytes(
+            b'metric,value\r\naccuracy,0.875\r\nnotes,"contains, comma"\r\n'
+        )
+
+        self.docx_path = self.project / "papers" / "notes.docx"
+        self.docx_path.write_bytes(
+            self.ooxml_bytes(
+                {
+                    "[Content_Types].xml": (
+                        '<?xml version="1.0" encoding="UTF-8"?>'
+                        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                        '<Override PartName="/word/document.xml" '
+                        'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+                        '</Types>'
+                    ),
+                    "word/document.xml": (
+                        '<?xml version="1.0" encoding="UTF-8"?>'
+                        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                        '<w:body>'
+                        '<w:p><w:r><w:t>First paragraph</w:t></w:r></w:p>'
+                        '<w:p><w:r><w:t>Second paragraph</w:t></w:r></w:p>'
+                        '</w:body></w:document>'
+                    ),
+                }
+            )
+        )
+
+        self.pptx_path = self.project / "papers" / "briefing.pptx"
+        self.pptx_path.write_bytes(
+            self.ooxml_bytes(
+                {
+                    "[Content_Types].xml": (
+                        '<?xml version="1.0" encoding="UTF-8"?>'
+                        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'
+                    ),
+                    "ppt/presentation.xml": (
+                        '<?xml version="1.0" encoding="UTF-8"?>'
+                        '<p:presentation '
+                        'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+                        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                        '<p:sldIdLst>'
+                        '<p:sldId id="256" r:id="rId1"/>'
+                        '<p:sldId id="257" r:id="rId2"/>'
+                        '</p:sldIdLst></p:presentation>'
+                    ),
+                    "ppt/_rels/presentation.xml.rels": (
+                        '<?xml version="1.0" encoding="UTF-8"?>'
+                        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                        '<Relationship Id="rId1" '
+                        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" '
+                        'Target="slides/slide1.xml"/>'
+                        '<Relationship Id="rId2" '
+                        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" '
+                        'Target="slides/slide2.xml"/>'
+                        '</Relationships>'
+                    ),
+                    "ppt/slides/slide1.xml": (
+                        '<?xml version="1.0" encoding="UTF-8"?>'
+                        '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+                        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+                        '<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>First slide</a:t></a:r></a:p>'
+                        '</p:txBody></p:sp></p:spTree></p:cSld></p:sld>'
+                    ),
+                    "ppt/slides/slide2.xml": (
+                        '<?xml version="1.0" encoding="UTF-8"?>'
+                        '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+                        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+                        '<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Second slide</a:t></a:r></a:p>'
+                        '</p:txBody></p:sp></p:spTree></p:cSld></p:sld>'
+                    ),
+                }
+            )
+        )
+
         self.image_path = self.project / "figures" / "architecture.png"
         image = Image.new("RGBA", (3, 2))
         image.putdata(
@@ -230,6 +316,8 @@ class SourceAccessTests(unittest.TestCase):
             b'{"cell_type":"markdown","metadata":{},"source":["\\ud800"]}]}'
         )
         (self.project / "broken" / "bad.xlsx").write_bytes(b"not an OOXML workbook")
+        (self.project / "broken" / "bad.docx").write_bytes(b"not an OOXML document")
+        (self.project / "broken" / "bad.pptx").write_bytes(b"not an OOXML presentation")
 
         self.registration = register_project(
             self.workspace,
@@ -374,6 +462,48 @@ class SourceAccessTests(unittest.TestCase):
                 separators=(",", ":"),
             ),
         )
+
+    def test_delimited_docx_and_pptx_locators_reopen_exactly(self) -> None:
+        before = self.source_snapshot()
+
+        csv_source = self.source_for("tables/results.csv")
+        csv_result = open_source(
+            self.workspace,
+            self.registration.project_id,
+            source_id=csv_source.source_id,
+            locator=TableRangeLocator("CSV", "A1", "B3"),
+        )
+        self.assertEqual(csv_result.excerpt_format, TABLE_EXCERPT_FORMAT)
+        self.assertEqual(
+            json.loads(csv_result.excerpt),
+            [
+                ["metric", "value"],
+                ["accuracy", "0.875"],
+                ["notes", "contains, comma"],
+            ],
+        )
+
+        docx_source = self.source_for("papers/notes.docx")
+        paragraph_result = open_source(
+            self.workspace,
+            self.registration.project_id,
+            source_id=docx_source.source_id,
+            locator=ParagraphLocator(1),
+        )
+        self.assertEqual(paragraph_result.excerpt, "Second paragraph")
+        self.assertEqual(paragraph_result.excerpt_format, "docx-paragraph-text")
+
+        pptx_source = self.source_for("papers/briefing.pptx")
+        slide_result = open_source(
+            self.workspace,
+            self.registration.project_id,
+            source_id=pptx_source.source_id,
+            locator=SlideLocator(2),
+        )
+        self.assertEqual(slide_result.excerpt, "Second slide")
+        self.assertEqual(slide_result.excerpt_format, "pptx-slide-text")
+
+        self.assertEqual(self.source_snapshot(), before)
 
     def test_image_region_reopens_stable_rgba_hash_without_source_mutation(self) -> None:
         source = self.source_for("figures/architecture.png")
@@ -693,6 +823,18 @@ class SourceAccessTests(unittest.TestCase):
                 TableRangeLocator("Results", "XFE1", "XFE1"),
                 SourceLocatorError,
             ),
+            (
+                "tables/results.csv",
+                TableRangeLocator("Missing", "A1", "A1"),
+                SourceLocatorError,
+            ),
+            (
+                "tables/results.csv",
+                TableRangeLocator("CSV", "A1", "C4"),
+                SourceLocatorError,
+            ),
+            ("papers/notes.docx", ParagraphLocator(2), SourceLocatorError),
+            ("papers/briefing.pptx", SlideLocator(3), SourceLocatorError),
             ("broken/bad.pdf", PdfPageLocator(1), SourceFormatError),
             (
                 "broken/bad.ipynb",
@@ -709,6 +851,8 @@ class SourceAccessTests(unittest.TestCase):
                 TableRangeLocator("Sheet", "A1", "A1"),
                 SourceFormatError,
             ),
+            ("broken/bad.docx", ParagraphLocator(0), SourceFormatError),
+            ("broken/bad.pptx", SlideLocator(1), SourceFormatError),
         ]
         for relative_path, locator, error_type in cases:
             with self.subTest(path=relative_path, locator=locator):

@@ -43,6 +43,12 @@ Before permissive legacy decoding, a bounded sample is checked for NUL and contr
 
 Any applied content limit produces `status=partial`. Read errors, hash mismatches, binary contradictions, and decoding failures produce `failed` without a document. Formats outside C-02 produce `unsupported` without a document.
 
+CSV and TSV remain supported here as line-oriented text for backward-compatible
+C-02 workflows. C-06 adds a separate table-coordinate interpretation for those
+same bytes, using strict delimiter parsing, logical `CSV`/`TSV` sheet names,
+canonical JSON matrices, and exact `TableRangeLocator` reopening. Selecting the
+C-06 extractor does not change or silently reinterpret an existing C-02 result.
+
 ## Scope boundary
 
 C-02 does not extract Notebook cells, PDF pages, Office/table coordinates, images, or research binary metadata. It does not allocate `source_id`, create Evidence, mutate Manifest state, schedule adaptive reads, perform semantic chunking, reopen sources, or provide MCP/Hook/Web/LLM behavior. Those belong to later roadmap tasks.
