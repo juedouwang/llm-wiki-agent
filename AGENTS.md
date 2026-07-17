@@ -60,6 +60,9 @@ Rules:
 5. Do not place local paths, hashes, indexes, or run state in `wiki/projects/`.
 6. Do not place curated research summaries or plans in `.llmwiki/`.
 7. Use `tools/project_layout.py` for path validation, initialization, version checks, and legacy resolution.
+8. Project-scoped Markdown under `wiki/projects/<project_id>/` uses the strict F-01A Schema v1 and canonical project-relative path mapping in `tools/knowledge_artifacts.py`; see `docs/knowledge-artifact-contract.md`.
+9. Parse project knowledge from bytes with strict UTF-8 and safe YAML, reject unknown/future fields, and validate `artifact_type` against the path before any later writer persists a page.
+10. F-01A is validation-only: it must not be described as generating the 15 page bodies, enforcing F-02 Claim-Evidence currentness, or protecting F-05 mixed/user body regions.
 
 Register an external research project with:
 
@@ -123,7 +126,7 @@ See `docs/codex-reference-adapter.md`.
 
 ## Page Format
 
-Every wiki page uses this frontmatter:
+Existing top-level `wiki/` pages use this legacy-compatible frontmatter. Project-scoped pages under `wiki/projects/<project_id>/` instead use the F-01A contract above:
 
 ```yaml
 ---

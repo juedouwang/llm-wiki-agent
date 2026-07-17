@@ -24,12 +24,24 @@ llm-wiki-agent/
 `-- wiki/
     `-- projects/
         `-- <project_id>/
-            |-- overview.md         # later task; not created by registration
-            |-- sources/
+            |-- index.md            # later task; not created by registration
+            |-- overview.md
+            |-- project-map.md
+            |-- reproduction.md
+            |-- architecture.md
             |-- papers/
+            |-- methods/
+            |-- datasets/
             |-- experiments/
+            |-- results/
             |-- claims/
-            `-- plans/
+            |-- open-questions.md
+            |-- status.md
+            |-- risks.md
+            |-- goals.md
+            |-- plans/
+            |-- decisions/
+            `-- sources/
 ```
 
 | Root | Owner | Intended content | Git policy |
@@ -40,6 +52,8 @@ llm-wiki-agent/
 The default `knowledge_projects_root` is `wiki/projects/`. `--knowledge-root` can point it at a personal knowledge base outside this repository. The supplied directory is the parent of all project directories, so registration writes curated storage under `<knowledge-root>/<project_id>/`.
 
 Machine-generated evidence must not be bulk-copied into the human knowledge tree. Curated claims and summaries point back to stable source and Evidence identifiers. See [`evidence-schema.md`](evidence-schema.md) for the D-03 artifact and validation contract.
+
+F-01A defines the strict Schema v1 frontmatter and canonical project-relative path mapping for this curated tree in [`knowledge-artifact-contract.md`](knowledge-artifact-contract.md). The contract is currently in-memory only: registration and layout initialization still create no knowledge Markdown, and later renderers/writers must be separately authorized.
 
 ## Register a project
 

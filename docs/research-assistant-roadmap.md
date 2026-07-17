@@ -57,6 +57,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | G-08 budget-bounded Host Context Pack | complete | `3721fb5` | `checkpoint/g-08-host-context-pack` |
 | E-01 resumable staged run orchestration | complete | `146fc0f` | `checkpoint/e-01-run-orchestrator` |
 | E-08 deterministic one-action prefix (R2 slice) | complete | `b2e04ca` | `checkpoint/e-08-deterministic-understand` |
+| F-01 项目知识页面契约（F-01A slice） | 部分完成（Schema/路径契约；后续 F-01 写入保护仍未完成） | `this commit` | pending checkpoint |
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
 | J-05 Codex reference adapter package | complete after validation on 2026-07-16 | `62ccbdc` | `checkpoint/j-05-codex-plugin` |
@@ -252,8 +253,9 @@ As of 2026-07-16, R2 is complete. J-05 packages the validated Core boundary as a
 
 ```text
 B-07（已完成）
-→ C-05 (complete) → C-06 → C-07
-→ F-01 → F-02 → F-03 → F-04 → F-05
+→ C-05 (complete) → C-06 (complete)
+→ C-07（用户决定暂缓，保持 not_started）
+→ F-01A（已完成的部分切片）→ F-01 后续切片 → F-02 → F-03 → F-04 → F-05
 → E-02 → E-03 → E-04 → E-05 → E-06 → E-07 → E-08（完整）
 → I-01 → I-02 → I-03 → I-04
 → J-03 → J-04
@@ -500,12 +502,34 @@ Result: **82 passed, 1 skipped**. Full validation produced **447 passed,
 9 skipped**, `pip check` reported no broken requirements, UTF-8 health reported
 zero structural issues, focused Ruff passed, and `git diff --check` passed.
 
-The next executable roadmap task is:
+F-01A implementation completed on **2026-07-17** in `this commit`; the
+bounded implementation and validation state is designated by
+`checkpoint/f-01a-knowledge-artifact-contract`. It adds the strict in-memory
+Schema v1 frontmatter model, canonical project-relative path mapping for the 15
+product artifact classes and approved auxiliary pages, safe duplicate-key-
+rejecting YAML parsing, strict UTF-8 decoding, deterministic serialization, and
+direct PyYAML dependency declarations. See
+[`knowledge-artifact-contract.md`](knowledge-artifact-contract.md).
 
-> **C-07: research-binary metadata extraction**
+F-01A creates no real curated page, reads no research source or binary payload,
+and adds no registration, layout initialization, ResearchCoreService, CLI, MCP,
+Skill, Hook, Plugin, or Web behavior. The host Agent remains responsible for
+research semantics and page bodies; Core validates only structure, identity,
+time, ownership, and path/type consistency. F-02 Evidence semantics and F-05
+mixed/user write protection remain open.
 
-C-07 should add safe local metadata inspection for `.mat`, `.npy`, `.npz`,
-`.h5`, `.parquet`, `.pt`, and `.ckpt` sources. It must expose keys, shapes,
-dtypes, and explicit bounded/failure reasons without loading huge tensor
-weights, executing pickle payloads, sending content externally, or mutating the
-registered source project.
+Focused validation recorded on 2026-07-17:
+
+```powershell
+python -B -m pytest -q -p no:cacheprovider `
+  tests/test_knowledge_artifacts.py `
+  tests/test_project_layout.py `
+  tests/test_project_registration.py `
+  tests/test_health_baseline.py
+```
+
+Result: **51 passed, 2 skipped**. Full validation produced **483 passed, 9 skipped**, `pip check` reported no broken requirements, UTF-8 health reported zero structural issues, focused Ruff and compile checks passed, 23 local Markdown links passed, and `git diff --check` passed.
+
+This checkpoint keeps F-01 **partial**. C-07 remains `not_started` and is
+intentionally deferred by the user's product decision; no binary reader or
+binary dependency was added. No later Roadmap unit is authorized by this record.
