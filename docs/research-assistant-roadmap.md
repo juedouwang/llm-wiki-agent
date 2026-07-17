@@ -39,7 +39,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | C-02 文本族提取器 | 已完成 | `5093f80` | `checkpoint/c-02-text-extractors` |
 | C-03 Notebook extractor | 已完成 | `946d05a`, `daf1330` | `checkpoint/c-03-notebook-extractor`, `checkpoint/c-03-notebook-payload-bounds` |
 | C-04 PDF page extractor | 已完成 | `66a7ba7` | `checkpoint/c-04-pdf-extractor` |
-| C-05 visual/OCR extraction | complete (2026-07-17 validation) | `this commit` | `checkpoint/c-05-visual-ocr` (pending) |
+| C-05 visual/OCR extraction | complete (2026-07-17 validation) | `bb045cf` | `checkpoint/c-05-visual-ocr` |
 | C-08 定位保真分块 | 已完成 | `1eb64a2`, `6f01136` | `checkpoint/c-08-locator-chunking`, `checkpoint/c-08-locator-chunking-hardening` |
 | D-01 persistent source identity | complete | `a11fe6d` | `checkpoint/d-01-source-identity` |
 | D-02 source versions and path history | complete | `1230ac2` | `checkpoint/d-02-source-versions` |
@@ -431,9 +431,9 @@ python -B -m pytest -q -p no:cacheprovider `
 
 Result: **45 passed, 3 skipped**. The added regressions cover current-grounded execution authorization, intrinsic/current-policy tamper rejection, machine-state ancestor redirection, post-read/pre-commit reference mutation, and every exact fixed-v1 boundary.
 
-C-05 landed on **2026-07-17** in `this commit`. The intended checkpoint is
-`checkpoint/c-05-visual-ocr`, but that checkpoint is **pending and has not been
-created yet**. The implementation adds strict in-memory visual selection and
+C-05 implementation landed on **2026-07-17** in `bb045cf`. The completed
+implementation and validation state is designated by
+`checkpoint/c-05-visual-ocr`. The implementation adds strict in-memory visual selection and
 execution over only current B-07 records whose `deep_read_status` is
 `selected`; deferred and limited records remain non-executable audit data.
 
