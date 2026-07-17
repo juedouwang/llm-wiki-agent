@@ -28,6 +28,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | A-02 建立基线测试 | 已完成 | `3084d7d` | `checkpoint/a-02-baseline-tests` |
 | A-03 划分机器状态与知识内容 | 已完成 | `da4022c` | `checkpoint/a-03-storage-layout` |
 | P-05 最终产品与 Agent 原生闭环约定 | 已完成 | `272c693` | `checkpoint/p-05-product-contract` |
+| P-08 Agent-native 科研工具架构约定 | 已完成（2026-07-17 验证） | `815df6e` | `checkpoint/p-08-agent-native-architecture` |
 | B-01 项目注册 | 已完成 | `15d317a` | `checkpoint/b-01-project-register` |
 | B-02 扫描策略 | 已完成 | `07be63d` | `checkpoint/b-02-scan-policy` |
 | B-03 目录盘点与基础 Manifest | 已完成 | `be4b825` | `checkpoint/b-03-project-inventory` |
