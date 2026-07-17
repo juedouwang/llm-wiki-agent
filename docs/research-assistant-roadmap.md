@@ -57,7 +57,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | G-08 budget-bounded Host Context Pack | complete | `3721fb5` | `checkpoint/g-08-host-context-pack` |
 | E-01 resumable staged run orchestration | complete | `146fc0f` | `checkpoint/e-01-run-orchestrator` |
 | E-08 deterministic one-action prefix (R2 slice) | complete | `b2e04ca` | `checkpoint/e-08-deterministic-understand` |
-| F-01 项目知识页面契约（F-01A slice） | 部分完成（Schema/路径契约；后续 F-01 写入保护仍未完成） | `this commit` | pending checkpoint |
+| F-01 项目知识页面契约（F-01A slice） | 部分完成（Schema/路径契约；后续 F-01 写入保护仍未完成） | `f987dc0` | `checkpoint/f-01a-knowledge-artifact-contract` |
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
 | J-05 Codex reference adapter package | complete after validation on 2026-07-16 | `62ccbdc` | `checkpoint/j-05-codex-plugin` |
@@ -502,7 +502,7 @@ Result: **82 passed, 1 skipped**. Full validation produced **447 passed,
 9 skipped**, `pip check` reported no broken requirements, UTF-8 health reported
 zero structural issues, focused Ruff passed, and `git diff --check` passed.
 
-F-01A implementation completed on **2026-07-17** in `this commit`; the
+F-01A implementation completed on **2026-07-17** in `f987dc0`; the
 bounded implementation and validation state is designated by
 `checkpoint/f-01a-knowledge-artifact-contract`. It adds the strict in-memory
 Schema v1 frontmatter model, canonical project-relative path mapping for the 15
