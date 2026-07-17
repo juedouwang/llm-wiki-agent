@@ -224,6 +224,46 @@ class PdfPageLocator(Locator):
 
 
 @dataclass(frozen=True)
+class ImageRegionLocator(Locator):
+    """Pixel rectangle in one EXIF-normalized standalone raster frame."""
+
+    locator_type: ClassVar[str] = "image_region"
+    frame_index: int
+    x: int
+    y: int
+    width: int
+    height: int
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("frame_index", self.frame_index),
+            ("x", self.x),
+            ("y", self.y),
+        ):
+            if not _is_integer(value) or value < 0:
+                raise ExtractionSchemaError(
+                    f"{field_name} must be a non-negative integer"
+                )
+        for field_name, value in (("width", self.width), ("height", self.height)):
+            if not _is_integer(value) or value < 1:
+                raise ExtractionSchemaError(
+                    f"{field_name} must be a positive integer"
+                )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": EXTRACTION_SCHEMA_VERSION,
+            "kind": LOCATOR_KIND,
+            "locator_type": self.locator_type,
+            "frame_index": self.frame_index,
+            "x": self.x,
+            "y": self.y,
+            "width": self.width,
+            "height": self.height,
+        }
+
+
+@dataclass(frozen=True)
 class NotebookCellLocator(Locator):
     """Zero-based Notebook cell index with an optional persisted cell ID."""
 
@@ -339,6 +379,7 @@ class SymbolLocator(Locator):
 _LOCATOR_FIELDS = {
     "line_range": {"start_line", "end_line"},
     "pdf_page": {"page_number"},
+    "image_region": {"frame_index", "x", "y", "width", "height"},
     "notebook_cell": {"cell_index", "cell_id"},
     "table_range": {"sheet", "start_cell", "end_cell"},
     "section": {"heading_path", "start_line", "end_line"},
@@ -383,6 +424,14 @@ def locator_from_dict(value: object) -> Locator:
         return LineRangeLocator(record["start_line"], record["end_line"])
     if locator_type == "pdf_page":
         return PdfPageLocator(record["page_number"])
+    if locator_type == "image_region":
+        return ImageRegionLocator(
+            record["frame_index"],
+            record["x"],
+            record["y"],
+            record["width"],
+            record["height"],
+        )
     if locator_type == "notebook_cell":
         return NotebookCellLocator(record["cell_index"], record["cell_id"])
     if locator_type == "table_range":

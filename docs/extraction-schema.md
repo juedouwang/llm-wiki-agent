@@ -30,14 +30,50 @@ Locators use exact, format-appropriate coordinates:
 
 - `line_range`: inclusive one-based `start_line` and `end_line`;
 - `pdf_page`: one-based `page_number`;
+- `image_region`: zero-based `frame_index`, zero-based top-left pixel `x` and
+  `y`, and positive pixel `width` and `height`;
 - `notebook_cell`: zero-based `cell_index` and optional non-empty `cell_id`;
 - `table_range`: sheet name and inclusive uppercase A1 cell range;
 - `section`: non-empty heading path plus inclusive source lines;
 - `symbol`: symbol name plus inclusive source lines.
 
 Ranges reject zero, negative, reversed, or structurally invalid coordinates.
+For `image_region`, `frame_index`, `x`, and `y` must be non-negative integers,
+and `width` and `height` must be positive integers. Pixel coordinates use a
+zero-based top-left origin in the Pillow-decoded frame **after**
+`ImageOps.exif_transpose()` orientation normalization. The locator schema can
+validate coordinate shape but not source-specific bounds; D-04 reopening checks
+that the selected frame exists and that the complete rectangle is inside the
+normalized frame. First-version C-05 producers use whole-frame rectangles, but
+Schema v1 deliberately supports any in-bounds rectangle without inventing text
+line or PDF-page coordinates.
+
 Section and symbol locators retain line bounds so later chunking never replaces
 reopenable coordinates with an ungrounded label.
+
+## Standalone raster reopening
+
+D-04 `source_access` reopens an `image_region` only from the already
+content-hash-verified source bytes. It selects the zero-based frame, applies
+EXIF orientation normalization, validates the rectangle, crops it, converts the
+crop to RGBA, and hashes the raw row-major RGBA bytes with SHA-256. The returned
+UTF-8 excerpt has format `image-region-rgba-sha256` and is canonical compact
+JSON containing exactly:
+
+```text
+frame_index, x, y, width, height,
+decoded_width, decoded_height, rgba_sha256
+```
+
+No image bytes, OCR text, or vision description are returned. Pillow
+malformation and decompression-bomb failures are format errors; nonexistent
+frames and out-of-bounds rectangles are locator errors. Reopening does not
+change Pillow's process-wide safety settings and never mutates the source file.
+
+This contract verifies the selected standalone raster pixels. It does **not**
+verify derived OCR or vision text, and it does not represent a PDF crop. PDF
+content continues to use `pdf_page` unless a separate future PDF-region schema
+is explicitly introduced.
 
 ## Block
 
@@ -88,6 +124,6 @@ round-trips every supported Locator.
 
 ## Explicit non-goals
 
-C-01 does not implement text, Notebook, or PDF extraction; does not write
+C-01 does not implement text, Notebook, PDF, or raster extraction; does not write
 `extracted/` artifacts; does not chunk content; does not assign `source_id` or
 Evidence; and does not add MCP, Hook, Web, LLM, or curated-knowledge behavior.

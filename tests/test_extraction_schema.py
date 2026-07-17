@@ -13,6 +13,7 @@ from tools.extraction_schema import (
     ExtractedDocument,
     ExtractionResult,
     ExtractionSchemaError,
+    ImageRegionLocator,
     LineRangeLocator,
     Locator,
     NotebookCellLocator,
@@ -37,6 +38,13 @@ class ExtractionSchemaTests(unittest.TestCase):
         return [
             LineRangeLocator(start_line=1, end_line=4),
             PdfPageLocator(page_number=3),
+            ImageRegionLocator(
+                frame_index=0,
+                x=12,
+                y=34,
+                width=640,
+                height=480,
+            ),
             NotebookCellLocator(cell_index=2, cell_id="cell-abc"),
             TableRangeLocator(sheet="Results", start_cell="A1", end_cell="C9"),
             SectionLocator(
@@ -75,12 +83,64 @@ class ExtractionSchemaTests(unittest.TestCase):
                 self.assertEqual(payload["kind"], LOCATOR_KIND)
                 self.assertEqual(locator_from_dict(payload), locator)
 
+    def test_image_region_locator_has_strict_schema_v1_shape(self) -> None:
+        locator = ImageRegionLocator(
+            frame_index=2,
+            x=10,
+            y=20,
+            width=30,
+            height=40,
+        )
+        payload = locator.as_dict()
+
+        self.assertEqual(
+            payload,
+            {
+                "schema_version": EXTRACTION_SCHEMA_VERSION,
+                "kind": LOCATOR_KIND,
+                "locator_type": "image_region",
+                "frame_index": 2,
+                "x": 10,
+                "y": 20,
+                "width": 30,
+                "height": 40,
+            },
+        )
+        self.assertEqual(locator_from_dict(payload), locator)
+
+        invalid_payloads = {
+            "legacy missing version": {
+                key: value
+                for key, value in payload.items()
+                if key != "schema_version"
+            },
+            "future version": {
+                **payload,
+                "schema_version": EXTRACTION_SCHEMA_VERSION + 1,
+            },
+            "extra field": {**payload, "rotation": 90},
+            "missing field": {
+                key: value for key, value in payload.items() if key != "width"
+            },
+        }
+        for name, invalid in invalid_payloads.items():
+            with self.subTest(name=name):
+                with self.assertRaises(ExtractionSchemaError):
+                    locator_from_dict(invalid)
+
     def test_invalid_locator_coordinates_fail_closed(self) -> None:
         factories = {
             "zero line": lambda: LineRangeLocator(0, 1),
             "reversed line": lambda: LineRangeLocator(4, 3),
             "boolean line": lambda: LineRangeLocator(True, 2),
             "zero page": lambda: PdfPageLocator(0),
+            "negative image frame": lambda: ImageRegionLocator(-1, 0, 0, 1, 1),
+            "boolean image frame": lambda: ImageRegionLocator(True, 0, 0, 1, 1),
+            "negative image x": lambda: ImageRegionLocator(0, -1, 0, 1, 1),
+            "negative image y": lambda: ImageRegionLocator(0, 0, -1, 1, 1),
+            "zero image width": lambda: ImageRegionLocator(0, 0, 0, 0, 1),
+            "zero image height": lambda: ImageRegionLocator(0, 0, 0, 1, 0),
+            "boolean image width": lambda: ImageRegionLocator(0, 0, 0, True, 1),
             "negative cell": lambda: NotebookCellLocator(-1),
             "blank cell id": lambda: NotebookCellLocator(0, " "),
             "lowercase A1": lambda: TableRangeLocator("Data", "a1", "B2"),

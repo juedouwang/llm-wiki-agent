@@ -17,6 +17,7 @@ from tools.extraction_schema import (
     Block,
     ExtractedDocument,
     ExtractionSchemaError,
+    ImageRegionLocator,
     LineRangeLocator,
     Locator,
     NotebookCellLocator,
@@ -39,7 +40,12 @@ _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _STABLE_CODE_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 _FORMAT_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:[._+-][a-z0-9]+)*")
 _LINE_LOCATOR_TYPES = (LineRangeLocator, SectionLocator, SymbolLocator)
-_ATOMIC_LOCATOR_TYPES = (PdfPageLocator, NotebookCellLocator, TableRangeLocator)
+_ATOMIC_LOCATOR_TYPES = (
+    PdfPageLocator,
+    ImageRegionLocator,
+    NotebookCellLocator,
+    TableRangeLocator,
+)
 
 
 class ChunkingError(ValueError):
@@ -499,7 +505,8 @@ def _validate_chunk_group(
     if isinstance(source_locator, _ATOMIC_LOCATOR_TYPES):
         if len(chunks) != 1 or chunks[0].locator != source_locator:
             raise ChunkingSchemaError(
-                "page, Notebook cell, and table-range locators are atomic"
+                "page, image-region, Notebook-cell, and table-range locators "
+                "are atomic"
             )
         return
     if not isinstance(source_locator, _LINE_LOCATOR_TYPES):

@@ -8,11 +8,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from openpyxl import Workbook
+from PIL import Image
 from pypdf import PdfWriter
 from pypdf.generic import (
     DecodedStreamObject,
@@ -23,6 +25,7 @@ from pypdf.generic import (
 from tools.evidence_registry import excerpt_sha256, register_evidence
 from tools.extraction_schema import (
     EXTRACTION_SCHEMA_VERSION,
+    ImageRegionLocator,
     LineRangeLocator,
     NotebookCellLocator,
     PdfPageLocator,
@@ -35,6 +38,7 @@ from tools.source_access import (
     SOURCE_ACCESS_VERSION,
     SOURCE_LOCATION_KIND,
     SOURCE_OPEN_KIND,
+    IMAGE_REGION_EXCERPT_FORMAT,
     TABLE_EXCERPT_FORMAT,
     SourceBoundaryError,
     SourceContentMismatchError,
@@ -103,6 +107,7 @@ class SourceAccessTests(unittest.TestCase):
         (self.project / "papers").mkdir()
         (self.project / "notebooks").mkdir()
         (self.project / "tables").mkdir()
+        (self.project / "figures").mkdir()
         (self.project / "broken").mkdir()
 
         self.code_path = self.project / "src" / "model.py"
@@ -171,6 +176,53 @@ class SourceAccessTests(unittest.TestCase):
         workbook.save(self.workbook_path)
         workbook.close()
 
+        self.image_path = self.project / "figures" / "architecture.png"
+        image = Image.new("RGBA", (3, 2))
+        image.putdata(
+            [
+                (255, 0, 0, 255),
+                (0, 255, 0, 255),
+                (0, 0, 255, 255),
+                (255, 255, 255, 255),
+                (0, 0, 0, 255),
+                (255, 255, 0, 255),
+            ]
+        )
+        image.save(self.image_path, format="PNG")
+        image.close()
+
+        self.oriented_image_path = self.project / "figures" / "oriented.png"
+        oriented = Image.new("RGB", (2, 3))
+        oriented.putdata(
+            [
+                (255, 0, 0),
+                (0, 255, 0),
+                (0, 0, 255),
+                (255, 255, 0),
+                (255, 0, 255),
+                (0, 255, 255),
+            ]
+        )
+        exif = Image.Exif()
+        exif[274] = 6
+        oriented.save(self.oriented_image_path, format="PNG", exif=exif)
+        oriented.close()
+
+        self.animated_image_path = self.project / "figures" / "frames.gif"
+        first_frame = Image.new("RGB", (2, 1), (255, 0, 0))
+        second_frame = Image.new("RGB", (2, 1), (0, 0, 255))
+        first_frame.save(
+            self.animated_image_path,
+            format="GIF",
+            save_all=True,
+            append_images=[second_frame],
+            duration=100,
+            loop=0,
+        )
+        first_frame.close()
+        second_frame.close()
+
+        (self.project / "broken" / "bad.png").write_bytes(b"not an image")
         (self.project / "broken" / "bad.pdf").write_bytes(b"not a PDF")
         (self.project / "broken" / "bad.ipynb").write_bytes(b"{not-json")
         (self.project / "broken" / "surrogate.ipynb").write_bytes(
@@ -322,6 +374,184 @@ class SourceAccessTests(unittest.TestCase):
                 separators=(",", ":"),
             ),
         )
+
+    def test_image_region_reopens_stable_rgba_hash_without_source_mutation(self) -> None:
+        source = self.source_for("figures/architecture.png")
+        locator = ImageRegionLocator(
+            frame_index=0,
+            x=1,
+            y=0,
+            width=2,
+            height=2,
+        )
+        expected_rgba = bytes(
+            [
+                0,
+                255,
+                0,
+                255,
+                0,
+                0,
+                255,
+                255,
+                0,
+                0,
+                0,
+                255,
+                255,
+                255,
+                0,
+                255,
+            ]
+        )
+        expected_payload = {
+            "frame_index": 0,
+            "x": 1,
+            "y": 0,
+            "width": 2,
+            "height": 2,
+            "decoded_width": 3,
+            "decoded_height": 2,
+            "rgba_sha256": hashlib.sha256(expected_rgba).hexdigest(),
+        }
+        expected_excerpt = json.dumps(
+            expected_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        before = self.source_snapshot()
+
+        first = open_source(
+            self.workspace,
+            self.registration.project_id,
+            source_id=source.source_id,
+            locator=locator,
+            expected_content_hash=source.current_content_hash,
+        )
+        second = open_source(
+            self.workspace,
+            self.registration.project_id,
+            source_id=source.source_id,
+            locator=locator.as_dict(),
+        )
+
+        self.assertEqual(first.locator, locator)
+        self.assertEqual(first.excerpt_format, IMAGE_REGION_EXCERPT_FORMAT)
+        self.assertEqual(first.excerpt, expected_excerpt)
+        self.assertEqual(first.excerpt, second.excerpt)
+        self.assertEqual(json.loads(first.excerpt), expected_payload)
+        self.assertEqual(first.excerpt_hash, excerpt_sha256(expected_excerpt))
+        self.assertEqual(before, self.source_snapshot())
+
+    def test_image_region_uses_exif_normalized_dimensions(self) -> None:
+        source = self.source_for("figures/oriented.png")
+        expected_rgba = bytes(
+            [
+                255,
+                0,
+                255,
+                255,
+                0,
+                0,
+                255,
+                255,
+                255,
+                0,
+                0,
+                255,
+                0,
+                255,
+                255,
+                255,
+                255,
+                255,
+                0,
+                255,
+                0,
+                255,
+                0,
+                255,
+            ]
+        )
+
+        result = open_source(
+            self.workspace,
+            self.registration.project_id,
+            source_id=source.source_id,
+            locator=ImageRegionLocator(0, 0, 0, 3, 2),
+        )
+        payload = json.loads(result.excerpt)
+
+        self.assertEqual(payload["decoded_width"], 3)
+        self.assertEqual(payload["decoded_height"], 2)
+        self.assertEqual(
+            payload["rgba_sha256"],
+            hashlib.sha256(expected_rgba).hexdigest(),
+        )
+
+    def test_image_region_frame_bounds_malformed_and_bomb_fail_closed(self) -> None:
+        animated = self.source_for("figures/frames.gif")
+        second_frame = open_source(
+            self.workspace,
+            self.registration.project_id,
+            source_id=animated.source_id,
+            locator=ImageRegionLocator(1, 0, 0, 2, 1),
+        )
+        self.assertEqual(
+            json.loads(second_frame.excerpt)["rgba_sha256"],
+            hashlib.sha256(bytes([0, 0, 255, 255] * 2)).hexdigest(),
+        )
+
+        failures = [
+            (
+                "figures/frames.gif",
+                ImageRegionLocator(2, 0, 0, 1, 1),
+                SourceLocatorError,
+            ),
+            (
+                "figures/architecture.png",
+                ImageRegionLocator(0, 2, 0, 2, 1),
+                SourceLocatorError,
+            ),
+            (
+                "figures/architecture.png",
+                ImageRegionLocator(0, 0, 2, 1, 1),
+                SourceLocatorError,
+            ),
+            (
+                "papers/study.pdf",
+                ImageRegionLocator(0, 0, 0, 1, 1),
+                SourceFormatError,
+            ),
+            (
+                "broken/bad.png",
+                ImageRegionLocator(0, 0, 0, 1, 1),
+                SourceFormatError,
+            ),
+        ]
+        for relative_path, locator, error_type in failures:
+            with self.subTest(path=relative_path, locator=locator):
+                source = self.source_for(relative_path)
+                with self.assertRaises(error_type):
+                    open_source(
+                        self.workspace,
+                        self.registration.project_id,
+                        source_id=source.source_id,
+                        locator=locator,
+                    )
+
+        architecture = self.source_for("figures/architecture.png")
+        for max_pixels in (4, 2):
+            with self.subTest(max_pixels=max_pixels):
+                with patch.object(Image, "MAX_IMAGE_PIXELS", max_pixels):
+                    with self.assertRaises(SourceFormatError):
+                        open_source(
+                            self.workspace,
+                            self.registration.project_id,
+                            source_id=architecture.source_id,
+                            locator=ImageRegionLocator(0, 0, 0, 1, 1),
+                        )
 
     def test_open_evidence_verifies_content_and_excerpt_hashes(self) -> None:
         source = self.source_for("src/model.py")

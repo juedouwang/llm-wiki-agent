@@ -25,6 +25,7 @@ from tools.extraction_schema import (
     LOCATOR_KIND,
     Block,
     ExtractedDocument,
+    ImageRegionLocator,
     LineRangeLocator,
     Locator,
     NotebookCellLocator,
@@ -205,6 +206,45 @@ class ChunkingTests(unittest.TestCase):
             [(0, 0), (0, 0), (0, 1)],
         )
         validate_chunk_coverage(source, result)
+
+    def test_image_region_is_atomic_and_round_trips_with_exact_coverage(self) -> None:
+        locator = ImageRegionLocator(
+            frame_index=1,
+            x=4,
+            y=5,
+            width=120,
+            height=80,
+        )
+        source = document_with(
+            Block(
+                block_id="architecture-region",
+                block_type="text",
+                text="encoder -> latent -> decoder",
+                locator=locator,
+                metadata={"derived_from": "rgba-region"},
+            ),
+            path="figures/architecture.png",
+        )
+
+        chunked = chunk_document(
+            source,
+            limits=ChunkingLimits(max_chunk_utf8_bytes=128),
+        )
+
+        self.assertEqual(len(chunked.chunks), 1)
+        self.assertEqual(chunked.chunks[0].locator, locator)
+        self.assertEqual(chunked.chunks[0].source_block_locator, locator)
+        self.assertEqual(chunked.chunks[0].text, source.blocks[0].text)
+        validate_chunk_coverage(source, chunked)
+        restored = deserialize_chunked_document(serialize_chunked_document(chunked))
+        self.assertEqual(restored, chunked)
+        validate_chunk_coverage(source, restored)
+
+        with self.assertRaisesRegex(ChunkingError, "atomic"):
+            chunk_document(
+                source,
+                limits=ChunkingLimits(max_chunk_utf8_bytes=4),
+            )
 
     def test_oversized_atomic_locators_are_rejected_not_character_sliced(self) -> None:
         for locator in (

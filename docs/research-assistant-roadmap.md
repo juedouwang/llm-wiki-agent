@@ -39,6 +39,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | C-02 文本族提取器 | 已完成 | `5093f80` | `checkpoint/c-02-text-extractors` |
 | C-03 Notebook extractor | 已完成 | `946d05a`, `daf1330` | `checkpoint/c-03-notebook-extractor`, `checkpoint/c-03-notebook-payload-bounds` |
 | C-04 PDF page extractor | 已完成 | `66a7ba7` | `checkpoint/c-04-pdf-extractor` |
+| C-05 visual/OCR extraction | complete (2026-07-17 validation) | `this commit` | `checkpoint/c-05-visual-ocr` (pending) |
 | C-08 定位保真分块 | 已完成 | `1eb64a2`, `6f01136` | `checkpoint/c-08-locator-chunking`, `checkpoint/c-08-locator-chunking-hardening` |
 | D-01 persistent source identity | complete | `a11fe6d` | `checkpoint/d-01-source-identity` |
 | D-02 source versions and path history | complete | `1230ac2` | `checkpoint/d-02-source-versions` |
@@ -247,7 +248,7 @@ As of 2026-07-16, R2 is complete. J-05 packages the validated Core boundary as a
 
 ```text
 B-07（已完成）
-→ C-05 → C-06 → C-07
+→ C-05 (complete) → C-06 → C-07
 → F-01 → F-02 → F-03 → F-04 → F-05
 → E-02 → E-03 → E-04 → E-05 → E-06 → E-07 → E-08（完整）
 → I-01 → I-02 → I-03 → I-04
@@ -430,12 +431,44 @@ python -B -m pytest -q -p no:cacheprovider `
 
 Result: **45 passed, 3 skipped**. The added regressions cover current-grounded execution authorization, intrinsic/current-policy tamper rejection, machine-state ancestor redirection, post-read/pre-commit reference mutation, and every exact fixed-v1 boundary.
 
+C-05 landed on **2026-07-17** in `this commit`. The intended checkpoint is
+`checkpoint/c-05-visual-ocr`, but that checkpoint is **pending and has not been
+created yet**. The implementation adds strict in-memory visual selection and
+execution over only current B-07 records whose `deep_read_status` is
+`selected`; deferred and limited records remain non-executable audit data.
+
+Standalone PNG/JPEG/GIF/TIFF/BMP frames use EXIF-normalized whole-frame
+`ImageRegionLocator` values and exact RGBA source hashes. PDF handling preserves
+C-04 native text and metadata and renders only C-04 OCR/visual-review follow-up
+pages. The default local path uses bounded Pillow decoding, optional local
+Tesseract, and direct pypdf images; no network backend is configured implicitly.
+External backends and renderers require both the current B-02 raw-send decision
+and a point-of-send selection/registration/source reauthorization. PDF pixel
+limits are document-wide, custom renderer payloads fail closed on contract
+violations, and safely decoded earlier raster frames survive bounded later-frame
+failures as explicit partial results. C-05 creates no extraction artifact,
+Evidence, curated Markdown, Manifest mutation, or source-project write. See
+[`visual-ocr.md`](visual-ocr.md).
+
+Focused validation recorded on 2026-07-17:
+
+```powershell
+python -B -m pytest -q -p no:cacheprovider `
+  tests/test_visual_selection.py `
+  tests/test_visual_extractor.py `
+  tests/test_extraction_schema.py `
+  tests/test_chunking.py `
+  tests/test_source_access.py
+```
+
+Result: **83 passed, 1 skipped**. Full validation produced **408 passed,
+9 skipped**, `pip check` reported no broken requirements, UTF-8 health reported
+zero structural issues, focused Ruff passed, and `git diff --check` passed.
+
 The next executable roadmap task is:
 
-> **C-05: key-image, architecture/result-figure, and scanned-PDF vision/OCR pipeline**
+> **C-06: locator-preserving Office and tabular extraction**
 
-C-05 should consume only policy-authorized selections, including B-07 entries
-whose `deep_read_status` is `selected`; deferred queue entries are not execution
-instructions. It must preserve the existing extraction/locator and source-read-
-only boundaries rather than treating the recommendation artifact as extracted
-or verified content.
+C-06 should add bounded CSV/TSV/XLSX, DOCX, and PPTX extraction while preserving
+sheet/cell, paragraph, and slide locators. It must continue the current source-
+read-only, explicit-partial/failure, Schema v1, and no-hidden-network boundaries.

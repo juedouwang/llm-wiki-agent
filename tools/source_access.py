@@ -10,6 +10,7 @@ import logging
 import math
 import re
 import threading
+import warnings
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -25,6 +26,7 @@ if __package__:
     )
     from .extraction_schema import (
         ExtractionSchemaError,
+        ImageRegionLocator,
         LineRangeLocator,
         Locator,
         NotebookCellLocator,
@@ -60,6 +62,7 @@ else:
     )
     from extraction_schema import (  # type: ignore[no-redef]
         ExtractionSchemaError,
+        ImageRegionLocator,
         LineRangeLocator,
         Locator,
         NotebookCellLocator,
@@ -111,6 +114,7 @@ SOURCE_ACCESS_VERSION = "source-access-v1"
 SOURCE_LOCATION_KIND = "llmwiki-source-location"
 SOURCE_OPEN_KIND = "llmwiki-source-open-result"
 TABLE_EXCERPT_FORMAT = "table-json-matrix-v1"
+IMAGE_REGION_EXCERPT_FORMAT = "image-region-rgba-sha256"
 MAX_TABLE_RANGE_CELLS = 100_000
 _MAX_SPREADSHEET_ROW = 1_048_576
 _MAX_SPREADSHEET_COLUMN = 16_384
@@ -739,6 +743,85 @@ def _table_range_excerpt(data: bytes, *, locator: TableRangeLocator) -> str:
         workbook.close()
 
 
+def _image_region_excerpt(data: bytes, *, locator: ImageRegionLocator) -> str:
+    try:
+        from PIL import Image, ImageOps
+    except ImportError as exc:
+        raise SourceFormatError(
+            "standalone raster reopening requires the Pillow runtime"
+        ) from exc
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as source_image:
+                if str(source_image.format).upper() == "PDF":
+                    raise SourceFormatError(
+                        "image-region locators do not represent PDF page crops"
+                    )
+                frame_count = getattr(source_image, "n_frames", 1)
+                if (
+                    not _is_integer(frame_count)
+                    or frame_count < 1
+                    or locator.frame_index >= frame_count
+                ):
+                    raise SourceLocatorError(
+                        f"image frame {locator.frame_index} does not exist"
+                    )
+                try:
+                    source_image.seek(locator.frame_index)
+                except EOFError as exc:
+                    raise SourceFormatError(
+                        f"image frame {locator.frame_index} could not be decoded safely"
+                    ) from exc
+
+                with ImageOps.exif_transpose(source_image) as normalized:
+                    normalized.load()
+                    decoded_width, decoded_height = normalized.size
+                    right = locator.x + locator.width
+                    bottom = locator.y + locator.height
+                    if right > decoded_width or bottom > decoded_height:
+                        raise SourceLocatorError(
+                            "image region exceeds the EXIF-normalized frame bounds: "
+                            f"region ({locator.x}, {locator.y}, {locator.width}, "
+                            f"{locator.height}); frame {decoded_width}x{decoded_height}"
+                        )
+                    with normalized.crop(
+                        (locator.x, locator.y, right, bottom)
+                    ) as cropped:
+                        with cropped.convert("RGBA") as rgba_region:
+                            rgba_sha256 = hashlib.sha256(
+                                rgba_region.tobytes()
+                            ).hexdigest()
+    except SourceAccessError:
+        raise
+    except (Image.DecompressionBombWarning, Image.DecompressionBombError) as exc:
+        raise SourceFormatError(
+            "standalone raster exceeds Pillow decompression-bomb safety limits"
+        ) from exc
+    except Exception as exc:
+        raise SourceFormatError(
+            f"standalone raster could not be reopened safely: {exc}"
+        ) from exc
+
+    return json.dumps(
+        {
+            "frame_index": locator.frame_index,
+            "x": locator.x,
+            "y": locator.y,
+            "width": locator.width,
+            "height": locator.height,
+            "decoded_width": decoded_width,
+            "decoded_height": decoded_height,
+            "rgba_sha256": rgba_sha256,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
 def _reopen_locator(
     data: bytes,
     *,
@@ -774,6 +857,8 @@ def _reopen_locator(
             ),
             "pdf-extracted-page-text",
         )
+    if isinstance(locator, ImageRegionLocator):
+        return _image_region_excerpt(data, locator=locator), IMAGE_REGION_EXCERPT_FORMAT
     if isinstance(locator, NotebookCellLocator):
         return (
             _notebook_cell_excerpt(
