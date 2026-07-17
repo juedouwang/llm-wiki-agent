@@ -207,35 +207,48 @@ def _validate_layout_boundaries(project_root: Path, layout: ProjectLayout) -> No
 
 def _validate_unclaimed_directory(
     root: Path,
-    allowed_empty_directories: set[str],
+    allowed_empty_directories: tuple[Path, ...],
     label: str,
+    *,
+    reject_symbolic_links: bool = False,
 ) -> None:
+    """Allow only an optional subset of the declared empty directory tree."""
+
     if not root.exists():
         return
     if not root.is_dir():
         raise ProjectConflictError(f"unregistered {label} path is not a directory: {root}")
 
-    for entry in root.iterdir():
-        if entry.name not in allowed_empty_directories or not entry.is_dir():
-            raise ProjectConflictError(
-                f"unregistered {label} storage is not empty: {root}"
-            )
-        if any(entry.iterdir()):
-            raise ProjectConflictError(
-                f"unregistered {label} storage contains data: {entry}"
-            )
+    allowed_relative_directories = {
+        directory.relative_to(root) for directory in allowed_empty_directories
+    }
+    pending = [root]
+    while pending:
+        current = pending.pop()
+        for entry in current.iterdir():
+            relative = entry.relative_to(root)
+            if (
+                relative not in allowed_relative_directories
+                or not entry.is_dir()
+                or (reject_symbolic_links and entry.is_symlink())
+            ):
+                raise ProjectConflictError(
+                    f"unregistered {label} storage is not empty: {root}"
+                )
+            pending.append(entry)
 
 
 def _validate_unclaimed_layout(layout: ProjectLayout) -> None:
     _validate_unclaimed_directory(
         layout.machine_root,
-        {path.name for path in layout.machine_directories},
+        layout.machine_directories,
         "machine",
     )
     _validate_unclaimed_directory(
         layout.knowledge_root,
-        {path.name for path in layout.knowledge_directories},
+        layout.knowledge_directories,
         "knowledge",
+        reject_symbolic_links=True,
     )
 
 

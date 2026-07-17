@@ -28,6 +28,19 @@ from tools.project_layout import (
 
 REPO_ROOT = Path(__file__).parent.parent
 
+EXPECTED_KNOWLEDGE_DIRECTORY_PATHS = (
+    "papers",
+    "methods",
+    "datasets",
+    "experiments",
+    "results",
+    "claims",
+    "plans",
+    "plans/daily",
+    "decisions",
+    "sources",
+)
+
 
 class ProjectLayoutBaselineTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -56,8 +69,11 @@ class ProjectLayoutBaselineTests(unittest.TestCase):
             {"extracted", "indexes", "runs"},
         )
         self.assertEqual(
-            {path.name for path in layout.knowledge_directories},
-            {"sources", "papers", "experiments", "claims", "plans"},
+            tuple(
+                path.relative_to(layout.knowledge_root).as_posix()
+                for path in layout.knowledge_directories
+            ),
+            EXPECTED_KNOWLEDGE_DIRECTORY_PATHS,
         )
         self.assertNotEqual(layout.machine_root, layout.knowledge_root)
         self.assertNotIn(layout.machine_root, layout.knowledge_root.parents)
@@ -163,6 +179,19 @@ class ProjectLayoutBaselineTests(unittest.TestCase):
         self.assertTrue(layout.machine_root.is_dir())
         self.assertTrue(layout.knowledge_root.is_dir())
         self.assertFalse(layout.workspace.knowledge_projects_root.exists())
+        self.assertEqual(
+            tuple(
+                path.relative_to(layout.knowledge_root).as_posix()
+                for path in layout.knowledge_directories
+            ),
+            EXPECTED_KNOWLEDGE_DIRECTORY_PATHS,
+        )
+        for directory in layout.knowledge_directories:
+            self.assertTrue(directory.is_dir(), directory)
+        self.assertEqual(
+            [path for path in layout.knowledge_root.rglob("*") if path.is_file()],
+            [],
+        )
 
         resolution = resolve_project_layout(
             self.workspace_root,
@@ -183,6 +212,20 @@ class ProjectLayoutBaselineTests(unittest.TestCase):
         self.assertTrue(layout.knowledge_root.is_dir())
         for directory in layout.machine_directories + layout.knowledge_directories:
             self.assertTrue(directory.is_dir(), directory)
+        self.assertEqual(
+            tuple(
+                sorted(
+                    path.relative_to(layout.knowledge_root).as_posix()
+                    for path in layout.knowledge_root.rglob("*")
+                    if path.is_dir()
+                )
+            ),
+            tuple(sorted(EXPECTED_KNOWLEDGE_DIRECTORY_PATHS)),
+        )
+        self.assertEqual(
+            [path for path in layout.knowledge_root.rglob("*") if path.is_file()],
+            [],
+        )
 
         # A-03 defines storage only. B-01/B-03 and later tasks own these files.
         self.assertFalse(layout.project_file.exists())

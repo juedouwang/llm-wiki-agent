@@ -40,6 +40,7 @@ llm-wiki-agent/
             |-- risks.md
             |-- goals.md
             |-- plans/
+            |   `-- daily/
             |-- decisions/
             `-- sources/
 ```
@@ -53,7 +54,7 @@ The default `knowledge_projects_root` is `wiki/projects/`. `--knowledge-root` ca
 
 Machine-generated evidence must not be bulk-copied into the human knowledge tree. Curated claims and summaries point back to stable source and Evidence identifiers. See [`evidence-schema.md`](evidence-schema.md) for the D-03 artifact and validation contract.
 
-F-01A defines the strict Schema v1 frontmatter and canonical project-relative path mapping for this curated tree in [`knowledge-artifact-contract.md`](knowledge-artifact-contract.md). The contract is currently in-memory only: registration and layout initialization still create no knowledge Markdown, and later renderers/writers must be separately authorized.
+F-01A defines the strict Schema v1 frontmatter and canonical project-relative path mapping for this curated tree in [`knowledge-artifact-contract.md`](knowledge-artifact-contract.md). F-01B connects that path contract to `ProjectLayout`: registration and layout initialization create the complete empty canonical directory skeleton, including `plans/daily/`, but still create no knowledge Markdown. Later renderers and controlled writers remain separately authorized Roadmap work.
 
 ## Register a project
 
@@ -88,7 +89,8 @@ Registration guarantees:
 5. machine state and knowledge directories are outside the source project and outside each other;
 6. only local, read-only Git commands are used; no fetch, pull, push, or remote request occurs;
 7. credentials and HTTP query tokens are removed from a persisted Git remote URL;
-8. no file inventory, Manifest, extraction, Markdown summary, or LLM call occurs.
+8. only the canonical empty curated directory skeleton is initialized; no Markdown page is created;
+9. no file inventory, Manifest, extraction, source-content read, research-binary read, or LLM call occurs.
 
 ## Inventory a registered project
 

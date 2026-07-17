@@ -32,6 +32,19 @@ from tools.project_registry import (
 
 REPO_ROOT = Path(__file__).parent.parent
 
+EXPECTED_KNOWLEDGE_DIRECTORY_PATHS = (
+    "papers",
+    "methods",
+    "datasets",
+    "experiments",
+    "results",
+    "claims",
+    "plans",
+    "plans/daily",
+    "decisions",
+    "sources",
+)
+
 
 class ProjectRegistrationTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -126,6 +139,23 @@ class ProjectRegistrationTests(unittest.TestCase):
         self.assertEqual(list(result.layout.extracted_dir.iterdir()), [])
         self.assertEqual(list(result.layout.indexes_dir.iterdir()), [])
         self.assertEqual(list(result.layout.runs_dir.iterdir()), [])
+        self.assertEqual(
+            tuple(
+                path.relative_to(result.layout.knowledge_root).as_posix()
+                for path in result.layout.knowledge_directories
+            ),
+            EXPECTED_KNOWLEDGE_DIRECTORY_PATHS,
+        )
+        for directory in result.layout.knowledge_directories:
+            self.assertTrue(directory.is_dir(), directory)
+        self.assertEqual(
+            [
+                path
+                for path in result.layout.knowledge_root.rglob("*")
+                if path.is_file()
+            ],
+            [],
+        )
 
     def test_repeated_registration_is_idempotent_and_does_not_rewrite_record(self) -> None:
         project = self.make_project()
@@ -183,6 +213,16 @@ class ProjectRegistrationTests(unittest.TestCase):
         self.assertEqual(
             result.record["storage"]["knowledge_projects_root"],
             str(knowledge_projects_root.resolve()),
+        )
+        for directory in result.layout.knowledge_directories:
+            self.assertTrue(directory.is_dir(), directory)
+        self.assertEqual(
+            [
+                path
+                for path in result.layout.knowledge_root.rglob("*")
+                if path.is_file()
+            ],
+            [],
         )
         self.assertEqual(self.source_snapshot(project)[0], ("src",))
 
@@ -256,6 +296,86 @@ class ProjectRegistrationTests(unittest.TestCase):
                 second_project,
                 project_id="occupied-study",
             )
+
+    def test_legacy_empty_knowledge_skeleton_is_claimed_and_completed(self) -> None:
+        project = self.make_project()
+        layout = ProjectLayout(self.workspace, "legacy-empty-study")
+        for relative in ("sources", "papers", "experiments", "claims", "plans"):
+            (layout.knowledge_root / relative).mkdir(parents=True, exist_ok=True)
+
+        registered = register_project(
+            self.workspace,
+            project,
+            project_id="legacy-empty-study",
+        )
+
+        self.assertTrue(registered.created)
+        for directory in registered.layout.knowledge_directories:
+            self.assertTrue(directory.is_dir(), directory)
+        self.assertEqual(
+            [
+                path
+                for path in registered.layout.knowledge_root.rglob("*")
+                if path.is_file()
+            ],
+            [],
+        )
+
+    def test_unclaimed_knowledge_storage_with_unexpected_content_fails_closed(self) -> None:
+        cases = (
+            ("unknown-file", "README.md", False),
+            ("unknown-directory", "notes", True),
+            ("canonical-directory-content", "plans/draft.md", False),
+        )
+        for project_id, relative, is_directory in cases:
+            with self.subTest(project_id=project_id, relative=relative):
+                project = self.make_project(f"source-{project_id}")
+                layout = ProjectLayout(self.workspace, project_id)
+                target = layout.knowledge_root / relative
+                if is_directory:
+                    target.mkdir(parents=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(
+                        "existing user content\n",
+                        encoding="utf-8",
+                        newline="\n",
+                    )
+
+                before = self.source_snapshot(project)
+                with self.assertRaises(ProjectConflictError):
+                    register_project(
+                        self.workspace,
+                        project,
+                        project_id=project_id,
+                    )
+                self.assertEqual(before, self.source_snapshot(project))
+                self.assertTrue(target.exists())
+
+    def test_unclaimed_knowledge_storage_rejects_symbolic_link_entries(self) -> None:
+        project = self.make_project()
+        layout = ProjectLayout(self.workspace, "linked-knowledge-study")
+        layout.knowledge_root.mkdir(parents=True)
+        external = self.root / "external-plans"
+        external.mkdir()
+        try:
+            os.symlink(
+                external,
+                layout.knowledge_root / "plans",
+                target_is_directory=True,
+            )
+        except OSError as exc:
+            self.skipTest(f"directory symlinks are unavailable: {exc}")
+
+        before = self.source_snapshot(project)
+        with self.assertRaises(ProjectConflictError):
+            register_project(
+                self.workspace,
+                project,
+                project_id="linked-knowledge-study",
+            )
+        self.assertEqual(before, self.source_snapshot(project))
+        self.assertEqual(list(external.iterdir()), [])
 
     def test_symlinked_output_root_cannot_redirect_writes_into_source(self) -> None:
         project = self.make_project()

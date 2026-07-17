@@ -174,6 +174,37 @@ indexes.
 The path identifies only a structural role and expected type. It does not infer a
 paper, method, claim, or other research meaning from page contents.
 
+## Empty directory initialization boundary
+
+F-01B connects the canonical collection paths to `ProjectLayout`. The exact
+project-relative directory skeleton is:
+
+```text
+papers/
+methods/
+datasets/
+experiments/
+results/
+claims/
+plans/
+plans/daily/
+decisions/
+sources/
+```
+
+`ProjectLayout.ensure_directories()` and B-01 registration create this skeleton
+under either the default `wiki/projects/<project_id>/` root or the selected
+external knowledge root. Initialization is idempotent. Registration may claim an
+unregistered legacy empty skeleton containing any subset of canonical
+directories, including the former `sources/`, `papers/`, `experiments/`,
+`claims/`, and `plans/` set, and then fills missing directories. Unknown files,
+unknown directories, symbolic-link entries, and content inside the unregistered
+skeleton fail closed rather than being overwritten or adopted.
+
+Directory initialization creates no Markdown page, does not read source or
+research-binary content, does not change Schema v1, and does not decide research
+semantics.
+
 ## Strict parsing and canonical serialization
 
 `parse_knowledge_page(payload, path=...)` accepts bytes so it can enforce strict
@@ -192,9 +223,10 @@ body.
 
 ## Explicit exclusions
 
-F-01A does not:
+F-01A remains the in-memory Schema/path slice; F-01B only integrates its
+canonical empty directory skeleton with layout initialization and registration.
+Combined F-01 does not:
 
-- modify `tools/project_layout.py`, project registration, or directory initialization;
 - create or alter real `wiki/projects/<project_id>/*.md` files;
 - generate any of the 15 page bodies or a unified index;
 - add source-project or research-binary reads;
@@ -203,4 +235,6 @@ F-01A does not:
 - add a ResearchCoreService facade method, CLI command, MCP tool, Skill, Hook,
   Plugin, or Web surface.
 
-Those remain separately authorized Roadmap work.
+Claim–Evidence semantics remain F-02 work. Controlled mixed/user Markdown writes,
+conflict audit records, and protection of user-confirmed content remain F-05
+work. Those capabilities require their own authorization.

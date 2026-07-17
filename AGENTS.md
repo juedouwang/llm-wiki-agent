@@ -50,7 +50,7 @@ New research-project features must keep machine state and human-readable knowled
 wiki/projects/<project_id>/       # curated Markdown knowledge for people and agents
 ```
 
-The machine-state tree uses `project.yaml`, `manifest.jsonl`, `sources.jsonl`, `extracted/`, `indexes/` (including B-07 `reading-priority.json`), and `runs/`. The curated tree uses `overview.md`, `sources/`, `papers/`, `experiments/`, `claims/`, and `plans/`.
+The machine-state tree uses `project.yaml`, `manifest.jsonl`, `sources.jsonl`, `extracted/`, `indexes/` (including B-07 `reading-priority.json`), and `runs/`. The canonical curated directory tree uses `papers/`, `methods/`, `datasets/`, `experiments/`, `results/`, `claims/`, `plans/` (including `plans/daily/`), `decisions/`, and `sources/`. Registration and layout initialization create only this empty directory skeleton; later tasks own Markdown singleton and collection pages.
 
 Rules:
 1. New structured machine records, including `project.yaml` and JSON/JSONL files, must carry `schema_version`.
@@ -60,9 +60,9 @@ Rules:
 5. Do not place local paths, hashes, indexes, or run state in `wiki/projects/`.
 6. Do not place curated research summaries or plans in `.llmwiki/`.
 7. Use `tools/project_layout.py` for path validation, initialization, version checks, and legacy resolution.
-8. Project-scoped Markdown under `wiki/projects/<project_id>/` uses the strict F-01A Schema v1 and canonical project-relative path mapping in `tools/knowledge_artifacts.py`; see `docs/knowledge-artifact-contract.md`.
+8. Project-scoped Markdown under `wiki/projects/<project_id>/` uses the strict F-01 Schema v1 and canonical project-relative path mapping in `tools/knowledge_artifacts.py`; see `docs/knowledge-artifact-contract.md`.
 9. Parse project knowledge from bytes with strict UTF-8 and safe YAML, reject unknown/future fields, and validate `artifact_type` against the path before any later writer persists a page.
-10. F-01A is validation-only: it must not be described as generating the 15 page bodies, enforcing F-02 Claim-Evidence currentness, or protecting F-05 mixed/user body regions.
+10. F-01B layout initialization creates only the canonical empty directory skeleton. It must not be described as generating the 15 page bodies, enforcing F-02 Claim-Evidence currentness, or protecting F-05 mixed/user body regions.
 
 Register an external research project with:
 

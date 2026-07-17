@@ -36,7 +36,18 @@ _WINDOWS_RESERVED_NAMES = {
     *(f"lpt{number}" for number in range(1, 10)),
 }
 _MACHINE_SUBDIRECTORIES = ("extracted", "indexes", "runs")
-_KNOWLEDGE_SUBDIRECTORIES = ("sources", "papers", "experiments", "claims", "plans")
+_KNOWLEDGE_DIRECTORY_PARTS = (
+    ("papers",),
+    ("methods",),
+    ("datasets",),
+    ("experiments",),
+    ("results",),
+    ("claims",),
+    ("plans",),
+    ("plans", "daily"),
+    ("decisions",),
+    ("sources",),
+)
 
 
 class LayoutError(ValueError):
@@ -411,7 +422,10 @@ class ProjectLayout:
 
     @property
     def knowledge_directories(self) -> tuple[Path, ...]:
-        return tuple(self.knowledge_root / name for name in _KNOWLEDGE_SUBDIRECTORIES)
+        return tuple(
+            self.knowledge_root.joinpath(*parts)
+            for parts in _KNOWLEDGE_DIRECTORY_PARTS
+        )
 
     @property
     def machine_directories(self) -> tuple[Path, ...]:
