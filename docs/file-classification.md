@@ -18,15 +18,15 @@ B-05 在 B-04 可审计目录账本与文件指纹之上，为每条扫描范围
 
 分类主流程不依赖 LLM、网络或外部服务。源科研项目仍然只读。只有 B-02 策略判定 `local_content_access=allowed` 的文件才会读取有限前缀，并且该前缀只在进程内用于 signature、shebang 和文本结构判断，不写入 Manifest，也不复制到 curated Markdown。敏感路径和超大文件在完成 B-04 规定的本地 SHA-256 后保持 path-only 分类，不会调用分类前缀读取器。
 
-## 2. Manifest artifact v3
+## 2. 当前 v4 Manifest 中的分类字段
 
-全局机器记录 Schema 仍为 v1；`manifest_version` 从 B-04 的 `project-inventory-v2` 升级为：
+B-05 历史上把 `manifest_version` 从 B-04 `project-inventory-v2` 升级为 `project-inventory-v3`。当前 writer 已由 B-06 升级为 `project-inventory-v4`，并在保留相同分类对象的同时要求版本化 `file_state`。下面是当前普通文件行的**字段摘录**；边界、指纹及其他必填字段为聚焦分类而省略，不能把该片段当作完整 Manifest 行：
 
 ```json
 {
   "schema_version": 1,
   "kind": "llmwiki-project-manifest",
-  "manifest_version": "project-inventory-v3",
+  "manifest_version": "project-inventory-v4",
   "record_type": "file",
   "path": "src/model.py",
   "classification": {
@@ -53,6 +53,14 @@ B-05 在 B-04 可审计目录账本与文件指纹之上，为每条扫描范围
         "detail": "source format is python"
       }
     }
+  },
+  "file_state": {
+    "schema_version": 1,
+    "kind": "llmwiki-file-state",
+    "processing_status": "discovered",
+    "read_depth": "sampled",
+    "reason_code": "classification-sample",
+    "reason": "a bounded local prefix was read for deterministic classification; content extraction has not been attempted"
   }
 }
 ```
@@ -99,7 +107,7 @@ format=unknown / language=unknown / research_role=unknown
 - `reused_files`：内容 hash 未变且安全复用上一代分类的文件数；
 - `formats`、`languages`、`research_roles`：按稳定值计数，各自总和必须等于普通文件数。
 
-读取现有 v3 Manifest 时，分类对象和汇总会 fail closed 校验。格式、语言、角色枚举或 reason 结构损坏时，不会静默覆盖现有 Manifest。
+读取当前 v4 Manifest 时，分类对象、分类汇总、`file_state` 和状态汇总都会 fail closed 校验。历史 v3 仍可由兼容读取器验证并在下一次成功 inventory 时升级；格式、语言、角色枚举或 reason 结构损坏时，不会静默覆盖现有 Manifest。
 
 ## 5. 增量与兼容
 
@@ -111,12 +119,14 @@ format=unknown / language=unknown / research_role=unknown
 
 分类只依赖项目相对路径以及在 B-02 允许时读取的有限本地字节前缀。受限文件只依赖路径信号；允许读取的有限前缀不持久化、不发送外部模型，也不进入 `wiki/projects/`。
 
+当前 B-07 从 v4 普通文件的 `classification.research_role`、路径/名称、Manifest `file_state` 和有界入站引用生成独立阅读建议。它不改写分类对象、分类汇总或 Manifest 版本；完整边界见 [`reading-priority.md`](reading-priority.md)。
+
 ## 6. 安全边界与非目标
 
 B-05 保留 B-01～B-04 的注册、路径边界、排除对账、符号链接、原子替换、文件指纹和源项目零写入保证。本任务不实现：
 
 - B-05 本身未实现 `processing_status`、`read_depth` 和最终处理理由；这些字段现由 B-06 `file_state` 提供，见 [`manifest-file-state.md`](manifest-file-state.md)；
-- 阅读优先级或引用提升队列（B-07）；
+- B-05 本身不实现阅读优先级或引用提升队列；当前 B-07 已在独立 artifact 中实现，且不回写分类；
 - 内容提取、chunk、Locator、`source_id` 或 Evidence；
 - LLM 补充分类、MCP、Hook、Web 或独立聊天入口；
 - reconciliation 变化事件或知识页面生成。

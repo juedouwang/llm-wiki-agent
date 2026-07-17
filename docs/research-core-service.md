@@ -10,6 +10,8 @@
 - E-08 deterministic-action validation: `tests/test_project_understand.py`
 - H-04 host-event validation: `tests/test_host_events.py`
 - H-07 reconciliation validation: `tests/test_project_reconciliation.py`
+- B-07 adaptive-reading-priority validation: `tests/test_reading_priority.py`, `tests/test_project_layout.py`
+- B-07 status: implemented and validated on **2026-07-17**; intended checkpoint `checkpoint/b-07-adaptive-reading-priority` is not yet created
 - Existing checkpoints: `checkpoint/g-01-core-service`, `checkpoint/g-07-mcp-server`, `checkpoint/g-08-host-context-pack`, `checkpoint/e-01-run-orchestrator`, `checkpoint/e-08-deterministic-understand`, and `checkpoint/h-04-host-event-ledger`; H-07 is complete after validation on 2026-07-16 and checkpointed as `checkpoint/h-07-project-reconciliation`
 
 ## Purpose
@@ -46,6 +48,7 @@ project and does not create state in the research source tree.
 | `dirty_path_queue(project_id)` | `tools.host_events.load_dirty_path_queue` ledger validation and projection repair | path-free `DirtyPathQueueResult` |
 | `project_reconcile(project_id, dirty_paths=...)` | `tools.project_reconciliation.reconcile_project` with the E-01 run boundary through `classify` | path-free `ProjectReconciliationResult` |
 | `scan(...)` | `tools.project_inventory.inventory_project` with `ScanPolicyConfig` | `ProjectInventoryResult` |
+| `prioritize(project_id)` | `tools.reading_priority.generate_reading_priority` over the exact current Manifest | local/path-bearing `ReadingPriorityResult` |
 | `coverage(project_id)` | `tools.coverage_report.generate_coverage_report` | local/path-bearing `CoverageReportResult` |
 | `coverage_view(project_id)` | `coverage(...)` plus host-safe projection | path-free `HostCoverageResult` |
 | `host_context_pack(project_id, max_bytes=...)` | `tools.host_context.assemble_host_context_pack` over host-safe Core DTOs and current registries | path-free `HostContextPackResult` |
@@ -227,6 +230,27 @@ arguments remain for CLI mapping and cannot be combined with `policy_config`.
 The method runs the accepted B-03 through B-06 chain; `tools.scan_policy` and
 `tools.project_inventory` remain authoritative.
 
+### Reading priority
+
+```python
+priority = core.prioritize(registration.project_id)
+```
+
+B-07 consumes the exact current `project-inventory-v4` Manifest and atomically
+writes `.llmwiki/projects/<project_id>/indexes/reading-priority.json`. It ranks
+ordinary Manifest files only and records the Manifest version, generation,
+ordinary-file/byte totals, and SHA-256. The recommendation artifact is separate
+from Manifest `file_state`, does not create Manifest v5, and is deterministic
+from classification role, path/name signals, and bounded incoming references.
+It is not goal-aware and performs no extraction or semantic/LLM reading.
+
+`ReadingPriorityResult` retains local `manifest_file` and `priority_file` paths,
+so it is a local/path-bearing result rather than a host-safe DTO. The current MCP
+catalog does not expose B-07. See
+[`reading-priority.md`](reading-priority.md) for the exact Schema v1 key sets,
+limits, promotion-queue semantics, reference rules, and fail-closed safety
+contract.
+
 ### Coverage and host coverage view
 
 ```python
@@ -331,6 +355,7 @@ python -m tools.project understand ... --json    -> core.project_understand(...)
 python -m tools.project context ... --json       -> core.project_context(...)
 python -m tools.project context-pack ... --json  -> core.host_context_pack(...)
 python -m tools.project inventory ... --json     -> core.scan(...)
+python -m tools.project prioritize ... --json    -> core.prioritize(...)
 python -m tools.project coverage ... --json      -> core.coverage(...)
 python -m tools.project event submit ... --json  -> core.host_event_submit(...)
 python -m tools.project event show ... --json    -> core.dirty_path_queue(...)
@@ -351,8 +376,9 @@ paths.
 ## Safety and ownership boundaries
 
 - Machine state stays under `.llmwiki/projects/<project_id>/` in the configured
-  workspace. Inventory, coverage, run mutations/orchestration, and reconciliation
-  serialize through the stable `indexes/machine-state.lock`.
+  workspace. Inventory, reading-priority generation, coverage, run
+  mutations/orchestration, and reconciliation serialize through the stable
+  `indexes/machine-state.lock`.
 - Curated knowledge stays under the configured
   `wiki/projects/<project_id>/`-equivalent knowledge root.
 - The registered research source project remains read-only.
@@ -384,7 +410,17 @@ python -B -m pytest -q `
   tests/test_project_reconciliation.py
 ```
 
-They cover direct service operations, real CLI delegation, complete scan-policy
+The focused B-07 regression is:
+
+```powershell
+python -B -m pytest -q -p no:cacheprovider `
+  tests/test_reading_priority.py tests/test_project_layout.py
+```
+
+On **2026-07-17**, it completed with **45 passed, 3 skipped**. The suite includes current-grounded execution authorization, intrinsic/current-policy tamper rejection, existing-ancestor symlink/reparse protection, post-read/pre-commit source mutation, and exact default-boundary coverage.
+
+The broader regressions cover direct service operations, real CLI delegation,
+complete scan-policy
 mapping, host-safe DTO redaction, Manifest source-content authorization, exact
 source/evidence reopening, Host Context byte accounting and deterministic
 truncation, host-event idempotency and projection repair, reconciliation
@@ -394,8 +430,12 @@ knowledge, and the absence of LLM/network/Web calls.
 
 ## Explicit non-goals
 
-The accepted R2 Core slices now include the H-04 host-event ledger and the
-validated H-07 conservative reconciliation boundary. They do not yet implement
+The accepted deterministic Core slices also include the standalone B-07
+reading-priority operation. It does not add an MCP operation, run creation or
+stage advancement, extraction, semantic reading, `project_understand`, H-07
+reconciliation, or H-05 refresh behavior. The H-04 host-event ledger and
+validated H-07 conservative reconciliation boundary remain independent. They do
+not yet implement
 Hook installation or reliability, H-05 selective extraction/knowledge refresh,
 full extraction/synthesis, 15-artifact rendering, Web rendering/`--open`,
 Verified Query, or the I-02 task store and planning pipeline. The initial E-08

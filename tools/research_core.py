@@ -26,6 +26,10 @@ if __package__:
         generate_coverage_report,
     )
     from .extraction_schema import Locator, locator_from_dict
+    from .reading_priority import (
+        ReadingPriorityResult,
+        generate_reading_priority,
+    )
     from .host_context import (
         HOST_CONTEXT_DEFAULT_MAX_BYTES,
         HostContextPackResult,
@@ -76,6 +80,10 @@ else:
     from extraction_schema import (  # type: ignore[no-redef]
         Locator,
         locator_from_dict,
+    )
+    from reading_priority import (  # type: ignore[no-redef]
+        ReadingPriorityResult,
+        generate_reading_priority,
     )
     from host_context import (  # type: ignore[no-redef]
         HOST_CONTEXT_DEFAULT_MAX_BYTES,
@@ -814,6 +822,14 @@ class ResearchCoreService:
         """Generate and persist coverage from the current Manifest."""
 
         return generate_coverage_report(
+            workspace_root=self.workspace_root,
+            project_id=project_id,
+        )
+
+    def prioritize(self, project_id: str) -> ReadingPriorityResult:
+        """Generate deterministic reading priority from the current Manifest."""
+
+        return generate_reading_priority(
             workspace_root=self.workspace_root,
             project_id=project_id,
         )

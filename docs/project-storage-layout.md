@@ -1,6 +1,6 @@
 # Project Registration and Storage Layout (Schema v1)
 
-A-03 established the storage boundary for project-scoped research data. B-01 adds deterministic project registration, B-03 writes the accountable directory ledger, B-04 adds incremental regular-file fingerprints, B-05 adds deterministic file classification, B-06 adds two-axis file state, D-01 assigns persistent source identities, D-02 records source versions, and D-03 persists precise Evidence. Registration still assigns identity and initializes empty storage only; it does not scan project files.
+A-03 established the storage boundary for project-scoped research data. B-01 adds deterministic project registration, B-03 writes the accountable directory ledger, B-04 adds incremental regular-file fingerprints, B-05 adds deterministic file classification, B-06 adds two-axis file state, B-07 writes independent reading-priority recommendations, B-08 writes an independent coverage audit, D-01 assigns persistent source identities, D-02 records source versions, and D-03 persists precise Evidence. Registration still assigns identity and initializes empty storage only; it does not scan project files.
 
 ## Storage contract
 
@@ -13,11 +13,13 @@ llm-wiki-agent/
 |   `-- projects/
 |       `-- <project_id>/
 |           |-- project.yaml
-|           |-- manifest.jsonl      # B-03 ledger + B-04 fingerprints + B-05 classification
+|           |-- manifest.jsonl      # current B-06 project-inventory-v4 truth
 |           |-- sources.jsonl       # D-01 identity + D-02 version/path ledger; not created by registration
 |           |-- evidence.jsonl      # D-03 exact source/version/locator/excerpt-hash Evidence
 |           |-- extracted/
 |           |-- indexes/
+|           |   |-- reading-priority.json  # B-07; not created by registration/inventory
+|           |   `-- coverage-report.json   # B-08; not created by registration/inventory
 |           `-- runs/
 `-- wiki/
     `-- projects/
@@ -76,13 +78,23 @@ Registration guarantees:
 
 ## Inventory a registered project
 
-B-03/B-04/B-05 inventory consumes the persisted B-01 registration and B-02 scan policy:
+B-03 through B-06 inventory consumes the persisted B-01 registration and B-02 scan policy:
 
 ```powershell
 python tools/project.py inventory <project_id> --json
 ```
 
 The command writes only `.llmwiki/projects/<project_id>/manifest.jsonl`. Every in-scope regular file is recorded without a format whitelist; excluded files and each pruned-directory boundary remain accountable. B-04 adds scan generation, SHA-256, size, mtime, and conservative fingerprint reuse. B-05 classifies every ordinary file by format, language, research role, and auditable reason. B-06 writes the current `project-inventory-v4` artifact and adds versioned `processing_status`, `read_depth`, reason code, and reason fields while preserving source-project zero writes. See [`project-inventory.md`](project-inventory.md), [`file-fingerprints.md`](file-fingerprints.md), [`file-classification.md`](file-classification.md), and [`manifest-file-state.md`](manifest-file-state.md).
+
+## Prioritize the current Manifest
+
+After inventory, generate the independent B-07 recommendation artifact:
+
+```powershell
+python tools/project.py prioritize <project_id> --json
+```
+
+The command requires an exact current `project-inventory-v4` Manifest. Its sole domain artifact is `.llmwiki/projects/<project_id>/indexes/reading-priority.json`; first use may also create the shared persistent coordination file `indexes/machine-state.lock`, which can remain after release. It ranks ordinary Manifest files, records the exact Manifest generation/file/byte/hash identity, and keeps recommendations separate from `file_state`; it does not create Manifest v5. Every eligible referenced promotion candidate not already deep-read stays in the queue, including budget-deferred entries. An executing consumer must load current-grounded state and then act only on `deep_read_status=selected`; a bare structural parse is not authorization. The operation is deterministic, not goal-aware, source-read-only, and performs no extraction, Evidence/Source creation, run advancement, external send, MCP action, or curated Markdown write. See [`reading-priority.md`](reading-priority.md).
 
 ## Synchronize persistent source identities
 
@@ -184,7 +196,7 @@ That command and layout remain supported. `resolve_project_layout()` follows the
 
 A later migration task may copy validated legacy evidence into the project-scoped layout. Registration itself never invokes the legacy scanner.
 
-## B-01/B-02/B-03/B-04/B-05/B-06 boundary
+## B-01/B-02/B-03/B-04/B-05/B-06/B-07/B-08 boundary
 
 B-01 registration still does not scan a project. B-02 adds the separate, source-read-only policy layer in `tools/scan_policy.py`:
 
@@ -202,7 +214,8 @@ B-04 upgrades the artifact to `project-inventory-v2`. It hashes every in-scope o
 
 B-05 upgrades the artifact to `project-inventory-v3`. It reads a bounded local prefix only when the B-02 file decision grants `local_content_access=allowed`; sensitive or oversized files are classified from filename/path signals without a second raw-content read after the B-04 hash. B-06 upgrades the current writer to `project-inventory-v4`, adding a versioned two-axis state and reconciled state summary to every ordinary file. Valid v1/v2/v3 records remain compatible, permitted samples are ephemeral, and neither raw content nor curated knowledge is written into machine-state records.
 
+B-07 and B-08 are independent post-inventory consumers of current v4 truth. B-07 writes deterministic reading recommendations to `indexes/reading-priority.json`; B-08 writes the Manifest audit to `indexes/coverage-report.json`. Neither rewrites the Manifest, and B-08 neither consumes nor validates B-07 recommendations.
+
 Still isolated in later tasks:
 
-- independent coverage/failure reports (B-08);
-- source reopening, relocation recovery, aggregate source health, semantic knowledge, retrieval, MCP, web UI, planning, and legacy-data migration.
+- semantic knowledge, retrieval, full adaptive-read execution, MCP exposure for prioritization, web UI, planning, and legacy-data migration.

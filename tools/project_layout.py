@@ -14,7 +14,9 @@ scanning, manifests, extraction, and migration are implemented by later tasks.
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -51,6 +53,10 @@ class SchemaVersionError(LayoutError):
 
 class UnsupportedSchemaVersionError(SchemaVersionError):
     """Raised when a document was written by a newer unsupported schema."""
+
+
+class MachineStatePathError(LayoutError):
+    """Raised when a machine-state path escapes or traverses redirection."""
 
 
 @dataclass(frozen=True)
@@ -380,6 +386,10 @@ class ProjectLayout:
         return self.indexes_dir / "reconciliation-state.json"
 
     @property
+    def reading_priority_file(self) -> Path:
+        return self.indexes_dir / "reading-priority.json"
+
+    @property
     def machine_state_lock_file(self) -> Path:
         """Stable advisory lock shared by per-project machine-state mutations."""
 
@@ -406,6 +416,105 @@ class ProjectLayout:
     @property
     def machine_directories(self) -> tuple[Path, ...]:
         return tuple(self.machine_root / name for name in _MACHINE_SUBDIRECTORIES)
+
+    def validate_machine_state_path(
+        self,
+        path: str | Path,
+        *,
+        leaf_kind: Literal["file", "directory"] = "file",
+        allow_missing_leaf: bool = False,
+    ) -> Path:
+        """Validate one lexical path beneath this project's machine-state root.
+
+        The workspace root is canonicalized when the layout is constructed. From
+        that trusted starting point this check walks every existing component
+        with ``lstat`` and rejects symbolic links, Windows reparse points,
+        non-directory ancestors, and any component whose resolved identity does
+        not match its lexical path. Missing parents always fail; callers may
+        explicitly allow only the final file/directory to be absent.
+        """
+
+        if leaf_kind not in {"file", "directory"}:
+            raise ValueError("leaf_kind must be 'file' or 'directory'")
+        if not isinstance(allow_missing_leaf, bool):
+            raise TypeError("allow_missing_leaf must be a bool")
+        try:
+            target = Path(os.path.abspath(os.fspath(Path(path).expanduser())))
+            workspace_root = Path(
+                os.path.abspath(os.fspath(self.workspace_root))
+            )
+            machine_root = Path(os.path.abspath(os.fspath(self.machine_root)))
+            target.relative_to(machine_root)
+            relative_to_workspace = target.relative_to(workspace_root)
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            raise MachineStatePathError(
+                f"machine-state path is outside the registered project root: {path}"
+            ) from exc
+
+        def path_key(candidate: Path) -> str:
+            return os.path.normcase(os.path.normpath(os.fspath(candidate)))
+
+        current = workspace_root
+        components = (workspace_root,)
+        if relative_to_workspace.parts:
+            built: list[Path] = []
+            for part in relative_to_workspace.parts:
+                current = current / part
+                built.append(current)
+            components += tuple(built)
+
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        for current in components:
+            is_leaf = path_key(current) == path_key(target)
+            try:
+                metadata = os.lstat(current)
+            except FileNotFoundError as exc:
+                if is_leaf and allow_missing_leaf:
+                    return target
+                label = "leaf" if is_leaf else "ancestor"
+                raise MachineStatePathError(
+                    f"machine-state {label} is unavailable: {current}"
+                ) from exc
+            except OSError as exc:
+                raise MachineStatePathError(
+                    f"could not inspect machine-state path {current}: {exc}"
+                ) from exc
+
+            file_attributes = getattr(metadata, "st_file_attributes", 0)
+            if stat.S_ISLNK(metadata.st_mode) or (
+                reparse_flag and file_attributes & reparse_flag
+            ):
+                raise MachineStatePathError(
+                    f"machine-state path must not traverse a symbolic link or "
+                    f"reparse point: {current}"
+                )
+            if is_leaf:
+                valid_leaf = (
+                    stat.S_ISREG(metadata.st_mode)
+                    if leaf_kind == "file"
+                    else stat.S_ISDIR(metadata.st_mode)
+                )
+                if not valid_leaf:
+                    raise MachineStatePathError(
+                        f"machine-state {leaf_kind} has the wrong type: {current}"
+                    )
+            elif not stat.S_ISDIR(metadata.st_mode):
+                raise MachineStatePathError(
+                    f"machine-state ancestor is not a directory: {current}"
+                )
+
+            try:
+                resolved = current.resolve(strict=True)
+            except (OSError, RuntimeError) as exc:
+                raise MachineStatePathError(
+                    f"could not resolve machine-state path {current}: {exc}"
+                ) from exc
+            if path_key(resolved) != path_key(current):
+                raise MachineStatePathError(
+                    f"machine-state path resolves through redirection: {current}"
+                )
+
+        return target
 
     def ensure_directories(self) -> VersionedDocument:
         """Initialize only the directory contract, not project records/pages."""

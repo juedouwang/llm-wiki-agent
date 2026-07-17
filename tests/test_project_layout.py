@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.project_layout import (
     CURRENT_SCHEMA_VERSION,
@@ -69,6 +71,10 @@ class ProjectLayoutBaselineTests(unittest.TestCase):
             layout.indexes_dir / "reconciliation-state.json",
         )
         self.assertEqual(
+            layout.reading_priority_file,
+            layout.indexes_dir / "reading-priority.json",
+        )
+        self.assertEqual(
             layout.machine_state_lock_file,
             layout.indexes_dir / "machine-state.lock",
         )
@@ -76,6 +82,68 @@ class ProjectLayoutBaselineTests(unittest.TestCase):
             layout.reconciliation_lock_file,
             layout.machine_state_lock_file,
         )
+
+    def test_machine_state_path_validation_rejects_mocked_ancestor_redirection(self) -> None:
+        layout = ProjectLayout(self.workspace_root, "tiny-study")
+        layout.ensure_directories()
+        self.assertEqual(
+            layout.validate_machine_state_path(
+                layout.machine_state_lock_file,
+                allow_missing_leaf=True,
+            ),
+            layout.machine_state_lock_file,
+        )
+        external = self.workspace_root.parent / "redirected-indexes"
+        external.mkdir()
+        redirected_component = layout.indexes_dir
+        resolved_external = external.resolve()
+        original_resolve = Path.resolve
+
+        def redirected_resolve(candidate: Path, strict: bool = False) -> Path:
+            if candidate == redirected_component:
+                return resolved_external
+            return original_resolve(candidate, strict=strict)
+
+        with patch.object(
+            Path,
+            "resolve",
+            autospec=True,
+            side_effect=redirected_resolve,
+        ):
+            with self.assertRaisesRegex(LayoutError, "redirection"):
+                layout.validate_machine_state_path(
+                    layout.machine_state_lock_file,
+                    allow_missing_leaf=True,
+                )
+
+    def test_machine_state_path_validation_rejects_real_symlink_ancestor(self) -> None:
+        layout = ProjectLayout(self.workspace_root, "tiny-study")
+        layout.ensure_directories()
+        external = self.workspace_root.parent / "external-indexes"
+        external.mkdir()
+        layout.indexes_dir.rmdir()
+        try:
+            os.symlink(external, layout.indexes_dir, target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f"symbolic links are unavailable: {exc}")
+
+        with self.assertRaisesRegex(LayoutError, "symbolic link|reparse point"):
+            layout.validate_machine_state_path(
+                layout.machine_state_lock_file,
+                allow_missing_leaf=True,
+            )
+        self.assertEqual(list(external.iterdir()), [])
+
+    def test_machine_state_path_validation_rejects_escape_and_wrong_leaf_type(self) -> None:
+        layout = ProjectLayout(self.workspace_root, "tiny-study")
+        layout.ensure_directories()
+        with self.assertRaisesRegex(LayoutError, "outside"):
+            layout.validate_machine_state_path(self.workspace_root / "outside.json")
+        with self.assertRaisesRegex(LayoutError, "wrong type"):
+            layout.validate_machine_state_path(
+                layout.indexes_dir,
+                leaf_kind="file",
+            )
 
     def test_custom_knowledge_projects_root_preserves_machine_workspace(self) -> None:
         custom_root = self.workspace_root.parent / "personal-knowledge" / "projects"

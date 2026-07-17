@@ -58,6 +58,7 @@ ingest report.pdf                          # auto-converts in memory, then inges
 ingest slides.pptx notes.docx              # batch, mixed formats
 python tools/project.py register /path/to/project --json  # register only; no scan
 python tools/project.py inventory <project_id> --json       # accountable incremental Manifest
+python tools/project.py prioritize <project_id> --json      # deterministic B-07 reading recommendations
 python -m tools.project event submit <project_id> --event-id evt-1 --producer codex --occurred-at 2026-07-16T09:00:00Z --operation modified --path src/model.py --json
 python -m tools.project event show <project_id> --json       # validate/rebuild the dirty-path projection
 python -m tools.project reconcile <project_id> --json               # H-07 full scan through classify; hints optional
@@ -119,7 +120,9 @@ Daily answers should start from the curated `wiki/` layer. For exact values, imp
 Schema v1 separates local machine state from curated research knowledge:
 
 ```text
-.llmwiki/projects/<project_id>/   # manifests, extracted evidence, indexes, runs
+.llmwiki/projects/<project_id>/   # local machine state
+  manifest.jsonl                  # current project-inventory-v4 truth
+  indexes/reading-priority.json   # B-07 recommendations, separate from Manifest state
 wiki/projects/<project_id>/       # overviews, papers, experiments, claims, plans
 ```
 
@@ -143,7 +146,15 @@ Create or incrementally refresh the Manifest for an already registered project:
 python tools/project.py inventory <project_id> --json
 ```
 
-The inventory preserves B-03 accountability for every in-scope regular file, excluded file, pruned-directory boundary, and symbolic link. B-04 adds scan generation, local SHA-256, size, mtime, and conservative fingerprint reuse. B-05 adds deterministic format, language, research-role, and reason fields. B-06 writes the current `project-inventory-v4` artifact and gives every ordinary file a versioned two-axis state (`processing_status` + `read_depth`) with a stable reason code and explanation; inventory results remain honestly `discovered`, while sampled, metadata-only, ignored, and unsupported files stay distinguishable. B-02 still gates bounded classification-prefix reads, and nothing is sent to an LLM or written back to the source project. Coverage/failure reporting remains B-08. See `docs/project-inventory.md`, `docs/file-fingerprints.md`, `docs/file-classification.md`, and `docs/manifest-file-state.md`.
+The inventory preserves B-03 accountability for every in-scope regular file, excluded file, pruned-directory boundary, and symbolic link. B-04 adds scan generation, local SHA-256, size, mtime, and conservative fingerprint reuse. B-05 adds deterministic format, language, research-role, and reason fields. B-06 writes the current `project-inventory-v4` artifact and gives every ordinary file a versioned two-axis state (`processing_status` + `read_depth`) with a stable reason code and explanation; inventory results remain honestly `discovered`, while sampled, metadata-only, ignored, and unsupported files stay distinguishable. B-02 still gates bounded classification-prefix reads, and nothing is sent to an LLM or written back to the source project. B-08 coverage/failure reporting is a separate post-inventory artifact. See `docs/project-inventory.md`, `docs/file-fingerprints.md`, `docs/file-classification.md`, and `docs/manifest-file-state.md`.
+
+Generate the B-07 recommendation layer from the exact current Manifest:
+
+```bash
+python tools/project.py prioritize <project_id> --json
+```
+
+The command ranks ordinary `project-inventory-v4` files and atomically writes Schema v1 `.llmwiki/projects/<project_id>/indexes/reading-priority.json`. It records the exact Manifest generation, ordinary-file/byte totals, and content SHA-256, but does not modify Manifest `file_state` or create `project-inventory-v5`. Reference-based promotion is bounded and cannot override policy, sensitive/oversized content, failed/missing/ignored/unsupported state, model/checkpoint/pickle restrictions, or large-dataset limits. Every eligible referenced candidate not already deep-read remains visible in `promotion_queue`; before execution, later consumers must use `load_current_reading_priority(...)` and then act only on entries with `deep_read_status="selected"`, not budget-deferred entries. The bare `load_reading_priority(...)` parser is not execution authorization. The ranking is deterministic from classification role, path/name, and bounded incoming references; it is not goal-aware and performs no extraction or semantic/LLM reading. See [`docs/reading-priority.md`](docs/reading-priority.md).
 
 ## Research Assistant Evolution (In Development)
 
@@ -162,6 +173,8 @@ The `research-assistant` branch is evolving this repository into a local-first, 
 - [B-04 file fingerprints and incremental Manifest contract](docs/file-fingerprints.md)
 - [B-05 deterministic file classification contract](docs/file-classification.md)
 - [B-06 Manifest two-axis file-state contract](docs/manifest-file-state.md)
+- [B-07 deterministic reading-priority and reference-promotion contract](docs/reading-priority.md)
+- [B-08 coverage and failure report](docs/coverage-report.md)
 
 The current deterministic one-action prefix can be run from an empty
 assistant workspace with:
@@ -172,9 +185,10 @@ python -B -m tools.project understand /path/to/research-project \
 ```
 
 This currently performs only `register -> inventory -> classify`, persists a
-resumable run report, and leaves later stages pending. It does **not** yet
-produce the 15-artifact package or local Web dashboard and has no `--open`
-option.
+resumable run report, and leaves later stages pending. It does **not** call the
+standalone B-07 `prioritize` operation or advance the canonical `adaptive-read`
+stage. It also does **not** yet produce the 15-artifact package or local Web
+dashboard and has no `--open` option.
 
 The J-05 Codex reference package lives at `plugins/llmwiki-research/`. It
 contains a validated Plugin manifest, Skill, MCP configuration, portable Core
@@ -207,9 +221,11 @@ event snapshot in strict Schema v1 machine state at
 and Hook events are untrusted hints: reconciliation works when Hooks are disabled
 and when hints are absent or inconsistent. Failures and events arriving after
 the snapshot remain pending. The source project and curated knowledge stay
-unchanged. Inventory, coverage, run state, and reconciliation serialize through
-the persistent per-project `indexes/machine-state.lock`; host events use their
-separate persistent ledger lock. This boundary does not claim H-05 selective
+unchanged. Inventory, B-07 priority generation, coverage, run state, and
+reconciliation serialize through the persistent per-project
+`indexes/machine-state.lock`; host events use their separate persistent ledger
+lock. H-07 itself does not generate, validate, or acknowledge
+`reading-priority.json`, and this boundary does not claim H-05 selective
 extraction or knowledge refresh. See
 [`docs/project-reconciliation.md`](docs/project-reconciliation.md).
 
@@ -226,8 +242,9 @@ state and are not marked read-only; and source-open denies Manifest-sensitive or
 otherwise content-restricted files. The default `local-only` external-send mode
 still permits explicit local host access to ordinary policy-authorized files.
 Reconciliation uses the same full-scan H-07 fallback even without Hook hints.
-Query and planning retain honest `capability-unavailable` contracts until their
-corresponding roadmap slices are implemented.
+The current MCP catalog does not expose B-07 prioritization; that operation is
+local Core/CLI-only. Query and planning retain honest `capability-unavailable`
+contracts until their corresponding roadmap slices are implemented.
 
 ## What You Get
 

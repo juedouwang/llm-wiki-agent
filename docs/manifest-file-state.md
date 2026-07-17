@@ -5,6 +5,7 @@
 - 命令：`python tools/project.py inventory <project_id> --json`
 - 测试：`tests/test_file_state.py`、`tests/test_project_inventory.py`
 - Schema：`llmwiki-project-manifest` Schema v1 / `project-inventory-v4`
+- B-07 downstream boundary：2026-07-17 已实现独立 `indexes/reading-priority.json`，不修改本 Schema
 
 ## 1. 本任务解决什么
 
@@ -73,6 +74,8 @@ B-06 不提前实现 C 阶段提取，因此当前 inventory 生成的普通文�
 
 B-04 本地 SHA-256 流式读取不算语义读取深度；它只建立内容身份，不持久化原始字节。
 
+B-07 读取当前 v4 中的 `classification` 与 `file_state` 作为输入，但把 `current_read_depth`、`recommended_read_depth`、优先级、selected/deferred 状态和引用信息写入独立 [`reading-priority.json`](reading-priority.md) 建议层。它不会回写 `processing_status`、`read_depth`、原因码或状态汇总，也不会为这些建议创建 `project-inventory-v5`。后续消费者必须先通过 `load_current_reading_priority(...)` 将建议与精确的当前 Manifest 和策略重新对账，再执行 `deep_read_status=selected` 项；裸 `load_reading_priority(...)` 只做结构解析，不是执行授权。只有消费者真正执行并按其自身契约持久化结果时，Manifest 真相才可能在独立任务中变化。
+
 ## 5. 汇总与对账
 
 Manifest summary 新增 `file_state_summary`：
@@ -94,7 +97,7 @@ Manifest summary 新增 `file_state_summary`：
 }
 ```
 
-`state_files` 以及三个分类计数总和都必须等于 `record_counts.file`。读取 v4 时，记录与汇总逐项对账；任何不一致都保留原 Manifest 并失败退出。B-08 将基于这些确定性字段生成独立覆盖率和失败报告，本任务不生成该报告。
+`state_files` 以及三个分类计数总和都必须等于 `record_counts.file`。读取 v4 时，记录与汇总逐项对账；任何不一致都保留原 Manifest 并失败退出。当前 B-08 基于这些确定性字段生成独立 `indexes/coverage-report.json`；当前 B-07 则生成独立 `indexes/reading-priority.json`。两者都不属于 Manifest `file_state`，B-06 本身不生成这些后置 artifact。
 
 ## 6. 增量与兼容
 
@@ -110,8 +113,8 @@ Manifest summary 新增 `file_state_summary`：
 
 B-06 保留 B-01～B-05 的项目身份、扫描边界、排除对账、符号链接、指纹、分类、原子替换和源项目零写入保证。本任务不实现：
 
-- B-07 阅读优先级或引用提升队列；
-- B-08 独立覆盖率/失败报告；
+- B-06 本身不实现阅读优先级或引用提升队列；当前 B-07 已通过独立 artifact 实现，见 [`reading-priority.md`](reading-priority.md)；
+- B-06 本身不生成覆盖率/失败报告；当前 B-08 已通过独立 artifact 实现，见 [`coverage-report.md`](coverage-report.md)；
 - 内容提取、Block、Locator、chunk、`source_id` 或 Evidence；
 - MCP、Hook、Web、LLM 分类补充或独立聊天入口；
 - curated Markdown 生成或 reconciliation 事件。

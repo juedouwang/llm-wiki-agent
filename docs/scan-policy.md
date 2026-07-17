@@ -1,6 +1,6 @@
 # B-02 项目扫描策略约定
 
-- 状态：已实现扫描策略内核，并由 B-03/B-04 目录盘点与指纹流程消费
+- 状态：已实现扫描策略内核，并由 B-03～B-07 目录盘点、指纹、分类、状态与阅读优先级流程消费
 - 实现：`tools/scan_policy.py`
 - 测试：`tests/test_scan_policy.py`
 - Schema：`llmwiki-scan-policy` v1
@@ -106,9 +106,11 @@ artifacts/tmp/
 - `metadata_only`：敏感路径或超过本地阈值；
 - `blocked`：文件本身处于扫描边界之外。
 
-这里的 `metadata_only` 是 B-02 对后续打开、提取和语义处理的访问保护结果；B-05～B-07 还会根据格式、科研角色、引用关系和目标决定最终阅读深度。例如，小型模型权重即使未触发通用大小阈值，后续格式策略仍可将它设为元数据读取。
+这里的 `metadata_only` 是 B-02 对后续打开、提取和语义处理的访问保护结果。B-05/B-06 会根据格式和科研角色记录当前诚实状态；当前 B-07 只根据分类角色、路径/名称和有界入站引用生成独立建议，**不使用当前目标，也不是 goal-aware**。模型权重或检查点无论大小，在 B-07 中都保持 `limited` 且不可提升，同时保留 B-06 已记录的当前 `read_depth`；因此小型模型权重的当前深度可能仍是 `sampled`，而不是被 B-07 改写为 `metadata_only`。
 
 B-04 的本地完整性 hash 是独立的确定性账本操作。它会为所有扫描边界内普通文件流式计算 SHA-256，包括敏感路径或后续只能元数据处理的文件；原始字节不持久化、不外发、不进入 LLM，也不构成内容提取。Manifest 仍属于默认忽略 Git 的本机状态。完整边界见 [`file-fingerprints.md`](file-fingerprints.md)。
+
+B-07 只有在当前 Manifest 的 B-02 policy snapshot 与重新加载的现行策略完全一致时才会读取引用源；每次原始读取前都重新验证策略，并在原子替换 `reading-priority.json` 前立即再次验证 Manifest 与策略。引用关系不能绕过 sensitive、oversized、blocked 或其他 B-02 内容限制，也不能授权外部发送。完整读描述符与失败保留约定见 [`reading-priority.md`](reading-priority.md)。
 
 ## 6. 敏感路径
 
@@ -171,7 +173,7 @@ B-02 不实现：
 - 目录遍历、文件数量统计和排除摘要（B-03）；
 - 源文件内容 hash、scan generation 和增量复用；这些由 B-04 inventory consumer 实现，而不是策略对象本身；
 - 格式、语言和科研角色识别（B-05）；
-- B-02 本身不写 Manifest 双轴状态；当前 B-06 inventory 根据策略决定生成 `sampled`、`metadata_only` 或 `ignored`，见 [`manifest-file-state.md`](manifest-file-state.md)；
+- B-02 本身不写 Manifest 双轴状态或阅读建议；当前 B-06 inventory 根据策略决定生成 `sampled`、`metadata_only` 或 `ignored`，当前 B-07 再在独立 artifact 中消费这些限制，见 [`manifest-file-state.md`](manifest-file-state.md) 与 [`reading-priority.md`](reading-priority.md)；
 - 内容提取、LLM 调用、MCP、Hook 或 Web 页面。
 
 最终用户仍会通过“一键理解项目”触发完整流水线；`ScanPolicyConfig` 是内部可组合协议，不要求用户在最终产品中手写 Python。

@@ -26,6 +26,10 @@ The report is written atomically to machine state:
 .llmwiki/projects/<project_id>/indexes/coverage-report.json
 ```
 
+B-07 may independently write the sibling
+`.llmwiki/projects/<project_id>/indexes/reading-priority.json`; B-08 neither
+consumes nor generates that recommendation artifact.
+
 It is not written into the scanned source project and is not curated Markdown.
 The command reads only project registration state and `manifest.jsonl`; it does
 not traverse or open source-project files. A failed generation leaves any
@@ -87,9 +91,12 @@ code, and reason. They are sorted by path.
   failures fail closed.
 - The Manifest is never rewritten and classification/state values are never
   promoted or repaired by this command.
+- B-08 audits the Manifest only. It does not validate, repair, acknowledge, or
+  otherwise interpret B-07 recommendations.
 
 ## Explicit non-goals
 
-B-08 does not implement the B-07 priority/reference queue, extraction, Blocks,
-Locators, chunks, `source_id`, Evidence, MCP, Hooks, Web behavior, or curated
-research summaries.
+B-08 does not implement or execute the B-07 priority/reference queue,
+extraction, Blocks, Locators, chunks, `source_id`, Evidence, MCP, Hooks, Web
+behavior, or curated research summaries. The independent B-07 contract is
+specified in [`reading-priority.md`](reading-priority.md).

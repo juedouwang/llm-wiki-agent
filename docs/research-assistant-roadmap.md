@@ -1,7 +1,7 @@
 # 科研助手改造路线图（P-05 对齐版）
 
 - 状态：**后续开发的执行计划**
-- 更新日期：2026-07-16
+- 更新日期：2026-07-17
 - 基线分支：`research-assistant`
 - 产品约定：[`research-assistant-product-contract.md`](research-assistant-product-contract.md)
 - 任务原则：每个编号尽量对应一个独立任务分支、一个原子提交和一个检查点标签。
@@ -33,6 +33,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | B-04 文件指纹与增量 Manifest | 已完成 | `f6fcd43` | `checkpoint/b-04-file-fingerprints` |
 | B-05 格式、语言与科研角色识别 | 已完成 | `7ed9196` | `checkpoint/b-05-file-classification` |
 | B-06 Manifest 文件状态双轴 | 已完成 | `9c6ba5d` | `checkpoint/b-06-manifest-file-state` |
+| B-07 确定性自适应阅读优先级 | 已完成（2026-07-17 验证） | `本次提交` | `checkpoint/b-07-adaptive-reading-priority`（待创建） |
 | B-08 覆盖率与失败报告 | 已完成 | `5c864a2` | `checkpoint/b-08-coverage-report` |
 | C-01 提取 Schema | 已完成 | `e4b3fed` | `checkpoint/c-01-extraction-schema` |
 | C-02 文本族提取器 | 已完成 | `5093f80` | `checkpoint/c-02-text-extractors` |
@@ -69,7 +70,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | B-04 `P0/M` | 增加 scan generation、SHA-256、大小、mtime 和快速复用逻辑 | 内容变化 hash 改变；仅触碰 mtime 不误报内容变化；重复扫描幂等 | 依赖路径/时间 → 能确定内容是否真正变化 |
 | B-05 `P0/M` | 确定性识别格式、语言和科研角色；扩展名、magic/MIME、路径规则优先，LLM 只作可选补充 | 伪扩展名、无扩展名和常见科研文件分类 fixture 通过；输出分类理由 | 文件同等处理 → 可按科研价值选择策略 |
 | B-06 `P0/S` | Manifest 拆分 `processing_status` 与 `read_depth`，并要求 `reason` | Schema 枚举、非法组合、序列化和旧记录兼容测试通过 | 单一模糊状态 → 同时知道是否成功和读了多深 |
-| B-07 `P0/M` | 实现确定性阅读优先级与“引用提升队列”；关键文件引用可把 `metadata_only/sampled` 提升为深读候选 | README/配置引用关键图或文件后优先级提升；大型数据样本不会全部深读 | 按格式一刀切 → 根据项目上下文自适应阅读 |
+| B-07 `P0/M` | 实现确定性阅读优先级与“引用提升队列”；当前实现从 v4 分类角色、路径/名称和有界引用生成独立建议，不修改 Manifest | README/配置引用关键图或文件后进入提升队列；selected/deferred 预算语义、策略限制和大型数据集保护通过测试 | 按格式一刀切 → 获得可审计、非目标感知的确定性阅读建议 |
 | B-08 `P0/S` | 生成覆盖率与失败报告，按数量、体积、角色、状态、读取深度和原因汇总 | 各分类之和可与 Manifest 对账；失败列表可定位；输出稳定快照 | 无法证明读全 → 可量化审计覆盖情况 |
 
 ### C. 确定性内容提取
@@ -245,7 +246,7 @@ As of 2026-07-16, R2 is complete. J-05 packages the validated Core boundary as a
 建议顺序：
 
 ```text
-B-07
+B-07（已完成）
 → C-05 → C-06 → C-07
 → F-01 → F-02 → F-03 → F-04 → F-05
 → E-02 → E-03 → E-04 → E-05 → E-06 → E-07 → E-08（完整）
@@ -384,8 +385,9 @@ Hooks may be disabled and hints may be absent or inconsistent. The starting
 snapshot is acknowledged only after a completed run with zero coverage failures
 and exact Manifest/coverage artifact hashes and bytes still current at commit.
 Failures and events arriving after that snapshot stay pending. A stable
-project-scoped `indexes/machine-state.lock` serializes Manifest, coverage, run,
-and reconciliation writers; event ingestion uses the separate stable
+project-scoped `indexes/machine-state.lock` serializes Manifest, B-07 reading-
+priority, coverage, run, and reconciliation writers; event ingestion uses the
+separate stable
 `events.jsonl.lock`, with lock order `machine-state.lock -> events.jsonl.lock`.
 The strict Schema v1 checkpoint is stored at
 `.llmwiki/projects/<project_id>/indexes/reconciliation-state.json`, while the
@@ -406,13 +408,34 @@ results, registered-root Hook normalization, and no-Hook reconciliation fallback
 are covered by `tests/test_codex_plugin.py`. See
 [`codex-reference-adapter.md`](codex-reference-adapter.md).
 
+B-07 landed on **2026-07-17** in `本次提交`. The intended checkpoint name is
+`checkpoint/b-07-adaptive-reading-priority`, but that checkpoint is **pending and
+has not been created yet**. The implementation exposes
+`ResearchCoreService.prioritize(project_id)` and
+`python tools/project.py prioritize <project_id> --json`, consumes the exact
+current `project-inventory-v4` Manifest, and writes the independent Schema v1
+`indexes/reading-priority.json` artifact without modifying Manifest file state or
+creating Manifest v5. It is deterministic from classification role, path/name,
+and bounded incoming references; it is not goal-aware and does not perform
+extraction, semantic/LLM reading, project-understand stage advancement, H-07
+reconciliation, or H-05 refresh.
+
+Focused validation recorded on 2026-07-17:
+
+```powershell
+python -B -m pytest -q -p no:cacheprovider `
+  tests/test_reading_priority.py `
+  tests/test_project_layout.py
+```
+
+Result: **45 passed, 3 skipped**. The added regressions cover current-grounded execution authorization, intrinsic/current-policy tamper rejection, machine-state ancestor redirection, post-read/pre-commit reference mutation, and every exact fixed-v1 boundary.
+
 The next executable roadmap task is:
 
-> **B-07: deterministic adaptive reading priority and reference-promotion queue**
+> **C-05: key-image, architecture/result-figure, and scanned-PDF vision/OCR pipeline**
 
-B-07 must use current Manifest/classification state to rank bounded deep-read
-candidates deterministically. References from README/configuration material may
-promote otherwise `metadata_only` or `sampled` files, while sensitive files,
-large datasets, model weights, and policy-limited content remain bounded. It
-must not perform extraction, Evidence generation, H-05 refresh, external sends,
-or curated-knowledge updates; those remain later tasks.
+C-05 should consume only policy-authorized selections, including B-07 entries
+whose `deep_read_status` is `selected`; deferred queue entries are not execution
+instructions. It must preserve the existing extraction/locator and source-read-
+only boundaries rather than treating the recommendation artifact as extracted
+or verified content.

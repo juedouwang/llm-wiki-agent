@@ -4,7 +4,7 @@
 - 决策编号：`P-05 Agent 原生执行闭环`
 - 确认日期：2026-07-15
 - 适用分支：`research-assistant`
-- ???????R1 ???????? 2026-07-16 ???R2 ?? 2026-07-16 ?? G-01?G-07?G-08?E-01?E-08 ???????H-04?H-07 ? J-05 Codex ??????Codex ???????? Plugin/Skill/MCP ???????????? Host Context/coverage?????????????? `llmwiki_reconcile`??? Hook ??? H-04 ???????????????????????????? `register -> inventory -> classify` reconciliation ????????????? `llmwiki_query` ? `llmwiki_plan` ????? `capability-unavailable`???????????????H-05 ??????15 ? Markdown ???Verified Query????Web/`--open`?Claude Code ??????????????????????????????????????????
+- 当前实现边界（截至 2026-07-17）：确定性入口包括项目注册/盘点、B-07 `prioritize`、B-08 `coverage`、`project understand` 的 `register -> inventory -> classify` 前缀，以及 H-07/J-05 reconciliation 集成。B-07 只生成独立机器建议，不推进 `adaptive-read`；H-05 选择性刷新、15 类 Markdown、Verified Query、成熟规划、Web/`--open` 与 Claude Code 适配仍未完成。
 
 ## 1. 产品定义
 
@@ -119,6 +119,8 @@ Hooks 可能被禁用、未信任、配置错误或因宿主版本不同而不�
 ├─ extracted/
 ├─ indexes/
 │  ├─ dirty-paths.json      # H-04: rebuildable, untrusted hint projection
+│  ├─ reading-priority.json # B-07: deterministic recommendations; not Manifest truth
+│  ├─ coverage-report.json  # B-08: deterministic Manifest audit
 │  └─ reconciliation-state.json  # H-07: strict Schema v1 acknowledgement
 └─ runs/
 ```
@@ -206,6 +208,8 @@ register
 → web-render
 ```
 
+这条产品流水线顺序保持不变。当前 B-07 `python tools/project.py prioritize <project_id> --json` 是读取现有 v4 Manifest 的独立后置操作：它不创建项目 run，不调用 E-01 stage handler，也不会把持久运行中的 `adaptive-read` 标为成功。
+
 产品要求：
 
 1. 用户只触发一次；
@@ -281,7 +285,9 @@ last_verified_at: <timestamp-or-null>
 
 1. **全量盘点**：扫描边界内的每个文件进入 Manifest；明确列出扫描边界外的目录规则。
 2. **初步建模**：识别格式、科研角色、项目位置、引用关系、文件大小和潜在敏感性。
-3. **自适应深读**：根据科研价值、引用关系和当前目标决定读取深度；关键文件可自动提升优先级。
+3. **自适应深读**：目标产品最终根据科研价值、引用关系和当前目标决定读取深度；关键文件可自动提升优先级。
+
+截至 2026-07-17，B-07 落地的是这条产品方向中的确定性推荐层，而不是完整目标感知阅读器。它只从当前 `project-inventory-v4` 的分类角色、项目相对路径/文件名和有界入站引用计算优先级，写入 `.llmwiki/projects/<project_id>/indexes/reading-priority.json`；它不读取 onboarding goal，不修改 Manifest `file_state`，不创建 `project-inventory-v5`，也不执行提取、语义/LLM 阅读或视觉/OCR。
 
 ### 7.2 两轴状态
 
@@ -308,7 +314,9 @@ models/model.ckpt          → metadata_only / 模型权重，不做语义解析
 
 > 扫描范围内每个文件都有确定的处理状态、读取深度和理由；不承诺完整理解所有二进制格式。
 
-当 README、代码、论文或实验配置引用了尚未深读的文件时，系统应把该文件加入提升队列，而不是继续基于缺失信息总结。
+当 README、代码、论文或实验配置引用了尚未深读的文件时，系统应把该文件加入提升队列，而不是继续基于缺失信息总结。当前 B-07 会保留每个符合提升条件且尚未 `deep_read` 的引用目标，包括因预算而 deferred 的条目；后续消费者只能执行 `deep_read_status=selected` 的条目。可提升的当前深度仅为 `normal_read`、`sampled`、`metadata_only`。引用不能绕过 B-02、敏感/超大、failed/missing、ignored/unsupported、模型/检查点/pickle 或大型数据集限制。
+
+当前固定边界为：最多扫描 128 个引用源、每个 256 KiB、总计 4 MiB；最多选择 128 个深读、选择字节总计 32 MiB；同一数据集达到 32 个文件或 64 MiB 即进入大型数据集保护。完整 Schema、解析、解析拒绝和原子失败约定见 [`reading-priority.md`](reading-priority.md)。
 
 ## 8. 跨项目知识约定
 
@@ -336,7 +344,7 @@ models/model.ckpt          → metadata_only / 模型权重，不做语义解析
 → 当前宿主继续下一任务
 ```
 
-截至 2026-07-16，当前实现只贯通确定性的 `project understand` 前缀、H-04 事件输入边界和 H-07 保守 reconciliation 边界。H-07 可以由 CLI 或 `llmwiki_reconcile` 显式调用，不要求 Hook 存在或可信；任务核验、选择性提取、知识刷新、规划和网页更新仍是后续能力。
+截至 2026-07-17，当前实现贯通确定性的 `project understand` 前缀、独立 B-07 阅读优先级、H-04 事件输入边界和 H-07 保守 reconciliation 边界。B-07 只有 Core/CLI 入口，不推进项目 run；H-07 可以由 CLI 或 `llmwiki_reconcile` 显式调用，不要求 Hook 存在或可信。任务核验、选择性提取、知识刷新、规划和网页更新仍是后续能力。
 
 任务执行包保留为 Core 与宿主之间的内部协议：
 
@@ -380,15 +388,16 @@ status:
 6. 重新生成并核验受影响内容；
 7. 刷新 Markdown、索引和网页。
 
-截至 2026-07-16 的已验证实现边界是：
+截至 2026-07-17 的已验证实现边界是：
 
 - H-04 provides the append-only `events.jsonl` ledger and rebuildable `indexes/dirty-paths.json` projection. Host events remain untrusted hints; they do not read source content, mutate curated knowledge, or by themselves count as reconciliation.
+- B-07 provides explicit Core and `python tools/project.py prioritize <project_id> --json` entry points. It writes the independent `indexes/reading-priority.json` recommendation artifact and has no MCP operation.
 - H-07 provides explicit Core, `python -m tools.project reconcile <project_id> --json`, and `llmwiki_reconcile` entry points. Every call uses a fresh full `register -> inventory -> classify` run as the correctness fallback, even when Hooks are disabled or the event/explicit dirty-path hints are absent, incomplete, or inconsistent.
-- A stable project-scoped `indexes/machine-state.lock` serializes Manifest, coverage, run, and reconciliation writers; host-event ingestion uses the separate stable `events.jsonl.lock`, with the fixed order `machine-state.lock -> events.jsonl.lock`. Lock files remain on disk as coordination points.
+- A stable project-scoped `indexes/machine-state.lock` serializes Manifest, reading-priority, coverage, run, and reconciliation writers; host-event ingestion uses the separate stable `events.jsonl.lock`, with the fixed order `machine-state.lock -> events.jsonl.lock`. Lock files remain on disk as coordination points.
 - Success requires a completed run, zero coverage failures, and exact SHA-256/byte consistency for the validated Manifest and coverage artifacts through checkpoint commit. A successful call atomically advances strict Schema v1 machine state at `.llmwiki/projects/<project_id>/indexes/reconciliation-state.json` for only the event snapshot captured before scanning. A failed call advances no acknowledgement; events appended after the starting snapshot remain pending for a later reconciliation.
-- H-07 may update Manifest, coverage, run, dirty projection, stable lock files, and reconciliation checkpoint machine state. It leaves the registered source project and curated Markdown knowledge unchanged.
+- H-07 may update Manifest, coverage, run, dirty projection, stable lock files, and reconciliation checkpoint machine state. It does not generate, validate, or acknowledge `reading-priority.json`, and it leaves the registered source project and curated Markdown knowledge unchanged.
 
-Therefore current H-07 always performs the full scan through `classify`; it does not extract changed files, propagate `stale`, refresh knowledge, or render Markdown/Web output, and it must not be described as H-05 selective extraction or selective knowledge refresh. See [`host-event-ledger.md`](host-event-ledger.md) and [`project-reconciliation.md`](project-reconciliation.md).
+Therefore current H-07 always performs the full scan through `classify`; it does not run B-07, advance `adaptive-read`, extract changed files, propagate `stale`, refresh knowledge, or render Markdown/Web output, and it must not be described as H-05 selective extraction or selective knowledge refresh. See [`reading-priority.md`](reading-priority.md), [`host-event-ledger.md`](host-event-ledger.md), and [`project-reconciliation.md`](project-reconciliation.md).
 
 After the future H-05 selective path is implemented and proven equivalent to the full-scan result, the target product should require a full scan only when:
 

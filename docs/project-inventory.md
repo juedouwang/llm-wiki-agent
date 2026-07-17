@@ -15,7 +15,7 @@ B-03 为 B-01 已注册的科研项目建立第一份可对账目录账本。盘
 .llmwiki/projects/<project_id>/manifest.jsonl
 ```
 
-源科研项目保持只读。盘点不会接受一个临时源路径来绕过注册记录，也不会把 Manifest 写回源目录。B-04 在不改变这些边界、记录类型、排除对账和符号链接语义的前提下，为普通文件增加本地指纹与 scan generation；B-05 再增加确定性的格式、语言、科研角色和原因。当前命令写入 v3，详见 [`file-fingerprints.md`](file-fingerprints.md) 与 [`file-classification.md`](file-classification.md)。
+源科研项目保持只读。盘点不会接受一个临时源路径来绕过注册记录，也不会把 Manifest 写回源目录。B-04 在不改变这些边界、记录类型、排除对账和符号链接语义的前提下，为普通文件增加本地指纹与 scan generation；B-05 再增加确定性的格式、语言、科研角色和原因；B-06 增加版本化两轴文件状态。当前命令写入 `project-inventory-v4`，详见 [`file-fingerprints.md`](file-fingerprints.md)、[`file-classification.md`](file-classification.md) 与 [`manifest-file-state.md`](manifest-file-state.md)。
 
 ## 2. CLI
 
@@ -149,7 +149,9 @@ B-03 的 JSONL 第一行是 `summary`，后续每行是一条目录盘点记录�
 - 临时文件被清理；
 - 源项目不产生任何写入。
 
-上述原子替换和失败语义继续适用于 B-04/B-05。B-03 v1 的未变化输出可以字节稳定；当前 v3 writer 会在每次成功扫描时增加 summary 中的 `scan_generation`，因此不再要求整个 Manifest 字节不变。
+上述原子替换和失败语义继续适用于 B-04/B-05/B-06。B-03 v1 的未变化输出可以字节稳定；当前 v4 writer 会在每次成功扫描时增加 summary 中的 `scan_generation`，因此不再要求整个 Manifest 字节不变。
+
+成功 inventory 之后，B-07 和 B-08 可分别消费同一份精确的当前 v4 Manifest，原子写入 `indexes/reading-priority.json` 与 `indexes/coverage-report.json`。它们是彼此独立的后置 artifact：B-07 的推荐不进入 `file_state`，B-08 只审计 Manifest 真相；两者都不创建 Manifest v5。见 [`reading-priority.md`](reading-priority.md) 与 [`coverage-report.md`](coverage-report.md)。
 
 ## 7. B-03 明确非目标
 
@@ -159,4 +161,5 @@ B-03 自身不实现：
 - 内容 hash、SHA-256、文件大小、mtime 或 scan generation；这些已由 B-04 在 v2 中实现；
 - 格式、语言和科研角色分类；该能力已由 B-05 在 v3 中实现；
 - B-03 本身未实现两轴状态；当前 B-06 writer 已增加版本化 `file_state`，见 [`manifest-file-state.md`](manifest-file-state.md)；
+- B-07 阅读建议和 B-08 覆盖报告都不是 B-03 目录遍历步骤本身；它们在当前 v4 Manifest 之后独立生成；
 - LLM 调用、MCP、Hook、Web、知识页生成或旧数据迁移。

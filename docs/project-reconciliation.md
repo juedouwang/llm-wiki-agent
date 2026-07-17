@@ -53,8 +53,9 @@ lexically invalid explicit path still fails closed before scanning.
 ## Transaction sequence
 
 One reconciliation holds the stable per-project advisory lock at
-`indexes/machine-state.lock`. Inventory, coverage generation, run creation/save,
-whole run orchestration, and reconciliation share this same coordination point,
+`indexes/machine-state.lock`. Inventory, B-07 reading-priority generation,
+coverage generation, run creation/save, whole run orchestration, and
+reconciliation share this same coordination point,
 so cooperating machine-state writers cannot replace one another's artifacts. The
 lock file remains on disk after release. Host events retain their separate
 `events.jsonl.lock`, and the only permitted nested order is `machine-state.lock`
@@ -292,6 +293,9 @@ H-07 may update only deterministic project machine state, including:
 - a repaired `indexes/dirty-paths.json` projection;
 - `indexes/reconciliation-state.json`.
 
+The sibling `indexes/reading-priority.json` belongs to the independent B-07
+operation. H-07 does not generate, validate, repair, consume, or acknowledge it.
+
 The registered research source tree remains read-only. Inventory and
 classification may read metadata and policy-authorized bounded content under the
 existing B-02 through B-06 rules, but H-07 never writes source files or creates
@@ -309,8 +313,9 @@ H-07 does not implement or claim:
   refresh;
 - H-01 Manifest-generation diff reports, H-02 dependency edges, H-03 stale
   propagation, or H-06 deletion/move impact handling;
-- extraction, adaptive reading, Evidence generation, 15-artifact synthesis, or
-  curated Markdown updates;
+- invocation of B-07 priority generation, validation or acknowledgement of
+  `indexes/reading-priority.json`, extraction, semantic/LLM reading, Evidence
+  generation, 15-artifact synthesis, or curated Markdown updates;
 - Hook installation, Hook trust, automatic Stop wiring, filesystem watching,
   polling, or a background daemon;
 - Verified Query, planning, task completion verification, Web rendering, or
@@ -347,5 +352,6 @@ J-05 now wires this validated H-07 boundary into the Codex reference package at
 `plugins/llmwiki-research/`. Its Plugin, Skill, MCP configuration, and optional
 Hook preserve the same invariant: Hook signals are untrusted hints, while
 explicit `llmwiki_reconcile` remains the correctness path. See
-[`codex-reference-adapter.md`](codex-reference-adapter.md). B-07 is the next
+[`codex-reference-adapter.md`](codex-reference-adapter.md). The independent
+B-07 adaptive-reading-priority slice landed on **2026-07-17**; C-05 is the next
 executable roadmap task.

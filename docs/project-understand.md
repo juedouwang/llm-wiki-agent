@@ -9,6 +9,7 @@
 - Validation: `tests/test_project_understand.py` plus E-01/Core regressions
 - Checkpoint: `checkpoint/e-08-deterministic-understand`
 - H-07 reuse: [`project-reconciliation.md`](project-reconciliation.md)
+- B-07 boundary (2026-07-17): standalone [`reading-priority.md`](reading-priority.md), not invoked by this action
 
 ## Purpose
 
@@ -24,6 +25,11 @@ register -> inventory -> classify
 It does not duplicate the E-01 state machine, stage handlers, checkpointing, or
 retry rules. The complete canonical stage list is still present in the durable
 run report, but this entry point deliberately pauses before `extract`.
+
+The standalone B-07 `ResearchCoreService.prioritize(project_id)` / `python
+tools/project.py prioritize <project_id> --json` operation exists separately.
+`project_understand` does not invoke it, create `reading-priority.json`, or mark
+the canonical `adaptive-read` stage as attempted or succeeded.
 
 ## Core API
 
@@ -135,12 +141,15 @@ The entry point always asks E-01 to run through `classify`.
 The inventory handler already performs deterministic file classification while
 writing the current Manifest. The separate `classify` stage consumes that
 Manifest through the existing coverage operation; E-08 does not add another
-scanner or classifier.
+scanner or classifier. B-07 priority generation is not part of this mapping:
+its recommendation artifact remains outside the run, and later stages stay
+pending.
 
 A complete `ProjectRunOrchestrator.start` or `resume` execution holds the stable
 per-project `indexes/machine-state.lock`. Run creation/save, inventory, and
 coverage acquire the same lock defensively and reenter it on the same thread.
-This serializes same-project writers across every stage while leaving different
+Independent B-07 priority generation also uses this lock, although this action
+does not call it. This serializes same-project writers while leaving different
 projects independent. The lock file is a persistent coordination artifact.
 
 ## Relationship to H-07 reconciliation
@@ -160,7 +169,8 @@ to skip files. If reconciliation fails, its acknowledgement remains unchanged;
 if events arrive after the starting snapshot, they remain pending.
 
 This reuse does not expand E-08 beyond `classify`. Neither operation performs
-H-05 selective extraction or refreshes curated knowledge. See
+B-07 priority generation, advances `adaptive-read`, performs H-05 selective
+extraction, or refreshes curated knowledge. See
 [`project-reconciliation.md`](project-reconciliation.md).
 
 ## Result and resume contract
@@ -195,7 +205,8 @@ Generated machine state remains under the configured Research Core workspace:
 |-- project.yaml
 |-- manifest.jsonl
 |-- indexes/
-|   `-- coverage-report.json
+|   |-- coverage-report.json
+|   `-- reading-priority.json  # optional B-07 artifact; not written by understand
 `-- runs/
     `-- <run_id>/
         `-- run.json
@@ -222,7 +233,8 @@ legacy `<project-name>-wiki/` output and does not modify source files.
 This initial R2 slice is **not** any of the following:
 
 - extraction or extracted-document orchestration;
-- adaptive reading;
+- adaptive-reading orchestration or run-stage advancement; B-07 exists only as a
+  separate recommendation command;
 - synthesis or generation of the planned 15 Markdown artifacts;
 - Evidence, status, planning, or indexing pipeline completion;
 - Web rendering, a local dashboard, browser launch, or `--open` support;
@@ -284,8 +296,8 @@ Use normal history-preserving rollback for the E-08 implementation commit:
 git revert <e-08-commit>
 ```
 
-Do not delete existing project registrations, Manifests, coverage reports, or
-run directories during rollback. They are valid versioned machine records from
+Do not delete existing project registrations, Manifests, reading-priority or
+coverage reports, or run directories during rollback. They are valid versioned machine records from
 the underlying B-series and E-01 contracts and should remain available for
 audit, status inspection, or a later explicit migration. Reverting E-08 removes
 the one-action facade; it does not require source-project cleanup.

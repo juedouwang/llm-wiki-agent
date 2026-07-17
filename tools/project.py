@@ -247,6 +247,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print a machine-readable JSON result",
     )
 
+    prioritize = subparsers.add_parser(
+        "prioritize",
+        help="Generate deterministic B-07 reading priority and promotions.",
+    )
+    prioritize.add_argument("project_id", help="B-01 registered project ID")
+    prioritize.add_argument(
+        "--workspace-root",
+        default=str(REPO_ROOT),
+        help="Research Core workspace (default: this repository)",
+    )
+    prioritize.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result",
+    )
+
     reconcile = subparsers.add_parser(
         "reconcile",
         help="Run conservative full-scan reconciliation and acknowledge its event snapshot.",
@@ -716,6 +732,35 @@ def _run_coverage(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_prioritize(args: argparse.Namespace) -> int:
+    try:
+        result = ResearchCoreService(args.workspace_root).prioritize(
+            project_id=args.project_id,
+        )
+    except (LayoutError, OSError, ValueError) as exc:
+        return _print_command_error(exc, as_json=args.json)
+
+    if args.json:
+        print(
+            json.dumps(
+                {"ok": True, **result.as_dict()},
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+
+    summary = result.priority["summary"]
+    print(f"Reading priority generated: {result.project_id}")
+    print(f"Manifest:                   {result.manifest_file}")
+    print(f"Priority artifact:          {result.priority_file}")
+    print(f"Ranked files:               {summary['ranked_file_count']}")
+    print(f"Deep-read selections:       {summary['deep_read_selected_count']}")
+    print(f"Reference promotions:       {summary['promotion_queue_count']}")
+    print(f"Policy-limited files:       {summary['limited_file_count']}")
+    return 0
+
+
 def _run_reconcile(args: argparse.Namespace) -> int:
     try:
         result = ResearchCoreService(args.workspace_root).project_reconcile(
@@ -1091,6 +1136,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_inventory(args)
     if args.command == "coverage":
         return _run_coverage(args)
+    if args.command == "prioritize":
+        return _run_prioritize(args)
     if args.command == "reconcile":
         return _run_reconcile(args)
     if args.command == "event" and args.event_command == "submit":

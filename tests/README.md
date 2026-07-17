@@ -60,4 +60,16 @@ The same test module retains coverage for B-04 scan generations, SHA-256/size/mt
 
 ## B-06 Manifest file-state coverage
 
-`test_file_state.py` and `test_project_inventory.py` verify the stable processing-status/read-depth enums, valid and invalid combinations, exact Schema v1 serialization, required reason codes and explanations, truthful inventory states for sampled, sensitive, oversized, and unsupported files, v1/v2/v3 upgrade compatibility, unchanged-state reuse, reset on content or policy-basis changes, `missing` non-reuse, state-summary reconciliation, corrupt/future state fail-closed behavior, atomic Manifest preservation, CLI exposure, and source-tree zero writes. B-06 deliberately does not add B-07 prioritization, B-08 independent coverage reports, content extraction, Blocks, Locators, source IDs, Evidence, MCP, Hook, or Web behavior.
+`test_file_state.py` and `test_project_inventory.py` verify the stable processing-status/read-depth enums, valid and invalid combinations, exact Schema v1 serialization, required reason codes and explanations, truthful inventory states for sampled, sensitive, oversized, and unsupported files, v1/v2/v3 upgrade compatibility, unchanged-state reuse, reset on content or policy-basis changes, `missing` non-reuse, state-summary reconciliation, corrupt/future state fail-closed behavior, atomic Manifest preservation, CLI exposure, and source-tree zero writes. B-06 itself does not perform B-07 prioritization or B-08 coverage reporting; those are separate artifacts. It also does not add content extraction, Blocks, Locators, source IDs, Evidence, MCP, Hook, or Web behavior.
+
+## B-07 adaptive-reading-priority coverage
+
+`test_reading_priority.py` verifies ordinary-file ranking; deterministic research-role, path, and filename scoring; bounded reference parsing and unique project-relative resolution; rejection of URI, absolute, traversal, ambiguous, and self references; sensitive, oversized, policy-denied, model/checkpoint, failed-state, ignored-depth, and large-dataset restrictions; selected and deferred promotion-queue semantics; bounded descriptor-based reads; empty-project handling; byte-identical regeneration; Manifest and scan-policy revalidation before reads and atomic replacement; post-read/pre-commit reference mutation rejection; preservation of valid existing artifacts on generation failure; shared machine-state locking; Core/CLI parity; and the absence of extraction, Evidence, Source, run-state, source-project, or curated-wiki writes. Loader tests distinguish strict structural parsing from `load_current_reading_priority(...)` execution authorization grounded in exact current Manifest and policy truth, and reject legacy-v0, malformed, symlinked, semantically tampered, policy-tampered, and unsupported future-version artifacts. Exact tests exercise the fixed 128-file, 256 KiB/file, 4 MiB aggregate-reference, 128-selected-file, 32 MiB selected-byte, and 64 MiB dataset boundaries. `test_project_layout.py` covers strict Schema v1/legacy/future compatibility, the canonical `reading-priority.json` path, and machine-state ancestor symbolic-link/reparse/redirection rejection before lock, temporary-file, or artifact writes.
+
+Focused validation recorded on 2026-07-17:
+
+```powershell
+python -B -m pytest -q -p no:cacheprovider tests/test_reading_priority.py tests/test_project_layout.py
+```
+
+Result: **45 passed, 3 skipped**. The skipped cases require host symbolic-link creation privilege; deterministic mocked unresolved-link and ancestor-redirection paths remain covered.
