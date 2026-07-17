@@ -33,7 +33,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | B-04 文件指纹与增量 Manifest | 已完成 | `f6fcd43` | `checkpoint/b-04-file-fingerprints` |
 | B-05 格式、语言与科研角色识别 | 已完成 | `7ed9196` | `checkpoint/b-05-file-classification` |
 | B-06 Manifest 文件状态双轴 | 已完成 | `9c6ba5d` | `checkpoint/b-06-manifest-file-state` |
-| B-07 确定性自适应阅读优先级 | 已完成（2026-07-17 验证） | `本次提交` | `checkpoint/b-07-adaptive-reading-priority`（待创建） |
+| B-07 确定性自适应阅读优先级 | 已完成（2026-07-17 验证） | `248b231` | `checkpoint/b-07-adaptive-reading-priority` |
 | B-08 覆盖率与失败报告 | 已完成 | `5c864a2` | `checkpoint/b-08-coverage-report` |
 | C-01 提取 Schema | 已完成 | `e4b3fed` | `checkpoint/c-01-extraction-schema` |
 | C-02 文本族提取器 | 已完成 | `5093f80` | `checkpoint/c-02-text-extractors` |
@@ -408,9 +408,9 @@ results, registered-root Hook normalization, and no-Hook reconciliation fallback
 are covered by `tests/test_codex_plugin.py`. See
 [`codex-reference-adapter.md`](codex-reference-adapter.md).
 
-B-07 landed on **2026-07-17** in `本次提交`. The intended checkpoint name is
-`checkpoint/b-07-adaptive-reading-priority`, but that checkpoint is **pending and
-has not been created yet**. The implementation exposes
+B-07 implementation landed on **2026-07-17** in `248b231`. The completed
+implementation and validation state is designated by
+`checkpoint/b-07-adaptive-reading-priority`. The implementation exposes
 `ResearchCoreService.prioritize(project_id)` and
 `python tools/project.py prioritize <project_id> --json`, consumes the exact
 current `project-inventory-v4` Manifest, and writes the independent Schema v1

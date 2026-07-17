@@ -7,7 +7,7 @@
 - Durable artifact: `.llmwiki/projects/<project_id>/indexes/reading-priority.json`
 - Artifact identity: Schema v1 / `llmwiki-reading-priority` / `reading-priority-v1`
 - Validation: `tests/test_reading_priority.py`, `tests/test_project_layout.py`
-- Checkpoint name: `checkpoint/b-07-adaptive-reading-priority` (**not created by this documentation change**)
+- Checkpoint: `checkpoint/b-07-adaptive-reading-priority`
 
 ## Purpose
 
