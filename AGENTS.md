@@ -50,7 +50,7 @@ New research-project features must keep machine state and human-readable knowled
 wiki/projects/<project_id>/       # curated Markdown knowledge for people and agents
 ```
 
-The machine-state tree uses `project.yaml`, `manifest.jsonl`, `sources.jsonl`, `extracted/`, `indexes/` (including B-07 `reading-priority.json`, E-02 `project-map.json`, E-03 `hierarchical-understanding.json`, E-04 `execution-flow.json`, and E-05 `research-linkage.json`), and `runs/`. The canonical curated directory tree uses `papers/`, `methods/`, `datasets/`, `experiments/`, `results/`, `claims/`, `plans/` (including `plans/daily/`), `decisions/`, and `sources/`. Registration and layout initialization create only this empty directory skeleton; later tasks own Markdown singleton and collection pages.
+The machine-state tree uses `project.yaml`, `manifest.jsonl`, `sources.jsonl`, `extracted/`, `indexes/` (including B-07 `reading-priority.json`, E-02 `project-map.json`, E-03 `hierarchical-understanding.json`, E-04 `execution-flow.json`, E-05 `research-linkage.json`, and E-06 `experiment-chains.json`), and `runs/`. The canonical curated directory tree uses `papers/`, `methods/`, `datasets/`, `experiments/`, `results/`, `claims/`, `plans/` (including `plans/daily/`), `decisions/`, and `sources/`. Registration and layout initialization create only this empty directory skeleton; later tasks own Markdown singleton and collection pages.
 
 Rules:
 1. New structured machine records, including `project.yaml` and JSON/JSONL files, must carry `schema_version`.
@@ -116,6 +116,21 @@ artifact. E-05 writes only Schema v1
 `.llmwiki/projects/<project_id>/indexes/research-linkage.json`, does not open
 registered source bytes, call an LLM, write curated Markdown, extract research
 binaries, or send anything externally. See `docs/research-linkage.md`.
+
+Generate bounded E-06 experiment chains with
+`ResearchCoreService.experiment_chains(project_id, observations=...)`. The host
+explicitly supplies configuration, run, result, Claim, and result-to-Claim
+observations. Results require non-empty conditions and metrics plus at least one
+Evidence ID. Different results may explicitly `support` and `contradict` the same
+Claim without overwriting each other; Core preserves every
+`config -> run -> result -> claim` chain and its Evidence closure but does not
+infer a scientific conflict or winner. Without observations, E-06 emits only
+Manifest-classification candidates and explicit gaps, never semantic chains.
+Consumers must use `load_current_experiment_chains(...)`. E-06 writes only strict
+Schema v1 `.llmwiki/projects/<project_id>/indexes/experiment-chains.json` under
+`machine-state.lock`; it opens no source bytes, calls no LLM, writes no curated
+Markdown, reads no research binary, and sends nothing externally. See
+`docs/experiment-chains.md`.
 
 Prioritize a current B-06 Manifest with:
 

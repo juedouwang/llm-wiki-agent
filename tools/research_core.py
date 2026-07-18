@@ -63,6 +63,15 @@ if __package__:
         ResearchRelationObservation,
         generate_research_linkage,
     )
+    from .experiment_chains import (
+        ClaimLinkObservation,
+        ClaimObservation,
+        ConfigObservation,
+        ExperimentChainsResult,
+        ResultObservation,
+        RunObservation,
+        generate_experiment_chains,
+    )
     from .project_map import ProjectMapResult, generate_project_map
     from .project_orchestrator import (
         ProjectRunOrchestrator,
@@ -135,6 +144,15 @@ else:
         ResearchLinkageResult,
         ResearchRelationObservation,
         generate_research_linkage,
+    )
+    from experiment_chains import (  # type: ignore[no-redef]
+        ClaimLinkObservation,
+        ClaimObservation,
+        ConfigObservation,
+        ExperimentChainsResult,
+        ResultObservation,
+        RunObservation,
+        generate_experiment_chains,
     )
     from project_map import (  # type: ignore[no-redef]
         ProjectMapResult,
@@ -918,6 +936,27 @@ class ResearchCoreService:
         """Generate the bounded E-05 research-provenance linkage artifact."""
 
         return generate_research_linkage(
+            workspace_root=self.workspace_root,
+            project_id=project_id,
+            observations=observations,
+        )
+
+    def experiment_chains(
+        self,
+        project_id: str,
+        *,
+        observations: Iterable[
+            ConfigObservation
+            | RunObservation
+            | ResultObservation
+            | ClaimObservation
+            | ClaimLinkObservation
+            | dict[str, Any]
+        ] = (),
+    ) -> ExperimentChainsResult:
+        """Generate the bounded E-06 experiment-chain machine artifact."""
+
+        return generate_experiment_chains(
             workspace_root=self.workspace_root,
             project_id=project_id,
             observations=observations,

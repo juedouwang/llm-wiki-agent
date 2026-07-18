@@ -421,6 +421,12 @@ class ProjectLayout:
         return self.indexes_dir / "execution-flow.json"
 
     @property
+    def experiment_chains_file(self) -> Path:
+        """E-06 deterministic config-to-run-to-result-to-Claim artifact."""
+
+        return self.indexes_dir / "experiment-chains.json"
+
+    @property
     def machine_state_lock_file(self) -> Path:
         """Stable advisory lock shared by per-project machine-state mutations."""
 
