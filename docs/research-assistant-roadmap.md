@@ -56,6 +56,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | G-07 minimal MCP server | complete | `7b0eef9` | `checkpoint/g-07-mcp-server` |
 | G-08 budget-bounded Host Context Pack | complete | `3721fb5` | `checkpoint/g-08-host-context-pack` |
 | E-01 resumable staged run orchestration | complete | `146fc0f` | `checkpoint/e-01-run-orchestrator` |
+| E-02 deterministic project map | complete (2026-07-18 validation) | `c3ab7e0` | `checkpoint/e-02-deterministic-project-map` |
 | E-08 deterministic one-action prefix (R2 slice) | complete | `b2e04ca` | `checkpoint/e-08-deterministic-understand` |
 | F-01 项目知识页面契约 | complete after F-01A/F-01B validation on 2026-07-17 | `829cb54` | `checkpoint/f-01b-canonical-knowledge-layout` |
 | F-02 Claim-Evidence directional binding and currentness | complete after F-02A/F-02B validation, F-02C stable-object plus registry-coordination hardening, and F-02D result-integrity repair on 2026-07-18 | `ba3846c`, `564cf0a`, `41e347e`, `6c9016a`, `d84f128`, `4521be9` | `checkpoint/f-02a-claim-evidence-schema-v2`, `checkpoint/f-02b-claim-evidence-currentness`, `checkpoint/f-02c-stable-file-access`, `checkpoint/f-02c-stable-file-access-review-fix`, `checkpoint/f-02c-registry-read-write-coordination`, `checkpoint/f-02d-claim-evidence-result-integrity` |
@@ -725,3 +726,24 @@ duplicate-key, replayed, or dangling-prepared history fails closed. F-05B create
 Markdown directory, decides no semantics, reads no Source or research binary, sends
 nothing externally, and exposes no CLI/MCP/Hook/Web or `ResearchCoreService` operation.
 Product rendering and Web editing remain later R3 units.
+
+E-02 is complete after validation on **2026-07-18** at implementation
+`c3ab7e0`, designated by `checkpoint/e-02-deterministic-project-map`. The
+strict Schema v1 `project-map-v1` artifact is derived exclusively from the exact
+current B-06 Manifest under `machine-state.lock`; it records the Manifest
+generation/count/bytes/SHA-256 binding, bounded directory aggregates and
+classification distributions, and ranked entrypoint, dependency, configuration,
+run-script, and key-file candidates with explicit omission counts.
+
+Structural loading rejects malformed, legacy/future, unknown, duplicate-key, and
+noncanonical documents. Current loading independently rebuilds the full expected
+payload, so stale or validly shaped tampered maps fail closed. Atomic generation
+rechecks Manifest bytes immediately before publication, replaces only stale maps,
+and never silently repairs a map that claims the current Manifest identity. The
+Core facade is `ResearchCoreService.project_map(project_id)`; E-02 adds no CLI,
+MCP, Hook, or Web operation. Validation produced **36 passed, 2 skipped** across
+the focused project-map/layout/Core suites and **679 passed, 27 skipped** in the
+full regression. Changed-file Ruff, `py_compile`, and `git diff --check` passed.
+No registered source bytes, curated Markdown, LLM, external send, semantic
+inference, or research-binary extraction were used. C-07 remains
+`deferred/not_started`. See [`project-map.md`](project-map.md).
