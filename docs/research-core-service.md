@@ -13,6 +13,7 @@
 - B-07 adaptive-reading-priority validation: `tests/test_reading_priority.py`, `tests/test_project_layout.py`
 - E-02 deterministic-project-map validation: `tests/test_project_map.py`
 - E-03 hierarchical-understanding validation: `tests/test_hierarchical_understanding.py`
+- E-05 research-linkage validation: `tests/test_research_linkage.py`
 - B-07 status: implemented and validated on **2026-07-17**; intended checkpoint `checkpoint/b-07-adaptive-reading-priority` is not yet created
 - Existing checkpoints: `checkpoint/g-01-core-service`, `checkpoint/g-07-mcp-server`, `checkpoint/g-08-host-context-pack`, `checkpoint/e-01-run-orchestrator`, `checkpoint/e-08-deterministic-understand`, and `checkpoint/h-04-host-event-ledger`; H-07 is complete after validation on 2026-07-16 and checkpointed as `checkpoint/h-07-project-reconciliation`
 
@@ -53,6 +54,7 @@ project and does not create state in the research source tree.
 | `prioritize(project_id)` | `tools.reading_priority.generate_reading_priority` over the exact current Manifest | local/path-bearing `ReadingPriorityResult` |
 | `project_map(project_id)` | `tools.project_map.generate_project_map` over the exact current Manifest | local/path-bearing `ProjectMapResult` |
 | `hierarchical_understanding(project_id, observations=...)` | `tools.hierarchical_understanding.generate_hierarchical_understanding` over explicit host chunk observations and the exact current Manifest | local/path-bearing `HierarchicalUnderstandingResult` |
+| `research_linkage(project_id, observations=...)` | `tools.research_linkage.generate_research_linkage` over explicit host entities/relations, the exact current Manifest, and current-project Evidence referential integrity | local/path-bearing `ResearchLinkageResult` |
 | `coverage(project_id)` | `tools.coverage_report.generate_coverage_report` | local/path-bearing `CoverageReportResult` |
 | `coverage_view(project_id)` | `coverage(...)` plus host-safe projection | path-free `HostCoverageResult` |
 | `host_context_pack(project_id, max_bytes=...)` | `tools.host_context.assemble_host_context_pack` over host-safe Core DTOs and current registries | path-free `HostContextPackResult` |
@@ -273,6 +275,47 @@ observations it records an honest Manifest-metadata-only fallback. Generation an
 current loading share `machine-state.lock`, bind exact Manifest bytes, and never
 open source-project files, call an LLM, or write curated Markdown. See
 [`hierarchical-understanding.md`](hierarchical-understanding.md).
+
+### Research provenance linkage
+
+```python
+from tools.research_linkage import (
+    ResearchEntityObservation,
+    ResearchRelationObservation,
+)
+
+linkage = core.research_linkage(
+    registration.project_id,
+    observations=[
+        ResearchEntityObservation(
+            "paper", "paper", "Method paper", "papers/method.md", "metadata"
+        ),
+        ResearchEntityObservation(
+            "implementation", "implementation", "Model", "src/model.py",
+            "implementation"
+        ),
+        ResearchRelationObservation(
+            "implementation", "paper", "implements-method-from",
+            "implementation"
+        ),
+    ],
+)
+```
+
+E-05 keeps host-declared scientific semantics separate from deterministic Core
+validation. It supports paper, method, innovation, dataset, configuration,
+implementation, claim, experiment, result, and unknown entities plus bounded
+lowercase kebab-case directed relation labels. Inference entities and relations
+cannot be labelled `observed`; metadata fallback rows remain uncertain
+candidates and create no semantic relation.
+
+Every referenced Evidence ID must exist in the current project's real Evidence
+registry. This is registry referential integrity, not F-02B Source-version,
+Locator, excerpt, stance, or Claim-currentness validation. The current loader
+uses the Source/Evidence lock order outside `machine-state.lock`, then rechecks
+the exact Manifest and artifact under `machine-state.lock`. E-05 opens no Source
+bytes, writes no curated Markdown, and adds no CLI, MCP, Hook, or Web operation.
+See [`research-linkage.md`](research-linkage.md).
 
 ### Reading priority
 

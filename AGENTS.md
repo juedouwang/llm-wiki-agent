@@ -104,18 +104,21 @@ Hook, or Web operation. See `docs/hierarchical-understanding.md`.
 
 Generate bounded E-05 research linkage with
 `ResearchCoreService.research_linkage(project_id, observations=...)`. The host
-explicitly supplies paper, method, innovation, dataset, implementation, claim,
-experiment, and result entities plus directed research relations. Core keeps
-implementation, paper-claim, inference, and metadata provenance classes
-separate, rejects host inference labelled as observed, validates duplicate-free
-Evidence IDs and current Manifest path bindings, and reports unresolved
-paper/method/relation gaps. Without semantic observations it emits a
-Manifest-metadata-only candidate inventory and never invents semantic links.
-Consumers must use `load_current_research_linkage(...)` before acting on the
-artifact. E-05 writes only Schema v1
-`.llmwiki/projects/<project_id>/indexes/research-linkage.json`, does not open
-registered source bytes, call an LLM, write curated Markdown, extract research
-binaries, or send anything externally. See `docs/research-linkage.md`.
+explicitly supplies paper, method, innovation, dataset, configuration,
+implementation, claim, experiment, and result entities plus bounded lowercase
+kebab-case directed relation labels. Core keeps implementation, paper-claim,
+inference, and metadata provenance separate; inference entities and relations
+cannot claim observed certainty. Evidence-bearing generation and current loading
+require every ID to exist in the current project's Evidence registry, but this
+referential check is not F-02B Source/Locator/excerpt currentness. Without
+semantic observations E-05 emits only uncertain Manifest-metadata candidates,
+including configuration and implementation candidates, and never invents links
+or observed implementation facts. Consumers must use
+`load_current_research_linkage(...)`. The artifact uses the strict Schema v1
+envelope with `research-linkage-v2`; legacy v1 is not migrated. E-05 does not
+open Source bytes, call an LLM, write curated Markdown, extract research
+binaries, add CLI/MCP/Hook/Web behavior, or send anything externally. See
+`docs/research-linkage.md`.
 
 Generate bounded E-06 experiment chains with
 `ResearchCoreService.experiment_chains(project_id, observations=...)`. The host

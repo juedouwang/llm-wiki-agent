@@ -3,9 +3,9 @@
 - 状态：**已确认，作为后续开发的产品基线**
 - 决策编号：`P-05 Agent 原生执行闭环`、`P-08 Agent-native 科研工具架构`
 - 确认日期：2026-07-15
-- Latest supplement: 2026-07-18 (F-05A ownership-safe controlled Markdown planning)
+- Latest supplement: 2026-07-18 (reviewed E-05 research-linkage-v2 and E-06 experiment chains)
 - 适用分支：`research-assistant`
-- 当前实现边界（截至 2026-07-18）：确定性入口包括项目注册/盘点、B-07 `prioritize`、B-08 `coverage`、`project understand` 的 `register -> inventory -> classify` 前缀，以及 H-07/J-05 reconciliation 集成；F-01 已提供严格知识路径/Schema 与空目录骨架，F-02A 已提供 Knowledge Schema v2 结构门，F-02B 仅提供 Core 内部、只读的 Claim–Evidence 绑定和当前性校验。B-07 仍只生成独立机器建议，不推进 `adaptive-read`；F-02B 不持久化 `stale` 或修改 Markdown/registry；H-05 选择性刷新、15 类 Markdown、Verified Query、成熟规划、产品 Web/`--open` 与 Claude Code 适配仍未完成。 F-03A now adds a Core-internal, read-only project entity/directed-relation schema, current Knowledge Schema v2 page binding, and deterministic backlink/project-index projection; it does not persist relation/index state or modify Markdown. F-04A now validates host-declared Claim lifecycle transitions and explicit conflict coexistence without persistence or semantic inference. F-05A adds only a Core-internal, in-memory controlled Markdown plan that protects explicit body ownership and returns caller-snapshot/hash metadata; it does not write, lock, persist audit state, authorize scientific semantics, or add CLI/MCP/Web behavior.
+- 当前实现边界（截至 2026-07-18）：确定性入口包括项目注册/盘点、B-07 `prioritize`、B-08 `coverage`、`project understand` 的 `register -> inventory -> classify` 前缀，以及 H-07/J-05 reconciliation 集成。F-01 至 F-03 已提供严格知识路径、Knowledge Schema v2、Claim–Evidence currentness/result-integrity 和显式研究实体/关系；F-04A 仍只是只读生命周期校验，F-05A/F-05B 已提供受控 Markdown 计划、精确持久化和审计边界。E-02 至 E-06 的当前机器产物包括项目地图、分层理解、执行流、reviewed `research-linkage-v2` 和实验链；其中 E-05 只验证当前项目 Evidence registry 引用完整性，不替代 F-02B 的 Source/Locator/excerpt currentness，也不把 metadata candidate 或 paper claim 自动提升为项目事实。B-07 仍只生成独立机器建议，不推进 `adaptive-read`；H-05 选择性刷新、E-07 的 15 类 Markdown 渲染、Verified Query、成熟规划、产品 Web/`--open` 与 Claude Code 适配仍未完成。
 
 ## 1. 产品定义
 
@@ -71,6 +71,8 @@ Research Core 是产品本体，负责：
 - 为宿主 Agent 提供可验证上下文，而不是替宿主再开一个聊天会话；
 - 根据 diff、测试、日志、实验产物或用户确认核验任务完成情况；
 - 生成本地科研管理网站。
+
+Research Core 对科研语义保持保守：论文中的主张不会自动成为项目实现事实，Manifest metadata 中的 source-code/notebook candidate 也不会自动成为 observed implementation。宿主声明的 inference 实体或关系不得伪装成 `observed`。E-05 对 Evidence 的检查仅证明 ID 存在于当前项目 registry；Source 版本、内容哈希、Locator、excerpt、stance 和 Claim currentness 仍由 F-02B/F-02D 等专门边界验证。
 
 ### 2.3 MCP、Plugin、Skill、Hook 与指导文件
 

@@ -795,29 +795,41 @@ opens no source bytes, calls no LLM, writes no curated Markdown, performs no
 binary semantic extraction, and sends nothing externally. C-07 remains
 `deferred/not_started`. See [`execution-flow.md`](execution-flow.md).
 
-E-05 is complete after validation on **2026-07-18** at implementation
-`23736d9`, designated by `checkpoint/e-05-research-linkage`. The strict Schema
-v1 `llmwiki-research-linkage` artifact (`research-linkage-v1`) records bounded
-paper, method, innovation, dataset, implementation, claim, experiment, and
-result entities plus directed research relations. Every entity and relation
-retains an explicit `implementation`, `paper-claim`, `inference`, or `metadata`
-assertion class, bounded duplicate-free Evidence IDs, and explicit certainty;
-host inference cannot claim observed certainty.
+E-05 is complete after corrective review on **2026-07-18**. The original v1
+implementation `23736d9` / `checkpoint/e-05-research-linkage` and documentation
+checkpoint `c2fe5b4` / `checkpoint/e-05-research-linkage-final` remain as
+historical checkpoints but are superseded. The reviewed implementation is
+`ee00b4a`, designated by `checkpoint/e-05-research-linkage-v2`, and is integrated
+on `research-assistant` as `0f81d8b`.
 
-Without semantic observations, E-05 emits a deterministic Manifest-metadata
-candidate inventory, no invented semantic relation, and explicit research gaps.
-The artifact binds to the exact current Manifest generation, ordinary-file
-count/bytes, and SHA-256. Strict canonical JSON, closed fields, stable entity,
-relation, and artifact IDs, current Manifest path projection, shared
-`machine-state.lock`, atomic publication, and exact pre-replace Manifest
-revalidation are enforced.
+The strict Schema v1 `llmwiki-research-linkage` envelope now requires
+`research-linkage-v2`. It records paper, method, innovation, dataset,
+configuration, implementation, claim, experiment, result, and unknown entities.
+The host declares bounded lowercase kebab-case directed relations instead of
+Core pretending a fixed relation vocabulary is scientifically complete.
+`implementation`, `paper-claim`, `inference`, and `metadata` provenance remain
+separate; inference entities and relations cannot claim observed certainty. A
+relation identity binds project, endpoints, relation label, and assertion class,
+not mutable prose, Evidence, certainty, or uncertainty.
 
-Validation produced **7 passed** in the focused E-05 suite, **37 passed, 1
-skipped** across dependent linkage/execution-flow/layout/Core suites, and **706
-passed, 28 skipped** in full regression. Changed-file Ruff, `py_compile`, and
-`git diff --check` passed. E-05 opens no registered source bytes, calls no LLM,
-writes no curated Markdown, performs no research-binary extraction, and sends
-nothing externally. C-07 remains `deferred/not_started`. See
+Every Evidence-bearing build and current load now requires each referenced ID to
+exist in the actual current project's Evidence registry. This is registry
+referential integrity only, not F-02B Source-version/Locator/excerpt currentness
+or scientific verification. Without host semantics the deterministic fallback
+emits only uncertain metadata candidates, including configuration and
+implementation candidates, and never labels a source-code candidate as observed
+implementation provenance or invents a relation. Generation/current loading
+bind the exact Manifest, use the Source/Evidence lock order outside
+`machine-state.lock`, and recheck the machine artifact before return. Legacy v1
+artifacts fail closed without migration.
+
+Validation produced **11 passed** in the focused E-05 suite, **109 passed, 5
+skipped** across E-06/E-05/E-04/E-03/E-02/layout/Core/Evidence suites, and **718
+passed, 28 skipped** in integrated full regression. Changed-file Ruff,
+`py_compile`, and `git diff --check` passed. E-05 opens no registered Source
+bytes, calls no LLM, writes no curated Markdown, performs no research-binary
+extraction, adds no CLI/MCP/Hook/Web operation, and sends nothing externally.
+C-07 remains `deferred/not_started`. See
 [`research-linkage.md`](research-linkage.md).
 
 E-06 is complete after validation on **2026-07-18** at implementation
