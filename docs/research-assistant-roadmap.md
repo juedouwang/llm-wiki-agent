@@ -61,7 +61,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | F-02 Claim-Evidence directional binding and currentness | complete after F-02A/F-02B validation, F-02C stable-object plus registry-coordination hardening, and F-02D result-integrity repair on 2026-07-18 | `ba3846c`, `564cf0a`, `41e347e`, `6c9016a`, `d84f128`, `4521be9` | `checkpoint/f-02a-claim-evidence-schema-v2`, `checkpoint/f-02b-claim-evidence-currentness`, `checkpoint/f-02c-stable-file-access`, `checkpoint/f-02c-stable-file-access-review-fix`, `checkpoint/f-02c-registry-read-write-coordination`, `checkpoint/f-02d-claim-evidence-result-integrity` |
 | F-03 project research entities and directed relations | complete after F-03A validation on 2026-07-18 | `dcfa1d7`, `04856ce` | `checkpoint/f-03a-research-relations-final` |
 | F-04 Claim lifecycle and explicit conflict coexistence | partial after bounded F-04A validation on 2026-07-18; persistence and controlled Markdown mutation remain outside this unit | `738e086` | `checkpoint/f-04a-claim-lifecycle` |
-| F-05 controlled Markdown writing | partial after bounded F-05A validation on 2026-07-18; live-file exact-CAS persistence, trusted actor attribution, and conflict/audit ledger remain F-05B | `642ab9e` | `checkpoint/f-05a-controlled-markdown-plan` |
+| F-05 controlled Markdown writing | complete after bounded F-05A planning and F-05B persistence/audit validation on 2026-07-18 | `642ab9e`, `53f4b3c` | `checkpoint/f-05a-controlled-markdown-plan`, `checkpoint/f-05b-controlled-markdown-persistence`, `checkpoint/f-05b-controlled-markdown-persistence-final` |
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
 | J-05 Codex reference adapter package | complete after validation on 2026-07-16 | `62ccbdc` | `checkpoint/j-05-codex-plugin` |
@@ -702,7 +702,21 @@ Knowledge Schema, Claim Evidence, Claim lifecycle, and research-relation suites;
 integrated full regression produced **629 passed, 24 skipped**. Changed-file Ruff,
 `py_compile`, manual High/Medium review, and `git diff --check` passed. F-05A performs
 no filesystem I/O, lock, audit persistence, Source or research-binary read, external
-send, stale propagation, or CLI/MCP/Web publication. F-05 remains `partial`; F-05B
-must freshly read the live knowledge file, rebind the exact base/proposal plus trusted
-host/user decisions, perform an exact CAS immediately before atomic replacement, and
-record bounded conflict/audit outcomes.
+send, stale propagation, or CLI/MCP/Web publication.
+
+F-05B completes the bounded F-05 Core contract on **2026-07-18**. Under the stable
+per-project `indexes/machine-state.lock`, it reloads the exact registration, opens the
+already-existing knowledge parent, reads the live page, independently recomputes F-05A
+from live bytes plus the raw proposal, and requires a structured host/actor/session/
+decision authorization bound to every exact revision and plan field. Authorization IDs
+and trusted decision tuples are single-use. Stable-file publication uses a pinned
+knowledge directory, non-clobbering creation, an immediate exact-hash recheck before
+atomic replace, and post-publication output-hash verification; conflicts never rebase.
+
+The strict bounded body-free audit ledger records adjacent `prepared -> committed`,
+`conflict`, safe pre-publication `failed`, or `commit-unknown` transactions. Malformed,
+legacy/future, noncanonical, duplicate-key, replayed, or dangling-prepared history fails
+closed. F-05B creates no Markdown directory, decides no semantics, reads no Source or
+research binary, sends nothing externally, and exposes no CLI/MCP/Hook/Web or
+`ResearchCoreService` operation. Product rendering and Web editing remain later R3
+units.
