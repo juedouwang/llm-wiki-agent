@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import hashlib
@@ -36,6 +36,23 @@ from tools.research_core import ResearchCoreService
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "minimal_research_project"
 DETERMINISTIC_PREFIX = ("register", "inventory", "classify")
+PRODUCT_PATHS = (
+    "overview.md",
+    "project-map.md",
+    "reproduction.md",
+    "architecture.md",
+    "papers/index.md",
+    "methods/index.md",
+    "datasets/index.md",
+    "experiments/index.md",
+    "results/index.md",
+    "claims/index.md",
+    "open-questions.md",
+    "status.md",
+    "risks.md",
+    "goals.md",
+    "plans/backlog.md",
+)
 
 
 class ProjectUnderstandTests(unittest.TestCase):
@@ -189,6 +206,52 @@ class ProjectUnderstandTests(unittest.TestCase):
         self.assertIsNone(record["artifacts"][0]["content_hash"])
         for artifact in record["artifacts"][1:]:
             self.assertRegex(artifact["content_hash"], r"^[0-9a-f]{64}$")
+
+    def assert_complete_pipeline(self, result: object) -> None:
+        record = result.record
+        stages = record["stages"]
+        self.assertEqual(result.status, "succeeded")
+        self.assertIsNone(record["through_stage"])
+        self.assertIsNone(record["active_stage"])
+        self.assertEqual(
+            [stage["stage_id"] for stage in stages],
+            list(PROJECT_UNDERSTAND_STAGES),
+        )
+        self.assertEqual(
+            [stage["status"] for stage in stages],
+            ["succeeded"] * len(PROJECT_UNDERSTAND_STAGES),
+        )
+        self.assertEqual(
+            [len(stage["attempts"]) for stage in stages],
+            [1] * len(PROJECT_UNDERSTAND_STAGES),
+        )
+        self.assertTrue(
+            all(stage["attempts"][0]["status"] == "succeeded" for stage in stages)
+        )
+        self.assertEqual(record["errors"], [])
+        self.assertEqual(record["usage"]["input_tokens"], 0)
+        self.assertEqual(record["usage"]["output_tokens"], 0)
+        artifact_paths = {item["relative_path"] for item in record["artifacts"]}
+        self.assertIn("project.yaml", artifact_paths)
+        self.assertIn("manifest.jsonl", artifact_paths)
+        self.assertIn("indexes/coverage-report.json", artifact_paths)
+        self.assertIn("indexes/reading-priority.json", artifact_paths)
+        self.assertIn("indexes/project-map.json", artifact_paths)
+        self.assertTrue(any(path.endswith("/web/index.html") for path in artifact_paths))
+
+    def assert_complete_knowledge_package(self, project_id: str, run_id: str) -> None:
+        registration = load_registered_project(self.workspace, project_id)
+        for relative_path in PRODUCT_PATHS:
+            self.assertTrue(
+                (registration.layout.knowledge_root / relative_path).is_file(),
+                relative_path,
+            )
+        daily = list((registration.layout.knowledge_root / "plans" / "daily").glob("*.md"))
+        self.assertEqual(len(daily), 1)
+        self.assertTrue((registration.layout.knowledge_root / "index.md").is_file())
+        self.assertTrue(
+            (registration.layout.runs_dir / run_id / "web" / "index.html").is_file()
+        )
 
     def test_orchestrator_start_and_resume_hold_lock_for_complete_execution(
         self,
@@ -453,7 +516,7 @@ class ProjectUnderstandTests(unittest.TestCase):
             (registration.layout.indexes_dir / "coverage-report.json").is_file()
         )
 
-    def test_core_fresh_delegates_register_then_start_only_through_classify(
+    def test_core_fresh_delegates_register_then_start_complete_pipeline(
         self,
     ) -> None:
         service = ResearchCoreService(self.workspace)
@@ -526,12 +589,13 @@ class ProjectUnderstandTests(unittest.TestCase):
             {
                 "self": service,
                 "project_id": "delegated-study",
-                "through_stage": "classify",
+                "through_stage": None,
+                "_complete_pipeline": True,
             },
         )
         resume.assert_not_called()
 
-    def test_core_resume_delegates_register_then_resume_same_run_through_classify(
+    def test_core_resume_delegates_register_then_resume_same_run_complete_pipeline(
         self,
     ) -> None:
         service = ResearchCoreService(self.workspace)
@@ -605,7 +669,8 @@ class ProjectUnderstandTests(unittest.TestCase):
                 "self": service,
                 "project_id": "resume-study",
                 "run_id": resume_run_id,
-                "through_stage": "classify",
+                "through_stage": None,
+                "_complete_pipeline": True,
             },
         )
         start.assert_not_called()
@@ -688,6 +753,7 @@ class ProjectUnderstandTests(unittest.TestCase):
                 "deadline": "2026-09-30",
                 "daily_available_hours": 3.25,
                 "resume_run_id": run_id,
+                "through_stage": None,
             },
         )
 
@@ -738,7 +804,7 @@ class ProjectUnderstandTests(unittest.TestCase):
                 ),
             )
             first = service.project_understand(self.source, **options)
-            self.assert_deterministic_prefix(first)
+            self.assert_complete_pipeline(first)
             self.assert_current_machine_artifact_hashes(first)
 
             registration = load_registered_project(
@@ -757,11 +823,11 @@ class ProjectUnderstandTests(unittest.TestCase):
             guard.assert_not_called()
 
         self.assertEqual(resumed.run_id, first.run_id)
-        self.assert_deterministic_prefix(resumed)
+        self.assert_complete_pipeline(resumed)
         self.assert_current_machine_artifact_hashes(resumed)
         self.assertEqual(
-            [len(stage["attempts"]) for stage in resumed.record["stages"][:3]],
-            [1, 1, 1],
+            [len(stage["attempts"]) for stage in resumed.record["stages"]],
+            [1] * len(PROJECT_UNDERSTAND_STAGES),
         )
         self.assertEqual(
             sorted(registration.layout.runs_dir.glob("*/run.json")),
@@ -793,12 +859,24 @@ class ProjectUnderstandTests(unittest.TestCase):
                 "daily_available_hours": 2.0,
             },
         )
-        self.assertFalse(
-            any(path.is_file() for path in registration.layout.knowledge_root.rglob("*"))
-        )
+        self.assert_complete_knowledge_package(first.project_id, first.run_id)
         self.assertEqual(before, self.source_snapshot())
         self.assertFalse((self.source / ".llmwiki").exists())
         self.assertFalse((self.source / "wiki").exists())
+
+    def test_explicit_through_classify_preserves_prefix_compatibility(self) -> None:
+        before = self.source_snapshot()
+        result = ResearchCoreService(self.workspace).project_understand(
+            self.source,
+            project_id="prefix-compatibility-study",
+            knowledge_root=self.knowledge_root,
+            through_stage="classify",
+        )
+
+        self.assert_deterministic_prefix(result)
+        registration = load_registered_project(self.workspace, result.project_id)
+        self.assertFalse(any(registration.layout.knowledge_root.rglob("*.md")))
+        self.assertEqual(before, self.source_snapshot())
 
     def test_repeated_fresh_actions_reuse_registration_but_create_new_runs(
         self,
@@ -820,17 +898,15 @@ class ProjectUnderstandTests(unittest.TestCase):
         second = service.project_understand(self.source, **options)
 
         self.assertNotEqual(first.run_id, second.run_id)
-        self.assert_deterministic_prefix(first)
-        self.assert_deterministic_prefix(second)
+        self.assert_complete_pipeline(first)
+        self.assert_complete_pipeline(second)
         self.assert_current_machine_artifact_hashes(second)
         self.assertEqual(registration.project_file.read_bytes(), project_record_bytes)
         self.assertEqual(
             sorted(path.parent.name for path in registration.layout.runs_dir.glob("*/run.json")),
             sorted([first.run_id, second.run_id]),
         )
-        self.assertFalse(
-            any(path.is_file() for path in registration.layout.knowledge_root.rglob("*"))
-        )
+        self.assert_complete_knowledge_package(second.project_id, second.run_id)
 
     def test_actual_cli_run_emits_normal_persisted_project_run_result(self) -> None:
         before = self.source_snapshot()
@@ -882,7 +958,7 @@ class ProjectUnderstandTests(unittest.TestCase):
             payload["run_id"],
         )
         self.assertEqual(payload, {"ok": True, **persisted.as_dict()})
-        self.assert_deterministic_prefix(persisted)
+        self.assert_complete_pipeline(persisted)
         self.assert_current_machine_artifact_hashes(persisted)
 
         registration = load_registered_project(
@@ -929,30 +1005,75 @@ class ProjectUnderstandTests(unittest.TestCase):
         self.assertFalse((self.source / ".llmwiki").exists())
         self.assertFalse((self.source / "wiki").exists())
 
-    def test_cli_understand_rejects_open_and_later_stage_controls(self) -> None:
-        with patch("tools.project.ResearchCoreService") as service_type:
-            for unsupported in (["--open"], ["--through", "extract"]):
-                with self.subTest(unsupported=unsupported):
-                    stdout = io.StringIO()
-                    stderr = io.StringIO()
-                    with (
-                        redirect_stdout(stdout),
-                        redirect_stderr(stderr),
-                        self.assertRaises(SystemExit) as raised,
-                    ):
-                        project_main(
-                            [
-                                "understand",
-                                str(self.source),
-                                *unsupported,
-                                "--workspace-root",
-                                str(self.workspace),
-                            ]
-                        )
-                    self.assertEqual(raised.exception.code, 2)
-                    self.assertEqual(stdout.getvalue(), "")
-                    self.assertIn("unrecognized arguments", stderr.getvalue())
-            service_type.assert_not_called()
+    def test_cli_understand_open_is_cli_only_and_uses_run_web_index(self) -> None:
+        run_id = "run-20260718t000000000000z-0123456789ab"
+        run_dir = self.workspace / ".llmwiki" / "projects" / "open-study" / "runs" / run_id
+        web_index = run_dir / "web" / "index.html"
+        web_index.parent.mkdir(parents=True, exist_ok=True)
+        web_index.write_text("<!doctype html>", encoding="utf-8")
+        result = Mock()
+        result.as_dict.return_value = {
+            "schema_version": PROJECT_RUN_SCHEMA_VERSION,
+            "kind": PROJECT_RUN_RESULT_KIND,
+            "project_id": "open-study",
+            "run_id": run_id,
+            "run_file": str(run_dir / "run.json"),
+            "run": {"project_id": "open-study", "run_id": run_id, "status": "succeeded"},
+        }
+        service = Mock(spec=ResearchCoreService)
+        service.project_understand.return_value = result
+
+        with (
+            patch("tools.project.ResearchCoreService", return_value=service),
+            patch("tools.project.webbrowser.open", return_value=True) as browser_open,
+        ):
+            code, stdout, stderr = self.invoke_cli(
+                [
+                    "understand",
+                    str(self.source),
+                    "--project-id",
+                    "open-study",
+                    "--through",
+                    "web-render",
+                    "--open",
+                    "--workspace-root",
+                    str(self.workspace),
+                    "--json",
+                ]
+            )
+
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertTrue(json.loads(stdout)["ok"])
+        self.assertEqual(service.project_understand.call_args.kwargs["through_stage"], "web-render")
+        browser_open.assert_called_once_with(web_index.resolve().as_uri(), new=0, autoraise=False)
+
+    def test_cli_understand_open_reports_stable_error_when_web_is_unavailable(self) -> None:
+        run_id = "run-20260718t000000000000z-0123456789ab"
+        result = Mock()
+        result.as_dict.return_value = {
+            "run_file": str(self.workspace / "runs" / run_id / "run.json"),
+        }
+        service = Mock(spec=ResearchCoreService)
+        service.project_understand.return_value = result
+        with patch("tools.project.ResearchCoreService", return_value=service):
+            code, stdout, stderr = self.invoke_cli(
+                [
+                    "understand",
+                    str(self.source),
+                    "--through",
+                    "classify",
+                    "--open",
+                    "--workspace-root",
+                    str(self.workspace),
+                    "--json",
+                ]
+            )
+
+        self.assertEqual((code, stdout), (2, ""))
+        payload = json.loads(stderr)
+        self.assertEqual(payload["reason_code"], "project-understand-browser-unavailable")
+
+
 
 
 if __name__ == "__main__":

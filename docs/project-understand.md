@@ -1,35 +1,34 @@
-# Deterministic Project Understand (E-08, Initial R2 Slice)
+# Complete Project Understand (E-08, R3 slice)
 
-- Status: implemented initial deterministic R2 slice
-- Scope: deterministic `register -> inventory -> classify` entry point only
+- Status: implemented deterministic full `project understand` pipeline
+- Scope: one-action `register -> inventory -> classify -> extract -> adaptive-read -> synthesize -> evidence -> status -> plan -> index -> web-render`
 - Core method: `ResearchCoreService.project_understand(...)`
 - CLI: `python -m tools.project understand ...`
 - Orchestration: existing E-01 `ProjectRunOrchestrator`
 - Durable result: `ProjectRunResult`
-- Validation: `tests/test_project_understand.py` plus E-01/Core regressions
-- Checkpoint: `checkpoint/e-08-deterministic-understand`
-- H-07 reuse: [`project-reconciliation.md`](project-reconciliation.md)
-- B-07 boundary (2026-07-17): standalone [`reading-priority.md`](reading-priority.md), not invoked by this action
+- Validation: `tests/test_project_understand.py`, lock-coordination tests, and dependent Core/run suites
+- Checkpoint: `checkpoint/e-08-complete-understand`
 
 ## Purpose
 
-This E-08 slice exposes the deterministic prefix that already exists behind the
-E-01 run orchestrator as **one user action**. Given a research-project path, the
-action idempotently registers or reuses that path and executes the canonical
-run only through `classify`:
+E-08 is the user-facing one-action entry point for the R3 project-understanding
+slice. Given a registered research-project path, it reuses or creates the stable
+project identity, runs every currently available deterministic stage, produces
+the complete fifteen-entry curated Knowledge Schema package, and publishes a
+self-contained read-only HTML index under the run directory.
+
+The canonical stage order is durable and resumable:
 
 ```text
-register -> inventory -> classify
+register -> inventory -> classify -> extract -> adaptive-read -> synthesize
+         -> evidence -> status -> plan -> index -> web-render
 ```
 
-It does not duplicate the E-01 state machine, stage handlers, checkpointing, or
-retry rules. The complete canonical stage list is still present in the durable
-run report, but this entry point deliberately pauses before `extract`.
-
-The standalone B-07 `ResearchCoreService.prioritize(project_id)` / `python
-tools/project.py prioritize <project_id> --json` operation exists separately.
-`project_understand` does not invoke it, create `reading-priority.json`, or mark
-the canonical `adaptive-read` stage as attempted or succeeded.
+The default API and CLI run through `web-render`. `through_stage` / `--through`
+remain available for bounded prefix execution and recovery. A prefix result is
+honest about being paused; it does not mark later stages as successful. Resuming
+with the same `run_id` preserves successful stage checkpoints and only executes
+remaining stages.
 
 ## Core API
 
@@ -37,7 +36,6 @@ the canonical `adaptive-read` stage as attempted or succeeded.
 from tools.research_core import ResearchCoreService
 
 core = ResearchCoreService(workspace_root=r"E:\ResearchCore")
-
 result = core.project_understand(
     project_root=r"E:\Projects\study",
     project_id=None,
@@ -49,46 +47,64 @@ result = core.project_understand(
     deadline=None,
     daily_available_hours=None,
     resume_run_id=None,
+    through_stage=None,
 )
 
-print(result.project_id)
-print(result.run_id)
-print(result.status)
-print(result.record)
+print(result.project_id, result.run_id, result.status)
+print(result.as_dict())
 ```
 
-`project_understand` returns the same local, path-bearing `ProjectRunResult`
-used by the E-01 run APIs. Its `as_dict()` projection contains the `project_id`,
-`run_id`, durable `run_file`, and complete `run` report.
+The Core facade has no browser, HTTP-server, MCP, Hook, or host-agent dependency.
+It writes machine artifacts only below
+`.llmwiki/projects/<project_id>/` and delegates curated Markdown persistence to
+the existing E-07 renderer and F-05 controlled Markdown path.
 
-### Registration and onboarding options
+### Stage boundaries
+
+The stages are deterministic local orchestration boundaries, not a claim that
+all source semantics have been understood:
+
+| Stage | Deterministic output | Explicit limitation |
+|---|---|---|
+| `register` | stable project context | registration is not a scan |
+| `inventory` | current Manifest | source project remains read-only |
+| `classify` | coverage report | status/reason is classification state |
+| `extract` | project-map and stage report | no invented semantic observations |
+| `adaptive-read` | reading-priority and hierarchy artifacts | no LLM or semantic file reading |
+| `synthesize` | execution/linkage/experiment-chain candidates | host observations remain separate |
+| `evidence` | Evidence readiness report | no Evidence is invented without locators |
+| `status` | reconstructable machine-state summary | user confirmation is not fabricated |
+| `plan` | bounded `DRAFT` suggestions | not a mature autonomous planner |
+| `index` | fifteen Markdown product entries and unified index | missing grounding stays `DRAFT` |
+| `web-render` | run-local self-contained HTML | read-only static view |
+
+The pipeline does not implement C-07. Scientific binary files remain covered by
+the existing classification/policy boundary and are not semantically opened,
+loaded, or sent externally. External model calls are not required for this
+slice.
+
+## Registration and onboarding options
 
 The one-action API accepts the same first-registration controls as
 `ResearchCoreService.register`:
 
 | Core argument | CLI option | Meaning |
 |---|---|---|
-| `project_id` | `--project-id` | Optional explicit, path-safe project ID |
-| `name` | `--name` | Human-readable project name |
-| `knowledge_root` | `--knowledge-root` | Parent directory for curated per-project knowledge |
-| `final_goal` | `--goal` / `--final-goal` | Initial final research goal |
-| `current_stage` | `--current-stage` | Initial research stage |
-| `important_question` | `--important-question` | Most important initial question |
-| `deadline` | `--deadline` | Optional ISO date, `YYYY-MM-DD` |
-| `daily_available_hours` | `--daily-hours` | Available hours per day, greater than 0 and at most 24 |
+| `project_id` | `--project-id` | optional explicit path-safe project ID |
+| `name` | `--name` | human-readable project name |
+| `knowledge_root` | `--knowledge-root` | parent directory for curated knowledge |
+| `final_goal` | `--goal` / `--final-goal` | initial final research goal |
+| `current_stage` | `--current-stage` | initial research stage |
+| `important_question` | `--important-question` | most important initial question |
+| `deadline` | `--deadline` | optional ISO date (`YYYY-MM-DD`) |
+| `daily_available_hours` | `--daily-hours` | number in `(0, 24]` |
 
-Registration is idempotent for the same resolved project path. If the path is
-already registered, its existing identity and storage layout are reused rather
-than rewritten. Explicit options supplied on reuse must agree with the existing
-registration; this command is not a metadata-update operation.
-
-Registration reuse and run reuse are separate. A call without `resume_run_id`
-starts a new logical run and therefore gets a new `run_id`, even when the
-project registration already exists.
+Registration is idempotent for the same resolved source path. Reuse does not
+silently update existing onboarding metadata. A fresh call without
+`resume_run_id` creates a new logical run; `--resume-run` continues an existing
+run with the same `run_id`.
 
 ## CLI
-
-Synopsis:
 
 ```text
 python -m tools.project understand <project-path>
@@ -101,203 +117,100 @@ python -m tools.project understand <project-path>
     [--deadline YYYY-MM-DD]
     [--daily-hours <hours>]
     [--resume-run <run_id>]
+    [--through <canonical-stage>]
+    [--open]
     [--workspace-root <workspace>]
     [--json]
 ```
 
-Start a fresh deterministic run:
+Examples:
 
 ```powershell
 python -m tools.project understand E:\Projects\study `
   --workspace-root E:\ResearchCore `
-  --goal "Reproduce the reported result" `
+  --goal "Reproduce the baseline" `
   --json
-```
 
-Resume the same logical run:
-
-```powershell
 python -m tools.project understand E:\Projects\study `
   --workspace-root E:\ResearchCore `
-  --resume-run run-YYYYMMDDtHHMMSSffffffz-xxxxxxxxxxxx `
-  --json
+  --resume-run <run_id> `
+  --open
 ```
 
-The CLI delegates directly to `ResearchCoreService.project_understand`; it does
-not perform registration, source traversal, run persistence, or stage execution
-inside the transport layer.
+`--open` is deliberately a CLI-adapter feature. After Core completes the
+`web-render` stage, the CLI asks the platform default browser to open the
+run-local `web/index.html`. Core never launches a browser. A missing page,
+failed browser adapter, or a browser returning failure maps to the stable
+`project-understand-browser-unavailable` error and does not create an alternate
+web state.
 
-## Deterministic stage mapping
+## Outputs and storage boundary
 
-The entry point always asks E-01 to run through `classify`.
-
-| Stage | Existing deterministic Core operation | Expected durable state after a successful fresh action |
-|---|---|---|
-| `register` | Revalidate the newly created or reused registration with `project_context` | `succeeded` |
-| `inventory` | Run the B-02 through B-06 policy-aware `scan` chain | `succeeded` |
-| `classify` | Generate deterministic classification coverage with `coverage` | `succeeded` |
-| `extract` through `web-render` | Not invoked by this slice | `pending` |
-
-The inventory handler already performs deterministic file classification while
-writing the current Manifest. The separate `classify` stage consumes that
-Manifest through the existing coverage operation; E-08 does not add another
-scanner or classifier. B-07 priority generation is not part of this mapping:
-its recommendation artifact remains outside the run, and later stages stay
-pending.
-
-A complete `ProjectRunOrchestrator.start` or `resume` execution holds the stable
-per-project `indexes/machine-state.lock`. Run creation/save, inventory, and
-coverage acquire the same lock defensively and reenter it on the same thread.
-Independent B-07 priority generation also uses this lock, although this action
-does not call it. This serializes same-project writers while leaving different
-projects independent. The lock file is a persistent coordination artifact.
-
-## Relationship to H-07 reconciliation
-
-Validated on 2026-07-16, H-07 reuses this exact three-stage deterministic prefix
-as the correctness fallback for an already registered project. The two entry
-points have different responsibilities:
-
-| Entry point | Identity input | Event boundary | Durable result |
-|---|---|---|---|
-| `project_understand(project_root, ...)` | source-project path; register or reuse identity | none | resumable E-01 run paused after `classify` |
-| `project_reconcile(project_id, ...)` | existing registered `project_id` | snapshot and later acknowledge only the starting H-04 event prefix | fresh E-01 run plus strict `indexes/reconciliation-state.json` checkpoint |
-
-H-07 calls the full prefix even when Hooks are disabled and dirty-path hints are
-absent or inconsistent. It does not resume an earlier understand run or use hints
-to skip files. If reconciliation fails, its acknowledgement remains unchanged;
-if events arrive after the starting snapshot, they remain pending.
-
-This reuse does not expand E-08 beyond `classify`. Neither operation performs
-B-07 priority generation, advances `adaptive-read`, performs H-05 selective
-extraction, or refreshes curated knowledge. See
-[`project-reconciliation.md`](project-reconciliation.md).
-
-## Result and resume contract
-
-After a successful fresh action:
-
-- `result.run_id` identifies a newly created logical run;
-- `result.status` and `result.record["status"]` are `paused`;
-- `result.record["through_stage"]` is `classify`;
-- `register`, `inventory`, and `classify` are `succeeded`;
-- every later canonical stage remains `pending`, not falsely reported as
-  successful or unavailable;
-- the complete report is persisted at
-  `.llmwiki/projects/<project_id>/runs/<run_id>/run.json`.
-
-`resume_run_id` switches the operation from E-01 start to E-01 resume while
-retaining the same `run_id`. Succeeded stages are skipped and do not receive
-duplicate attempts. A failed or interrupted stage inside the three-stage prefix
-is handled by the existing E-01 retry and recovery rules. Even on resume, this
-E-08 slice still stops at `classify`; it does not advance into later stages.
-
-Registration errors occur before a run can start. Once a run exists, stage
-failures remain visible in its durable E-01 report rather than being converted
-into a successful placeholder.
-
-## Storage and source boundary
-
-Generated machine state remains under the configured Research Core workspace:
+A successful run has a durable report at:
 
 ```text
-.llmwiki/projects/<project_id>/
-|-- project.yaml
-|-- manifest.jsonl
-|-- indexes/
-|   |-- coverage-report.json
-|   `-- reading-priority.json  # optional B-07 artifact; not written by understand
-`-- runs/
-    `-- <run_id>/
-        `-- run.json
+.llmwiki/projects/<project_id>/runs/<run_id>/run.json
 ```
 
-The configured curated tree, normally `wiki/projects/<project_id>/` or the
-corresponding directory below `--knowledge-root`, is only reserved by project
-registration. This slice does not write curated summaries, plans, evidence
-pages, or any of the planned research artifacts there.
+Stage reports and JSON artifacts live under the same run directory. The generated
+HTML is:
 
-When H-07 invokes the same stage prefix, it may additionally write the H-04
-projection repair and strict
-`.llmwiki/projects/<project_id>/indexes/reconciliation-state.json` checkpoint.
-Those are machine-state effects of reconciliation, not effects of the
-`project_understand` entry point, and curated knowledge remains unchanged.
+```text
+.llmwiki/projects/<project_id>/runs/<run_id>/web/index.html
+```
 
-The research source directory remains read-only. The deterministic action may
-read source metadata and policy-authorized file content for inventory and
-classification, but it does not create source-local `.llmwiki/`, `wiki/`, or
-legacy `<project-name>-wiki/` output and does not modify source files.
-
-## Explicit non-goals
-
-This initial R2 slice is **not** any of the following:
-
-- extraction or extracted-document orchestration;
-- adaptive-reading orchestration or run-stage advancement; B-07 exists only as a
-  separate recommendation command;
-- synthesis or generation of the planned 15 Markdown artifacts;
-- Evidence, status, planning, or indexing pipeline completion;
-- Web rendering, a local dashboard, browser launch, or `--open` support;
-- Hook or Plugin wiring; explicit H-07 reconciliation exists separately and does
-  not install or trust Hooks;
-- H-05 selective extraction or selective knowledge refresh;
-- model-, provider-, or LLM-driven project understanding.
-
-No later stage is simulated merely to make the run look complete. Those
-capabilities remain later roadmap tasks and must install real handlers before
-they can advance the same persisted pipeline.
+The `index` stage writes the fifteen required entries in the registered
+knowledge root (or the configured custom knowledge root), including a dated
+`plans/daily/YYYY-MM-DD.md` page and a unified `index.md`. Machine hashes,
+indexes, run state, and reports never move into the curated knowledge root.
+The source project is not modified.
 
 ## Validation
 
-Run the existing orchestration/Core regressions and the E-08 CLI smoke check:
+Focused and dependent checks:
 
 ```powershell
 python -B -m pytest -q -p no:cacheprovider `
   tests/test_project_understand.py `
+  tests/test_stable_file_access.py `
   tests/test_project_run_orchestration.py `
   tests/test_research_core_service.py
 
-python -B -m tools.project understand --help
+python -B -m py_compile `
+  tools/project.py tools/project_understand.py tools/research_core.py `
+  tools/advisory_lock.py tools/stable_file_access.py
 
 python -m ruff check `
-  tools/project.py `
-  tools/research_core.py `
-  tests/test_project_understand.py `
-  tests/test_project_run_orchestration.py `
-  tests/test_research_core_service.py
+  tools/project.py tools/project_understand.py tools/research_core.py `
+  tools/advisory_lock.py tools/stable_file_access.py `
+  tests/test_project_understand.py tests/test_stable_file_access.py
 ```
 
-Then run repository-level acceptance checks:
-
-```powershell
-python -B -m pytest -q -p no:cacheprovider
-$env:PYTHONIOENCODING = "utf-8"; python -B tools/health.py
-python -m pip check
-git diff --check
-```
-
-The E-08-focused assertions should verify fresh registration, registration
-reuse, onboarding-option delegation, a new `run_id` for each fresh action,
-`paused`/`classify` state, exactly three succeeded stages, pending later stages,
-resume with the same `run_id`, skipped succeeded stages, JSON CLI parity, and
+Repository acceptance also runs the full test suite, health, dependency, and
+Git whitespace checks. The E-08 assertions cover fresh/reused registration,
+full stage order, prefix execution, resume, fifteen curated outputs, the static
+web artifact, CLI/Core JSON parity, browser isolation, lock composition, and
 source-tree preservation.
+
+## Explicit non-goals
+
+E-08 does not claim any of the following:
+
+- C-07 scientific-binary metadata extraction;
+- semantic or LLM-driven reading of every source file;
+- Verified Query or a mature planning engine;
+- incremental selective extraction or automatic stale propagation;
+- a product Web dashboard or Web editing API (those are J-03/J-04);
+- browser, HTTP, MCP, Hook, or Plugin behavior inside Core;
+- external transmission of source content.
 
 ## Rollback
 
-Create the accepted checkpoint as:
+Use history-preserving rollback for the implementation commit:
 
 ```text
-checkpoint/e-08-deterministic-understand
-```
-
-Use normal history-preserving rollback for the E-08 implementation commit:
-
-```powershell
 git revert <e-08-commit>
 ```
 
-Do not delete existing project registrations, Manifests, reading-priority or
-coverage reports, or run directories during rollback. They are valid versioned machine records from
-the underlying B-series and E-01 contracts and should remain available for
-audit, status inspection, or a later explicit migration. Reverting E-08 removes
-the one-action facade; it does not require source-project cleanup.
+Do not delete registered project data or run artifacts during rollback. They are
+machine-state records owned by the underlying project and run contracts.

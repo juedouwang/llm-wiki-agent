@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import webbrowser
 from pathlib import Path
 from typing import Sequence
 
@@ -44,6 +45,12 @@ else:
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+class ProjectUnderstandBrowserError(LayoutError):
+    """Stable CLI-only failure while opening a completed understand run."""
+
+    reason_code = "project-understand-browser-unavailable"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -101,8 +108,8 @@ def _build_parser() -> argparse.ArgumentParser:
     understand = subparsers.add_parser(
         "understand",
         help=(
-            "Register or reuse a project and run the deterministic "
-            "understanding prefix."
+            "Register or reuse a project and run the complete deterministic "
+            "understanding pipeline."
         ),
     )
     understand.add_argument(
@@ -148,6 +155,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--resume-run",
         dest="resume_run_id",
         help="Resume this durable run instead of creating a new run ID",
+    )
+    understand.add_argument(
+        "--through",
+        dest="through_stage",
+        choices=PROJECT_UNDERSTAND_STAGES,
+        help="Pause after this canonical stage instead of running to web-render",
+    )
+    understand.add_argument(
+        "--open",
+        action="store_true",
+        dest="open_web",
+        help="Open this run's generated local web index in the default browser",
     )
     understand.add_argument(
         "--json",
@@ -581,6 +600,33 @@ def _run_register(args: argparse.Namespace) -> int:
     return 0
 
 
+def _open_project_understand_web(result: object) -> None:
+    """Open only the run-local static HTML produced by the Core pipeline."""
+
+    payload = result.as_dict()
+    run_file_value = payload.get("run_file")
+    if not isinstance(run_file_value, str) or not run_file_value:
+        raise ProjectUnderstandBrowserError(
+            "the project-understand result has no durable run file"
+        )
+    run_file = Path(run_file_value).expanduser().resolve()
+    target = (run_file.parent / "web" / "index.html").resolve()
+    if target.parent.parent != run_file.parent or not target.is_file():
+        raise ProjectUnderstandBrowserError(
+            "this run has no generated web index; run through web-render before using --open"
+        )
+    try:
+        opened = webbrowser.open(target.as_uri(), new=0, autoraise=False)
+    except Exception as exc:  # browser adapters are platform-specific
+        raise ProjectUnderstandBrowserError(
+            "the default browser could not open the generated web index"
+        ) from exc
+    if not opened:
+        raise ProjectUnderstandBrowserError(
+            "the default browser declined to open the generated web index"
+        )
+
+
 def _run_project_understand(args: argparse.Namespace) -> int:
     try:
         result = ResearchCoreService(args.workspace_root).project_understand(
@@ -594,7 +640,10 @@ def _run_project_understand(args: argparse.Namespace) -> int:
             deadline=args.deadline,
             daily_available_hours=args.daily_available_hours,
             resume_run_id=args.resume_run_id,
+            through_stage=args.through_stage,
         )
+        if args.open_web:
+            _open_project_understand_web(result)
     except (LayoutError, OSError) as exc:
         return _print_command_error(exc, as_json=args.json)
     return _print_project_run_result(result, as_json=args.json)

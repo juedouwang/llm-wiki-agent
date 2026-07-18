@@ -22,6 +22,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
+try:
+    from .advisory_lock import _current_thread_advisory_lock_descriptor
+except ImportError:  # pragma: no cover - direct sibling-module execution
+    from advisory_lock import _current_thread_advisory_lock_descriptor  # type: ignore
+
 
 _READ_CHUNK_BYTES = 1024 * 1024
 
@@ -1872,6 +1877,35 @@ def _lock_contention(exc: OSError) -> bool:
     } or getattr(exc, "winerror", None) in {33, 36}
 
 
+def _same_thread_advisory_lock_covers(
+    lock_file: Path,
+    stable_descriptor: int,
+) -> bool:
+    """Check whether the exact outer advisory lock protects this descriptor.
+
+    The advisory descriptor is borrowed and remains owned by its outer lock.
+    Comparing descriptor identities is important: a path replacement must not
+    turn same-thread re-entry into an authorization to bypass a different lock
+    object.
+    """
+
+    advisory_descriptor = _current_thread_advisory_lock_descriptor(lock_file)
+    if advisory_descriptor is None:
+        return False
+    try:
+        advisory_metadata = os.fstat(advisory_descriptor)
+        stable_metadata = os.fstat(stable_descriptor)
+    except OSError as exc:
+        raise StableFileVerificationUnavailableError(
+            f"could not verify coordinated advisory lock identity: {lock_file}"
+        ) from exc
+    if not os.path.samestat(advisory_metadata, stable_metadata):
+        raise StableFileChangedError(
+            f"advisory and stable lock identities differ: {lock_file}"
+        )
+    return True
+
+
 @contextmanager
 def exclusive_stable_file_lock(
     trusted_root: str | Path,
@@ -1900,23 +1934,24 @@ def exclusive_stable_file_lock(
     with lease_stable_directory(root) as lease:
         try:
             descriptor = _open_stable_lock_descriptor(lease, target)
-            deadline = time.monotonic() + float(timeout_seconds)
-            while True:
-                try:
-                    _try_platform_lock(descriptor)
-                    acquired = True
-                    break
-                except OSError as exc:
-                    if not _lock_contention(exc):
-                        raise StableFileReadError(
-                            f"could not acquire stable lock {target}: {exc}"
-                        ) from exc
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise StableFileLockTimeoutError(
-                            f"timed out waiting for stable lock: {target}"
-                        ) from exc
-                    time.sleep(min(float(retry_seconds), remaining))
+            if not _same_thread_advisory_lock_covers(target, descriptor):
+                deadline = time.monotonic() + float(timeout_seconds)
+                while True:
+                    try:
+                        _try_platform_lock(descriptor)
+                        acquired = True
+                        break
+                    except OSError as exc:
+                        if not _lock_contention(exc):
+                            raise StableFileReadError(
+                                f"could not acquire stable lock {target}: {exc}"
+                            ) from exc
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise StableFileLockTimeoutError(
+                                f"timed out waiting for stable lock: {target}"
+                            ) from exc
+                        time.sleep(min(float(retry_seconds), remaining))
             if os.fstat(descriptor).st_size < 1:
                 os.lseek(descriptor, 0, os.SEEK_SET)
                 if os.write(descriptor, b"\0") != 1:

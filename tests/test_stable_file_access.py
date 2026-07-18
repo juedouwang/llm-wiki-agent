@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tools import stable_file_access as stable_file_access_module
+from tools.advisory_lock import advisory_file_lock
 from tools.stable_file_access import (
     StableFileAccessError,
     StableFileBoundaryError,
@@ -478,6 +479,92 @@ class StableFileAccessTests(unittest.TestCase):
         ):
             self.assertTrue(lock_file.is_file())
         self.assertTrue(lock_file.is_file())
+
+    def test_same_thread_advisory_and_stable_lock_compose_without_relocking(self) -> None:
+        lock_file = self.trusted / "coordinated.lock"
+
+        with advisory_file_lock(lock_file, timeout_seconds=0.1):
+            with patch.object(
+                stable_file_access_module,
+                "_try_platform_lock",
+                wraps=stable_file_access_module._try_platform_lock,
+            ) as platform_lock:
+                with exclusive_stable_file_lock(
+                    self.trusted,
+                    lock_file,
+                    timeout_seconds=0.1,
+                ):
+                    self.assertTrue(lock_file.is_file())
+
+        platform_lock.assert_not_called()
+
+    def test_other_thread_cannot_bypass_same_thread_advisory_coordination(self) -> None:
+        lock_file = self.trusted / "coordinated-thread.lock"
+        started = threading.Event()
+        errors: list[BaseException] = []
+
+        def contender() -> None:
+            started.set()
+            try:
+                with exclusive_stable_file_lock(
+                    self.trusted,
+                    lock_file,
+                    timeout_seconds=0.05,
+                    retry_seconds=0.005,
+                ):
+                    errors.append(AssertionError("contended stable lock was acquired"))
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=contender, daemon=True)
+        with advisory_file_lock(lock_file, timeout_seconds=1.0):
+            thread.start()
+            self.assertTrue(started.wait(timeout=1.0))
+            thread.join(timeout=2.0)
+            self.assertFalse(thread.is_alive())
+
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], StableFileLockTimeoutError)
+
+    def test_different_advisory_path_does_not_enable_stable_lock_reentry(self) -> None:
+        advisory_path = self.trusted / "outer.lock"
+        stable_path = self.trusted / "inner.lock"
+
+        with advisory_file_lock(advisory_path, timeout_seconds=0.1):
+            with patch.object(
+                stable_file_access_module,
+                "_try_platform_lock",
+                wraps=stable_file_access_module._try_platform_lock,
+            ) as platform_lock:
+                with exclusive_stable_file_lock(
+                    self.trusted,
+                    stable_path,
+                    timeout_seconds=0.1,
+                ):
+                    self.assertTrue(stable_path.is_file())
+
+        platform_lock.assert_called_once()
+
+    def test_advisory_descriptor_identity_change_fails_closed(self) -> None:
+        lock_file = self.trusted / "identity.lock"
+        lock_file.write_bytes(b"lock A\n")
+        other_file = self.trusted / "other.lock"
+        other_file.write_bytes(b"lock B\n")
+        descriptor = os.open(other_file, os.O_RDONLY)
+        self.addCleanup(os.close, descriptor)
+
+        with patch.object(
+            stable_file_access_module,
+            "_current_thread_advisory_lock_descriptor",
+            return_value=descriptor,
+        ):
+            with self.assertRaises(StableFileChangedError):
+                with exclusive_stable_file_lock(
+                    self.trusted,
+                    lock_file,
+                    timeout_seconds=0.1,
+                ):
+                    self.fail("identity-mismatched advisory lock must not be yielded")
 
     @unittest.skipUnless(os.name == "nt", "Windows share-mode contract")
     def test_windows_atomic_temporary_denies_concurrent_writable_open(self) -> None:

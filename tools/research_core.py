@@ -32,6 +32,7 @@ if __package__:
     )
     from .extraction_schema import Locator, locator_from_dict
     from .reading_priority import (
+        READING_PRIORITY_VERSION,
         ReadingPriorityResult,
         generate_reading_priority,
     )
@@ -46,6 +47,7 @@ if __package__:
         load_dirty_path_queue,
         submit_host_event,
     )
+    from .project_layout import LayoutError
     from .project_inventory import (
         PROJECT_MANIFEST_VERSION,
         ProjectInventoryResult,
@@ -79,6 +81,11 @@ if __package__:
     )
     from .knowledge_renderer import KnowledgeRenderingResult
     from .project_map import ProjectMapResult, generate_project_map
+    from .project_understand import (
+        write_json_artifact,
+        write_stage_report,
+        write_static_web_index,
+    )
     from .project_orchestrator import (
         ProjectRunOrchestrator,
         StageContext,
@@ -115,6 +122,7 @@ else:
         locator_from_dict,
     )
     from reading_priority import (  # type: ignore[no-redef]
+        READING_PRIORITY_VERSION,
         ReadingPriorityResult,
         generate_reading_priority,
     )
@@ -129,6 +137,7 @@ else:
         load_dirty_path_queue,
         submit_host_event,
     )
+    from project_layout import LayoutError  # type: ignore[no-redef]
     from project_inventory import (  # type: ignore[no-redef]
         PROJECT_MANIFEST_VERSION,
         ProjectInventoryResult,
@@ -182,6 +191,11 @@ else:
         ProjectRunResult,
         StageOutcome,
     )
+    from project_understand import (  # type: ignore[no-redef]
+        write_json_artifact,
+        write_stage_report,
+        write_static_web_index,
+    )
     from scan_policy import (  # type: ignore[no-redef]
         ScanPolicyConfig,
         ScanPolicyError,
@@ -213,7 +227,6 @@ HOST_SOURCE_LOCATION_KIND = "llmwiki-host-source-location"
 HOST_SOURCE_LOCATION_VERSION = "host-source-location-v1"
 HOST_SOURCE_OPEN_KIND = "llmwiki-host-source-open"
 HOST_SOURCE_OPEN_VERSION = "host-source-open-v1"
-_PROJECT_UNDERSTAND_THROUGH_STAGE = "classify"
 
 _COVERAGE_AXES = (
     "research_role",
@@ -715,12 +728,30 @@ class ResearchCoreService:
             lock_timeout_seconds=lock_timeout_seconds,
         )
 
-    def _project_run_stage_runners(self) -> dict[str, StageRunner]:
-        return {
+    def _project_run_stage_runners(
+        self,
+        *,
+        complete_pipeline: bool = False,
+    ) -> dict[str, StageRunner]:
+        runners: dict[str, StageRunner] = {
             "register": self._run_registration_stage,
             "inventory": self._run_inventory_stage,
             "classify": self._run_classification_stage,
         }
+        if complete_pipeline:
+            runners.update(
+                {
+                    "extract": self._run_extract_stage,
+                    "adaptive-read": self._run_adaptive_read_stage,
+                    "synthesize": self._run_synthesize_stage,
+                    "evidence": self._run_evidence_stage,
+                    "status": self._run_status_stage,
+                    "plan": self._run_plan_stage,
+                    "index": self._run_index_stage,
+                    "web-render": self._run_web_render_stage,
+                }
+            )
+        return runners
 
     def _run_registration_stage(self, context: StageContext) -> StageOutcome:
         project = self.project_context(context.project_id)
@@ -773,6 +804,378 @@ class ResearchCoreService:
             ),
         )
 
+    def _run_machine_file_artifact(
+        self,
+        project_id: str,
+        path: Path,
+        *,
+        artifact_type: str,
+        artifact_id: str,
+    ) -> dict[str, Any]:
+        """Describe one current machine artifact without leaking an absolute path."""
+
+        registration = load_registered_project(self.workspace_root, project_id)
+        machine_root = registration.layout.machine_root.resolve()
+        target = path.expanduser().resolve()
+        try:
+            relative_path = target.relative_to(machine_root).as_posix()
+        except ValueError as exc:
+            raise LayoutError("stage artifact escaped the project machine root") from exc
+        return {
+            "artifact_type": artifact_type,
+            "artifact_id": artifact_id,
+            "relative_path": relative_path,
+            "content_hash": _sha256_file(target),
+        }
+
+    def _run_stage_report(
+        self,
+        context: StageContext,
+        *,
+        summary: str,
+        status: str = "complete",
+        reason_code: str = "deterministic-local-analysis",
+        inputs: Iterable[str] = (),
+        outputs: Iterable[str] = (),
+        gaps: Iterable[str] = (),
+    ) -> dict[str, Any]:
+        report = write_stage_report(
+            self.workspace_root,
+            context.project_id,
+            context.run_id,
+            context.stage_id,
+            summary=summary,
+            status=status,
+            reason_code=reason_code,
+            inputs=inputs,
+            outputs=outputs,
+            gaps=gaps,
+            created_at=context.run.get("updated_at"),
+        )
+        return report.as_run_artifact()
+
+    def _run_extract_stage(self, context: StageContext) -> StageOutcome:
+        """Build a deterministic structure map; do not pretend to read semantics."""
+
+        project_map = self.project_map(context.project_id)
+        report = self._run_stage_report(
+            context,
+            summary="Manifest-grounded project structure was extracted locally.",
+            reason_code="manifest-grounded-structure",
+            inputs=("current-project-manifest", "classified-file-state"),
+            outputs=("project-map",),
+            gaps=("semantic-source-observations-not-provided",),
+        )
+        map_artifact = self._run_machine_file_artifact(
+            context.project_id,
+            project_map.project_map_file,
+            artifact_type="project-map",
+            artifact_id="project-map-v1",
+        )
+        return StageOutcome.succeeded(
+            input_versions={"project_map_version": "project-map-v1"},
+            artifacts=(report, map_artifact),
+        )
+
+    def _run_adaptive_read_stage(self, context: StageContext) -> StageOutcome:
+        """Publish bounded priority and hierarchy artifacts without LLM reading."""
+
+        priority = self.prioritize(context.project_id)
+        hierarchical = self.hierarchical_understanding(context.project_id)
+        report = self._run_stage_report(
+            context,
+            summary="Reading priority and hierarchical metadata were generated locally.",
+            status="draft",
+            reason_code="metadata-only-adaptive-read",
+            inputs=("current-project-manifest", "reading-priority-rules"),
+            outputs=("reading-priority", "hierarchical-understanding"),
+            gaps=("selected-files-not-semantically-read",),
+        )
+        priority_artifact = self._run_machine_file_artifact(
+            context.project_id,
+            priority.priority_file,
+            artifact_type="reading-priority",
+            artifact_id="reading-priority-v1",
+        )
+        hierarchy_artifact = self._run_machine_file_artifact(
+            context.project_id,
+            hierarchical.understanding_file,
+            artifact_type="hierarchical-understanding",
+            artifact_id="hierarchical-understanding-v1",
+        )
+        return StageOutcome.succeeded(
+            input_versions={"reading_priority_version": READING_PRIORITY_VERSION},
+            artifacts=(report, priority_artifact, hierarchy_artifact),
+        )
+
+    def _run_synthesize_stage(self, context: StageContext) -> StageOutcome:
+        """Generate all deterministic synthesis candidates with explicit uncertainty."""
+
+        execution = self.execution_flow(context.project_id)
+        linkage = self.research_linkage(context.project_id)
+        chains = self.experiment_chains(context.project_id)
+        report = self._run_stage_report(
+            context,
+            summary="Execution, provenance, and experiment-chain candidates were synthesized locally.",
+            status="draft",
+            reason_code="deterministic-candidate-synthesis",
+            inputs=("project-map", "hierarchical-understanding", "classified-file-state"),
+            outputs=("execution-flow", "research-linkage", "experiment-chains"),
+            gaps=("host-semantic-observations-not-provided",),
+        )
+        artifacts = [
+            report,
+            self._run_machine_file_artifact(
+                context.project_id,
+                execution.execution_flow_file,
+                artifact_type="execution-flow",
+                artifact_id="execution-flow-v1",
+            ),
+            self._run_machine_file_artifact(
+                context.project_id,
+                linkage.research_linkage_file,
+                artifact_type="research-linkage",
+                artifact_id="research-linkage-v2",
+            ),
+            self._run_machine_file_artifact(
+                context.project_id,
+                chains.experiment_chains_file,
+                artifact_type="experiment-chains",
+                artifact_id="experiment-chains-v1",
+            ),
+        ]
+        return StageOutcome.succeeded(
+            input_versions={"synthesis_mode": "deterministic-local"},
+            artifacts=tuple(artifacts),
+        )
+
+    def _run_evidence_stage(self, context: StageContext) -> StageOutcome:
+        """Record an honest Evidence readiness boundary without inventing Evidence."""
+
+        report = self._run_stage_report(
+            context,
+            summary="Evidence readiness was recorded; no host Evidence observations were supplied.",
+            status="draft",
+            reason_code="no-host-evidence-observations",
+            inputs=("current-manifest", "deterministic-synthesis-artifacts"),
+            outputs=("evidence-readiness",),
+            gaps=("source-locators-and-excerpts-require-host-observations",),
+        )
+        readiness = write_json_artifact(
+            self.workspace_root,
+            context.project_id,
+            context.run_id,
+            "evidence-readiness.json",
+            {
+                "kind": "llmwiki-project-understand-evidence-readiness",
+                "artifact_version": "evidence-readiness-v1",
+                "project_id": context.project_id,
+                "run_id": context.run_id,
+                "status": "draft",
+                "reason_code": "no-host-evidence-observations",
+                "evidence_ids": [],
+                "source_bytes_read": False,
+                "external_send": False,
+            },
+            artifact_type="evidence-readiness",
+            artifact_id=f"{context.run_id}:evidence-readiness",
+        )
+        return StageOutcome.succeeded(
+            input_versions={"evidence_mode": "metadata-only"},
+            artifacts=(report, readiness.as_run_artifact()),
+        )
+
+    def _run_status_stage(self, context: StageContext) -> StageOutcome:
+        """Persist a reconstructable, draft-safe status summary for this run."""
+
+        coverage = self.coverage(context.project_id)
+        counts = coverage.report.get("counts", {})
+        report = self._run_stage_report(
+            context,
+            summary="Project status was summarized from current machine artifacts.",
+            status="draft",
+            reason_code="machine-state-status-summary",
+            inputs=("coverage-report", "synthesis-artifacts"),
+            outputs=("status-summary",),
+            gaps=("user-confirmed-status-not-provided",),
+        )
+        status_artifact = write_json_artifact(
+            self.workspace_root,
+            context.project_id,
+            context.run_id,
+            "status-summary.json",
+            {
+                "kind": "llmwiki-project-understand-status-summary",
+                "artifact_version": "status-summary-v1",
+                "project_id": context.project_id,
+                "run_id": context.run_id,
+                "status": "draft",
+                "reason_code": "machine-state-status-summary",
+                "counts": dict(counts) if isinstance(counts, Mapping) else {},
+                "stale": [],
+                "blockers": ["user-confirmed-status-not-provided"],
+            },
+            artifact_type="status-summary",
+            artifact_id=f"{context.run_id}:status-summary",
+        )
+        return StageOutcome.succeeded(
+            input_versions={"status_mode": "reconstructable-machine-summary"},
+            artifacts=(report, status_artifact.as_run_artifact()),
+        )
+
+    def _run_plan_stage(self, context: StageContext) -> StageOutcome:
+        """Create bounded next-step suggestions, never claim user authorization."""
+
+        project = self.project_context(context.project_id)
+        suggestions: list[dict[str, Any]] = []
+        if not project.final_goal:
+            suggestions.append(
+                {
+                    "task_id": "draft-define-goal",
+                    "title": "Define the research goal",
+                    "status": "DRAFT",
+                    "why_now": "The project has no user-confirmed final goal.",
+                }
+            )
+        suggestions.extend(
+            [
+                {
+                    "task_id": "draft-review-candidates",
+                    "title": "Review deterministic project candidates",
+                    "status": "DRAFT",
+                    "why_now": "Candidate structure is available but semantic review is pending.",
+                },
+                {
+                    "task_id": "draft-bind-evidence",
+                    "title": "Bind source locators and Evidence",
+                    "status": "DRAFT",
+                    "why_now": "No host Evidence observations were supplied.",
+                },
+            ]
+        )
+        report = self._run_stage_report(
+            context,
+            summary="A draft next-step plan was generated from machine-state gaps.",
+            status="draft",
+            reason_code="draft-plan-no-user-authorization",
+            inputs=("onboarding-context", "status-summary", "evidence-readiness"),
+            outputs=("plan-draft",),
+            gaps=("user-confirmation-required",),
+        )
+        plan_artifact = write_json_artifact(
+            self.workspace_root,
+            context.project_id,
+            context.run_id,
+            "plan-draft.json",
+            {
+                "kind": "llmwiki-project-understand-plan-draft",
+                "artifact_version": "plan-draft-v1",
+                "project_id": context.project_id,
+                "run_id": context.run_id,
+                "status": "DRAFT",
+                "reason_code": "draft-plan-no-user-authorization",
+                "tasks": suggestions,
+            },
+            artifact_type="plan-draft",
+            artifact_id=f"{context.run_id}:plan-draft",
+        )
+        return StageOutcome.succeeded(
+            input_versions={"plan_mode": "draft-only"},
+            artifacts=(report, plan_artifact.as_run_artifact()),
+        )
+
+    def _run_index_stage(self, context: StageContext) -> StageOutcome:
+        """Render the complete Knowledge Schema package through the controlled writer."""
+
+        authorized_at = context.run.get("created_at")
+        if not isinstance(authorized_at, str):
+            raise LayoutError("run has no canonical creation timestamp")
+        host_context = TrustedHostSessionContext(
+            host_id="llmwiki-core",
+            actor_type="host-agent",
+            actor_id="project-understand",
+            session_id=context.run_id,
+        )
+        rendered = self.knowledge_render(
+            context.project_id,
+            rendered_at=authorized_at,
+            plan_date=authorized_at,
+            persist=True,
+            host_context=host_context,
+            decision_id_prefix=f"e08-{context.run_id}-{context.attempt}",
+            authorized_at=authorized_at,
+        )
+        report_status = "draft" if rendered.status == "partial" else "complete"
+        gaps = ("protected-knowledge-pages",) if rendered.status == "partial" else ()
+        report = self._run_stage_report(
+            context,
+            summary="The fifteen product entries and navigation index were rendered.",
+            status=report_status,
+            reason_code="controlled-knowledge-render",
+            inputs=("project-map", "hierarchical-understanding", "execution-flow", "research-linkage", "experiment-chains"),
+            outputs=("fifteen-knowledge-products", "unified-index", "daily-plan"),
+            gaps=gaps,
+        )
+        rendering_artifact = write_json_artifact(
+            self.workspace_root,
+            context.project_id,
+            context.run_id,
+            "knowledge-render.json",
+            rendered.as_dict(),
+            artifact_type="knowledge-render-report",
+            artifact_id=f"{context.run_id}:knowledge-render",
+        )
+        artifacts = (report, rendering_artifact.as_run_artifact())
+        if rendered.status == "failed":
+            return StageOutcome.failed(
+                "knowledge-render-failed",
+                "Controlled Knowledge Schema rendering reported failures.",
+                retryable=True,
+                artifacts=artifacts,
+            )
+        return StageOutcome.succeeded(
+            input_versions={"renderer_version": rendered.renderer_version},
+            artifacts=artifacts,
+        )
+
+    def _run_web_render_stage(self, context: StageContext) -> StageOutcome:
+        """Publish a self-contained read-only HTML view for the completed run."""
+
+        registration = load_registered_project(self.workspace_root, context.project_id)
+        run_path = registration.layout.runs_dir / context.run_id / "run.json"
+        stage_rows = [
+            {
+                "stage_id": stage.get("stage_id"),
+                "status": stage.get("status"),
+                "detail": "checkpointed",
+            }
+            for stage in context.run.get("stages", [])
+            if isinstance(stage, Mapping)
+        ]
+        web = write_static_web_index(
+            self.workspace_root,
+            context.project_id,
+            context.run_id,
+            title=f"{registration.record['name']} — Research understanding",
+            status="succeeded",
+            stage_rows=stage_rows,
+            knowledge_root=registration.layout.knowledge_root,
+            coverage_path=registration.layout.indexes_dir / "coverage-report.json",
+            run_path=run_path,
+            created_at=context.run.get("updated_at"),
+        )
+        report = self._run_stage_report(
+            context,
+            summary="A self-contained read-only project-understanding web index was published.",
+            reason_code="self-contained-static-web",
+            inputs=("knowledge-package", "run-report", "coverage-report"),
+            outputs=("web-index",),
+        )
+        return StageOutcome.succeeded(
+            input_versions={"web_render_version": "project-understand-web-v1"},
+            artifacts=(report, web.as_run_artifact()),
+        )
+
     def project_understand(
         self,
         project_root: str | Path,
@@ -786,13 +1189,9 @@ class ResearchCoreService:
         deadline: str | None = None,
         daily_available_hours: float | None = None,
         resume_run_id: str | None = None,
+        through_stage: str | None = None,
     ) -> ProjectRunResult:
-        """Register or reuse a project, then run the deterministic prefix.
-
-        The initial E-08 R2 slice intentionally stops after ``classify``.
-        Later extraction, synthesis, planning, and rendering stages remain
-        pending until their owning roadmap tasks install real handlers.
-        """
+        """Register or reuse a project, then run the complete R3 pipeline."""
 
         registration = self.register(
             project_root=project_root,
@@ -809,11 +1208,13 @@ class ResearchCoreService:
             return self.project_run_resume(
                 registration.project_id,
                 resume_run_id,
-                through_stage=_PROJECT_UNDERSTAND_THROUGH_STAGE,
+                through_stage=through_stage,
+                _complete_pipeline=True,
             )
         return self.project_run_start(
             registration.project_id,
-            through_stage=_PROJECT_UNDERSTAND_THROUGH_STAGE,
+            through_stage=through_stage,
+            _complete_pipeline=True,
         )
 
     def project_run_start(
@@ -821,12 +1222,13 @@ class ResearchCoreService:
         project_id: str,
         *,
         through_stage: str | None = None,
+        _complete_pipeline: bool = False,
     ) -> ProjectRunResult:
         """Start a persisted run using currently available Core stages."""
 
         return ProjectRunOrchestrator(
             self.workspace_root,
-            runners=self._project_run_stage_runners(),
+            runners=self._project_run_stage_runners(complete_pipeline=_complete_pipeline),
         ).start(project_id, through_stage=through_stage)
 
     def project_run_resume(
@@ -835,12 +1237,13 @@ class ResearchCoreService:
         run_id: str,
         *,
         through_stage: str | None = None,
+        _complete_pipeline: bool = False,
     ) -> ProjectRunResult:
         """Resume one run while preserving successful stage checkpoints."""
 
         return ProjectRunOrchestrator(
             self.workspace_root,
-            runners=self._project_run_stage_runners(),
+            runners=self._project_run_stage_runners(complete_pipeline=_complete_pipeline),
         ).resume(project_id, run_id, through_stage=through_stage)
 
     def project_run_status(

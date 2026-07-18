@@ -322,6 +322,27 @@ def _acquire_lock(
         raise
 
 
+def _current_thread_advisory_lock_descriptor(
+    lock_file: str | Path,
+) -> int | None:
+    """Return a borrowed descriptor for an exact same-thread held lock.
+
+    This is an internal coordination primitive for code which has to compose
+    the advisory lock with a descriptor-pinned transaction.  The returned
+    descriptor remains owned by :class:`AdvisoryFileLock`; callers must never
+    close or unlock it.  A lock held by another thread, another process, or a
+    different lexical path is deliberately reported as absent.
+    """
+
+    _path, key = _normalize_lock_path(lock_file)
+    owner_thread_id = threading.get_ident()
+    with _REGISTRY_CONDITION:
+        state = _HELD_LOCKS.get(key)
+        if state is None or state.owner_thread_id != owner_thread_id:
+            return None
+        return state.descriptor
+
+
 def _release_lock_no_raise(lease: _LockLease) -> None:
     descriptor: int | None = None
     try:
