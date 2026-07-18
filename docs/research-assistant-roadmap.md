@@ -60,6 +60,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | F-01 项目知识页面契约 | complete after F-01A/F-01B validation on 2026-07-17 | `829cb54` | `checkpoint/f-01b-canonical-knowledge-layout` |
 | F-02 Claim-Evidence directional binding and currentness | complete after F-02A/F-02B validation, F-02C stable-object plus registry-coordination hardening, and F-02D result-integrity repair on 2026-07-18 | `ba3846c`, `564cf0a`, `41e347e`, `6c9016a`, `d84f128`, `4521be9` | `checkpoint/f-02a-claim-evidence-schema-v2`, `checkpoint/f-02b-claim-evidence-currentness`, `checkpoint/f-02c-stable-file-access`, `checkpoint/f-02c-stable-file-access-review-fix`, `checkpoint/f-02c-registry-read-write-coordination`, `checkpoint/f-02d-claim-evidence-result-integrity` |
 | F-03 project research entities and directed relations | complete after F-03A validation on 2026-07-18 | `dcfa1d7`, `04856ce` | `checkpoint/f-03a-research-relations-final` |
+| F-04 Claim lifecycle and explicit conflict coexistence | partial after bounded F-04A validation on 2026-07-18; persistence and controlled Markdown mutation remain outside this unit | `738e086` | `checkpoint/f-04a-claim-lifecycle` |
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
 | J-05 Codex reference adapter package | complete after validation on 2026-07-16 | `62ccbdc` | `checkpoint/j-05-codex-plugin` |
@@ -128,6 +129,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | F-02C `P0/M` | Harden Source/Evidence/currentness access around stable filesystem objects with a pinned root lease, persistent OS locks, explicit post-replace commit states, exact-CAS relocation rollback, and Windows read sharing that denies concurrent write/delete | Root/symlink swaps, concurrent registry replacement/recovery, rollback races, and Windows write/delete sharing fail closed; repeated concurrency and full regression tests pass | Path-based read/write windows → stable, accountable registry transactions without adding research semantics or a public interface |
 | F-02D `P0/S` | Bind each F-02B result to the exact normalized Knowledge Schema v2 Claim frontmatter revision and provide a deterministic read-only downstream integrity gate that recomputes declared closure without reopening Source bytes | Claim edits and tampered project/path/status/role/Source/Evidence/aggregate fields reject replay; malformed constructed frontmatter fails closed; the integrity helper performs no Source access; focused and full regression tests pass | Auditable currentness object -> revision-bound lifecycle handoff without Markdown-body protection, semantic inference, persistence, or a public interface |
 | F-03A `P1/M` | Add explicit project-local paper/method/dataset/experiment/metric/result/claim/decision/question/source entities plus caller-declared directed relations; validate current Schema v2 page bindings and deterministic backlinks/project-index projection | Stable identity, canonical JSONL, same-project/duplicate/self-loop constraints, relation direction, Evidence-ID referential integrity, page binding, reverse links, and project-index tests | Generic entity/concept pages → deterministic scientific workflow entities and reversible directed links without semantic inference or persistence |
+| F-04A `P1/M` | Add a deterministic Core-internal validator for host-declared `draft/verified/stale/conflicting/rejected` Claim transitions and explicit coexistence of conflicting Claim/Result variants | All 25 host-declared status directions remain structurally composable; exact F-02D proof, F-03 identity/path binding, monotonic time, coordinated title rename, mandatory conflict proof, shared Results, deterministic IDs, and no-I/O boundaries are tested | Ad hoc status fields -> auditable revision/proof-bound lifecycle validation without inventing scientific transition semantics or persisting Markdown |
 | F-04 `P1/M` | 支持 `draft/verified/stale/conflicting/rejected` 和冲突并存 | 冲突实验产生两个结果与冲突状态，不覆盖旧结论 | 新结论覆盖旧结论 → 历史与冲突清晰 |
 | F-05 `P0/M` | 受控 Markdown 写入器，保护用户确认区和网站编辑内容 | 重新生成不覆盖用户确认；冲突写入产生审计记录 | 生成器可覆盖人工知识 → 人机协作内容可长期保留 |
 | F-06 `P1/L` | 建立 `wiki/library/` 显式提升流程、规范标识和跨项目来源关系 | 同名不同对象不自动合并；提升后仍能回到原项目 Evidence | 项目彼此孤立或错误合并 → 可安全跨项目学习 |
@@ -647,3 +649,32 @@ case passed ten consecutive isolated runs after one recorded transient subproces
 capture failure; the final full regression produced **572 passed, 24 skipped**.
 Changed-file Ruff and `git diff --check` passed, and independent review found no
 remaining High or Medium issue.
+
+F-04 is now **partial** through the bounded F-04A Core validator implemented in
+`738e086` and designated by `checkpoint/f-04a-claim-lifecycle`. The host Agent
+continues to decide why a Claim changes status, whether Claims conflict, and which
+Claim/Result entities belong to a coexistence set. Core validates all 25 declared
+directions in the closed five-status set without a scientific transition matrix,
+keeps the F-03 project/type/identity/path binding stable, permits a coordinated
+display-title rename to the current registry title, requires strictly advancing
+`updated_at`, and preserves prior `last_verified_at` history on non-verified
+transitions.
+
+A target `verified` Claim must set `last_verified_at == updated_at` and carry an
+exact F-02D/F-02B integrity proof bound to the complete proposed Schema v2 Claim
+frontmatter revision. A target `conflicting` Claim must carry an exact deterministic
+coexistence proof that includes the target Claim path and fingerprint. Coexistence
+requires at least two distinct current Claim entities already marked `conflicting`,
+one or more duplicate-free Result references per variant, and at least two distinct
+Results overall; Results may be shared across competing interpretations and need not
+themselves be marked `conflicting`. Transition identity closes over before/after
+Claim fingerprints plus supplied Evidence and conflict proof hashes.
+
+F-04A validation produced **98 passed** across the focused lifecycle, Knowledge
+Schema, Claim Evidence, and research-relation suites; the integrated full regression
+produced **600 passed, 24 skipped**. Changed-file Ruff, `py_compile`, manual
+High/Medium review, and `git diff --check` passed. F-04A performs no persistence,
+Markdown or registry write, Source or research-binary semantic read, stale
+propagation, conflict/winner inference, CLI/MCP/Web publication, or external send.
+F-04 therefore remains `partial`; controlled persistence and mixed/user Markdown
+protection belong to later bounded units, especially F-05.
