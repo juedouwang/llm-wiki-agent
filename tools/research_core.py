@@ -46,6 +46,11 @@ if __package__:
         ProjectInventoryResult,
         inventory_project,
     )
+    from .hierarchical_understanding import (
+        ChunkObservation,
+        HierarchicalUnderstandingResult,
+        generate_hierarchical_understanding,
+    )
     from .project_map import ProjectMapResult, generate_project_map
     from .project_orchestrator import (
         ProjectRunOrchestrator,
@@ -101,6 +106,11 @@ else:
         PROJECT_MANIFEST_VERSION,
         ProjectInventoryResult,
         inventory_project,
+    )
+    from hierarchical_understanding import (  # type: ignore[no-redef]
+        ChunkObservation,
+        HierarchicalUnderstandingResult,
+        generate_hierarchical_understanding,
     )
     from project_map import (  # type: ignore[no-redef]
         ProjectMapResult,
@@ -845,6 +855,20 @@ class ResearchCoreService:
         return generate_project_map(
             workspace_root=self.workspace_root,
             project_id=project_id,
+        )
+
+    def hierarchical_understanding(
+        self,
+        project_id: str,
+        *,
+        observations: Iterable[ChunkObservation | dict[str, Any]] = (),
+    ) -> HierarchicalUnderstandingResult:
+        """Generate bounded E-03 chunk/file/module/project understanding."""
+
+        return generate_hierarchical_understanding(
+            workspace_root=self.workspace_root,
+            project_id=project_id,
+            observations=observations,
         )
 
     def coverage_view(self, project_id: str) -> HostCoverageResult:

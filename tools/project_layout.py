@@ -405,6 +405,10 @@ class ProjectLayout:
         return self.indexes_dir / "project-map.json"
 
     @property
+    def hierarchical_understanding_file(self) -> Path:
+        return self.indexes_dir / "hierarchical-understanding.json"
+
+    @property
     def machine_state_lock_file(self) -> Path:
         """Stable advisory lock shared by per-project machine-state mutations."""
 

@@ -50,7 +50,7 @@ New research-project features must keep machine state and human-readable knowled
 wiki/projects/<project_id>/       # curated Markdown knowledge for people and agents
 ```
 
-The machine-state tree uses `project.yaml`, `manifest.jsonl`, `sources.jsonl`, `extracted/`, `indexes/` (including B-07 `reading-priority.json` and E-02 `project-map.json`), and `runs/`. The canonical curated directory tree uses `papers/`, `methods/`, `datasets/`, `experiments/`, `results/`, `claims/`, `plans/` (including `plans/daily/`), `decisions/`, and `sources/`. Registration and layout initialization create only this empty directory skeleton; later tasks own Markdown singleton and collection pages.
+The machine-state tree uses `project.yaml`, `manifest.jsonl`, `sources.jsonl`, `extracted/`, `indexes/` (including B-07 `reading-priority.json`, E-02 `project-map.json`, and E-03 `hierarchical-understanding.json`), and `runs/`. The canonical curated directory tree uses `papers/`, `methods/`, `datasets/`, `experiments/`, `results/`, `claims/`, `plans/` (including `plans/daily/`), `decisions/`, and `sources/`. Registration and layout initialization create only this empty directory skeleton; later tasks own Markdown singleton and collection pages.
 
 Rules:
 1. New structured machine records, including `project.yaml` and JSON/JSONL files, must carry `schema_version`.
@@ -91,6 +91,16 @@ Generate the deterministic E-02 project map from a current B-06 Manifest with
 uses no LLM, and creates no curated Markdown. Consumers must use
 `load_current_project_map(...)`, not structural `load_project_map(...)`, before
 acting on it. See `docs/project-map.md`.
+
+Generate bounded E-03 hierarchical understanding with
+`ResearchCoreService.hierarchical_understanding(project_id, observations=...)`.
+The host supplies policy-approved chunk summaries, stable module identities,
+input estimates, and Evidence IDs; Core validates and aggregates
+`chunk -> file -> module -> project` without opening source files or calling an
+LLM. With no observations it records an explicit Manifest-metadata-only fallback.
+Consumers must use `load_current_hierarchical_understanding(...)` before acting
+on the machine artifact. E-03 writes no curated Markdown and adds no CLI, MCP,
+Hook, or Web operation. See `docs/hierarchical-understanding.md`.
 
 Prioritize a current B-06 Manifest with:
 
