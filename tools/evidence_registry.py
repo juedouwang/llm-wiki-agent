@@ -32,8 +32,7 @@ if __package__:
     from .source_registry import (
         SourceRecord,
         SourceRegistry,
-        _load_source_registry_file,
-        load_source_registry,
+        _locked_source_registry_file,
     )
     from .stable_file_access import (
         StableDirectoryLease,
@@ -64,8 +63,7 @@ else:
     from source_registry import (  # type: ignore[no-redef]
         SourceRecord,
         SourceRegistry,
-        _load_source_registry_file,
-        load_source_registry,
+        _locked_source_registry_file,
     )
     from stable_file_access import (  # type: ignore[no-redef]
         StableDirectoryLease,
@@ -138,7 +136,7 @@ class EvidenceMismatchError(EvidenceError):
 
 
 class EvidenceLockError(EvidenceError):
-    """Raised when an Evidence writer cannot acquire or release its lock."""
+    """Raised when an Evidence transaction cannot acquire or release its lock."""
 
 
 class EvidenceCommitStateError(EvidenceConflictError):
@@ -666,21 +664,54 @@ def _load_evidence_file(
     return registry
 
 
+def _load_bound_evidence_registries(
+    workspace_root: str | Path,
+    project_id: str,
+    *,
+    missing_ok: bool,
+    lock_timeout_seconds: float = _DEFAULT_LOCK_TIMEOUT_SECONDS,
+) -> tuple[SourceRegistry, EvidenceRegistry]:
+    """Load one Source/Evidence snapshot under the canonical lock order."""
+
+    registration = load_registered_project(workspace_root, project_id)
+    sources_file = registration.layout.sources_file
+    evidence_file = registration.layout.evidence_file
+    evidence_lock_file = evidence_file.with_name(f"{evidence_file.name}.lock")
+    with _locked_source_registry_file(
+        sources_file,
+        trusted_root=registration.layout.machine_root,
+        project_id=registration.project_id,
+        missing_ok=False,
+        timeout_seconds=lock_timeout_seconds,
+    ) as (source_registry, _source_root_lease):
+        with _exclusive_evidence_lock(
+            registration.layout.machine_root,
+            evidence_lock_file,
+            timeout_seconds=lock_timeout_seconds,
+        ) as evidence_root_lease:
+            evidence_registry = _load_evidence_file(
+                evidence_file,
+                trusted_root=registration.layout.machine_root,
+                project_id=registration.project_id,
+                source_registry=source_registry,
+                missing_ok=missing_ok,
+                root_lease=evidence_root_lease,
+            )
+            return source_registry, evidence_registry
+
+
 def load_evidence_registry(
     workspace_root: str | Path,
     project_id: str,
 ) -> EvidenceRegistry:
     """Load and bind existing Evidence without reading source-project bytes."""
 
-    registration = load_registered_project(workspace_root, project_id)
-    source_registry = load_source_registry(workspace_root, registration.project_id)
-    return _load_evidence_file(
-        registration.layout.evidence_file,
-        trusted_root=registration.layout.machine_root,
-        project_id=registration.project_id,
-        source_registry=source_registry,
+    _source_registry, evidence_registry = _load_bound_evidence_registries(
+        workspace_root,
+        project_id,
         missing_ok=False,
     )
+    return evidence_registry
 
 
 def _source_version_for(
@@ -784,73 +815,74 @@ def register_evidence(
 
     registration = load_registered_project(workspace_root, project_id)
     normalized_source_id = _source_id(source_id)
-    source_registry = load_source_registry(workspace_root, registration.project_id)
-    try:
-        source = source_registry.by_source_id[normalized_source_id]
-    except KeyError as exc:
-        raise EvidenceConflictError(
-            f"source_id is not registered for project {project_id}: {normalized_source_id}"
-        ) from exc
-    version_number = _source_version_for(
-        source,
-        content_hash=content_hash,
-        source_version=source_version,
-    )
-    candidate = Evidence.create(
-        project_id=registration.project_id,
-        source_id=normalized_source_id,
-        source_version=version_number,
-        content_hash=content_hash,
-        locator=locator,
-        excerpt=excerpt,
-        expected_excerpt_hash=expected_excerpt_hash,
-    )
+    sources_file = registration.layout.sources_file
     evidence_file = registration.layout.evidence_file
-    lock_file = evidence_file.with_name(f"{evidence_file.name}.lock")
-    with _exclusive_evidence_lock(
-        registration.layout.machine_root,
-        lock_file,
+    evidence_lock_file = evidence_file.with_name(f"{evidence_file.name}.lock")
+    with _locked_source_registry_file(
+        sources_file,
+        trusted_root=registration.layout.machine_root,
+        project_id=registration.project_id,
+        missing_ok=False,
         timeout_seconds=lock_timeout_seconds,
-    ) as root_lease:
-        source_registry = _load_source_registry_file(
-            registration.layout.sources_file,
-            trusted_root=registration.layout.machine_root,
-            project_id=registration.project_id,
-            missing_ok=False,
-            root_lease=root_lease,
+    ) as (source_registry, _source_root_lease):
+        try:
+            source = source_registry.by_source_id[normalized_source_id]
+        except KeyError as exc:
+            raise EvidenceConflictError(
+                f"source_id is not registered for project {project_id}: "
+                f"{normalized_source_id}"
+            ) from exc
+        version_number = _source_version_for(
+            source,
+            content_hash=content_hash,
+            source_version=source_version,
         )
-        _bind_record(candidate, source_registry)
-        registry = _load_evidence_file(
-            evidence_file,
-            trusted_root=registration.layout.machine_root,
+        candidate = Evidence.create(
             project_id=registration.project_id,
-            source_registry=source_registry,
-            missing_ok=True,
-            root_lease=root_lease,
+            source_id=normalized_source_id,
+            source_version=version_number,
+            content_hash=content_hash,
+            locator=locator,
+            excerpt=excerpt,
+            expected_excerpt_hash=expected_excerpt_hash,
         )
-        existing = registry.by_evidence_id.get(candidate.evidence_id)
-        if existing is not None:
-            wrote_registry = False
-            persisted = existing
-        else:
-            updated = EvidenceRegistry(
-                project_id=registration.project_id,
-                evidence_file=evidence_file,
-                records=tuple(
-                    sorted(
-                        (*registry.records, candidate),
-                        key=lambda record: record.evidence_id,
-                    )
-                ),
-            )
-            write_result = _write_evidence_atomic(
-                updated,
+        with _exclusive_evidence_lock(
+            registration.layout.machine_root,
+            evidence_lock_file,
+            timeout_seconds=lock_timeout_seconds,
+        ) as evidence_root_lease:
+            _bind_record(candidate, source_registry)
+            registry = _load_evidence_file(
+                evidence_file,
                 trusted_root=registration.layout.machine_root,
-                root_lease=root_lease,
+                project_id=registration.project_id,
+                source_registry=source_registry,
+                missing_ok=True,
+                root_lease=evidence_root_lease,
             )
-            wrote_registry = write_result.wrote
-            registry = updated
-            persisted = candidate
+            existing = registry.by_evidence_id.get(candidate.evidence_id)
+            if existing is not None:
+                wrote_registry = False
+                persisted = existing
+            else:
+                updated = EvidenceRegistry(
+                    project_id=registration.project_id,
+                    evidence_file=evidence_file,
+                    records=tuple(
+                        sorted(
+                            (*registry.records, candidate),
+                            key=lambda record: record.evidence_id,
+                        )
+                    ),
+                )
+                write_result = _write_evidence_atomic(
+                    updated,
+                    trusted_root=registration.layout.machine_root,
+                    root_lease=evidence_root_lease,
+                )
+                wrote_registry = write_result.wrote
+                registry = updated
+                persisted = candidate
     return EvidenceRegistrationResult(
         project_id=registration.project_id,
         evidence_file=evidence_file,

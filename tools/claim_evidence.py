@@ -17,7 +17,7 @@ from typing import Any
 from tools.evidence_registry import (
     Evidence,
     EvidenceRegistry,
-    load_evidence_registry,
+    _load_bound_evidence_registries,
     validate_evidence,
 )
 from tools.knowledge_artifacts import (
@@ -36,7 +36,7 @@ from tools.source_recovery import (
     SourceRelocationInspectionResult,
     inspect_source_relocation,
 )
-from tools.source_registry import SourceRegistry, load_source_registry
+from tools.source_registry import SourceRegistry
 
 
 CLAIM_EVIDENCE_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
@@ -168,30 +168,16 @@ def _append_reason(reason_codes: list[str], reason_code: str) -> None:
         reason_codes.append(reason_code)
 
 
-def _empty_evidence_registry(
-    project_id: str,
-    evidence_file: Path,
-) -> EvidenceRegistry:
-    return EvidenceRegistry(project_id, evidence_file)
-
-
 def _load_registries(
     workspace_root: str | Path,
     project_id: str,
 ) -> tuple[ProjectRegistrationResult, SourceRegistry, EvidenceRegistry]:
     registration = load_registered_project(workspace_root, project_id)
-    source_registry = load_source_registry(workspace_root, registration.project_id)
-    evidence_file = registration.layout.evidence_file
-    if evidence_file.exists() or evidence_file.is_symlink():
-        evidence_registry = load_evidence_registry(
-            workspace_root,
-            registration.project_id,
-        )
-    else:
-        evidence_registry = _empty_evidence_registry(
-            registration.project_id,
-            evidence_file,
-        )
+    source_registry, evidence_registry = _load_bound_evidence_registries(
+        workspace_root,
+        registration.project_id,
+        missing_ok=True,
+    )
     return registration, source_registry, evidence_registry
 
 

@@ -53,15 +53,24 @@ them.
 `lease_stable_directory(...)` pins one non-redirected trusted-root identity.
 `exclusive_stable_file_lock(...)` opens that lease first, opens only a direct-child
 regular lock file through the pinned root, and holds an operating-system exclusive
-lock for the complete writer transaction. The lock file is persistent machine
+lock for the complete registry transaction. The lock file is persistent machine
 state: release unlocks and closes it but deliberately does not unlink it. File
 existence is therefore not interpreted as ownership.
 
+Ordinary Source and Evidence registry readers now join the same adjacent lock
+protocol as writers. This prevents a Windows read-only descriptor from denying a
+concurrent atomic replacement outside the lock protocol. A reader retains the lock
+until its complete stable read and parse have finished; it never modifies registry
+content.
+
 Source and Evidence writers reuse the **same** `StableDirectoryLease` for lock
 acquisition, under-lock registry loads, replacement, and any relocation rollback.
-A root identity substitution, lock-file redirection, or lock identity change fails
-closed instead of moving later transaction stages onto a different pathname
-object.
+Operations that need one bound Source/Evidence snapshot always acquire locks in the
+canonical order **Source registry lock ? Evidence registry lock** and retain the
+Source snapshot until Evidence parsing or registration finishes. No internal path
+acquires those locks in reverse order. A root identity substitution, lock-file
+redirection, or lock identity change fails closed instead of moving later
+transaction stages onto a different pathname object.
 
 ## Atomic machine-state replacement
 
@@ -106,14 +115,17 @@ named below, not every machine-state loader in the repository.
   bytes. The `recover_relocation` write boundary accepts only a literal boolean.
 - `tools/source_recovery.py` hashes the registered lexical path and relocation
   candidates through the same primitive, including read-only inspection.
-- `tools/source_registry.py` acquires a persistent OS lock beneath one pinned
-  root lease, loads and reloads `sources.jsonl` through that lease, and uses it for
-  stable atomic replacement. Relocation retains/re-hashes its candidate around the
-  commit and uses exact-CAS rollback from the actual registry-byte preimage when
-  post-commit revalidation fails.
-- `tools/evidence_registry.py` acquires the same form of persistent root-bound
-  lock, loads `evidence.jsonl` through the transaction lease, preserves the
-  canonical lexical destination, and uses that lease for replacement.
+- `tools/source_registry.py` makes ordinary loads and writers participate in the
+  persistent adjacent OS lock beneath one pinned root lease, loads and reloads
+  `sources.jsonl` through that lease, and uses it for stable atomic replacement.
+  Relocation retains/re-hashes its candidate around the commit and uses exact-CAS
+  rollback from the actual registry-byte preimage when post-commit revalidation
+  fails.
+- `tools/evidence_registry.py` loads bound Source/Evidence snapshots under the
+  canonical Source-then-Evidence lock order. Ordinary Evidence loads and Evidence
+  registration retain both the selected Source snapshot and the Evidence lock
+  through parsing or replacement, preserve the canonical lexical destination, and
+  never bind Evidence against mismatched registry generations.
 
 ## Security and product boundary
 
@@ -130,4 +142,5 @@ F-02C:
 Generated text fixtures exercise descriptor escape, symlink/reparse rejection,
 missing verification primitives, partial identity loss, lexical-path retargeting,
 registry-redirection and machine-root substitution races, direct-child atomic
-replacement, relocation commit races, and write-boundary behavior.
+replacement, reader/writer lock coordination, repeated concurrent Source recovery,
+relocation commit races, and write-boundary behavior.

@@ -152,7 +152,7 @@ class SourceRegistryError(LayoutError):
 
 
 class SourceRegistryLockError(SourceRegistryError):
-    """Raised when another writer keeps the source registry locked."""
+    """Raised when another transaction keeps the source registry locked."""
 
 
 class SourceRegistryConflictError(SourceRegistryError):
@@ -1200,19 +1200,50 @@ def _load_source_registry_file(
     return registry
 
 
+@contextmanager
+def _locked_source_registry_file(
+    sources_file: Path,
+    *,
+    trusted_root: Path,
+    project_id: str,
+    missing_ok: bool,
+    timeout_seconds: float = _DEFAULT_LOCK_TIMEOUT_SECONDS,
+) -> Iterator[tuple[SourceRegistry, StableDirectoryLease]]:
+    """Load one registry while retaining its writer lock and pinned root lease."""
+
+    lock_file = sources_file.with_name(f"{sources_file.name}.lock")
+    with _exclusive_registry_lock(
+        trusted_root,
+        lock_file,
+        timeout_seconds=timeout_seconds,
+    ) as root_lease:
+        registry = _load_source_registry_file(
+            sources_file,
+            trusted_root=trusted_root,
+            project_id=project_id,
+            missing_ok=missing_ok,
+            root_lease=root_lease,
+        )
+        yield registry, root_lease
+
+
 def load_source_registry(
     workspace_root: str | Path,
     project_id: str,
 ) -> SourceRegistry:
-    """Load existing source identity/version state without modifying it."""
+    """Load source identity/version state without modifying registry content."""
 
     registration = load_registered_project(workspace_root, project_id)
-    return _load_source_registry_file(
+    with _locked_source_registry_file(
         registration.layout.sources_file,
         trusted_root=registration.layout.machine_root,
         project_id=registration.project_id,
         missing_ok=False,
-    )
+    ) as (registry, _root_lease):
+        # Retaining the adjacent writer lock until parsing finishes prevents a
+        # Windows reader from denying a concurrent atomic replacement outside the
+        # registry lock protocol.
+        return registry
 
 
 def get_source_history(

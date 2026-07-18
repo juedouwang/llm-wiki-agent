@@ -336,6 +336,55 @@ class SourceRegistryTests(unittest.TestCase):
         )
         self.assertEqual(before_source, self.source_snapshot())
 
+    def test_registry_reader_waits_for_the_adjacent_writer_lock(self) -> None:
+        sync_source_registry(self.workspace, self.registration.project_id)
+        sources_file = self.registration.layout.sources_file
+        lock_file = sources_file.with_name(f"{sources_file.name}.lock")
+        script = (
+            "import sys; "
+            "from tools.source_registry import load_source_registry; "
+            "print('ready', flush=True); "
+            "registry = load_source_registry(sys.argv[1], sys.argv[2]); "
+            "print(len(registry.records), flush=True)"
+        )
+        process: subprocess.Popen[str] | None = None
+        try:
+            with exclusive_stable_file_lock(
+                self.registration.layout.machine_root,
+                lock_file,
+                timeout_seconds=1.0,
+            ):
+                process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-B",
+                        "-c",
+                        script,
+                        str(self.workspace),
+                        self.registration.project_id,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    cwd=REPO_ROOT,
+                )
+                assert process.stdout is not None
+                self.assertEqual(process.stdout.readline().strip(), "ready")
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    process.wait(timeout=0.25)
+
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertEqual(
+                int(stdout.strip()),
+                self.inventory.record_counts["file"],
+            )
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+
     def test_corrupt_conflicting_legacy_and_future_state_fails_closed(self) -> None:
         sync_source_registry(self.workspace, self.registration.project_id)
         valid_rows = self.registry_rows()
@@ -482,9 +531,18 @@ class SourceRegistryTests(unittest.TestCase):
         outside = self.root / "outside-sources.jsonl"
         outside.write_bytes(self.registration.layout.sources_file.read_bytes())
 
+        sources_file = self.registration.layout.sources_file.resolve()
+        real_final_path = stable_file_access_module._descriptor_final_path
+
+        def redirect_registry_descriptor(descriptor: int) -> Path | None:
+            final_path = real_final_path(descriptor)
+            if final_path is not None and final_path.resolve() == sources_file:
+                return outside.resolve()
+            return final_path
+
         with patch(
             "tools.stable_file_access._descriptor_final_path",
-            return_value=outside.resolve(),
+            side_effect=redirect_registry_descriptor,
         ), patch("tools.stable_file_access.os.read") as read_mock:
             with self.assertRaisesRegex(
                 SourceRegistryError,

@@ -4,6 +4,8 @@ import copy
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -43,6 +45,10 @@ from tools.extraction_schema import (
 from tools.project_inventory import inventory_project
 from tools.project_registry import register_project
 from tools.source_registry import load_source_registry, sync_source_registry
+from tools.stable_file_access import exclusive_stable_file_lock
+
+
+REPO_ROOT = Path(__file__).parent.parent
 
 
 class EvidenceSchemaTests(unittest.TestCase):
@@ -653,6 +659,52 @@ class EvidenceSchemaTests(unittest.TestCase):
                 "evidence.jsonl.lock"
             ).is_file()
         )
+
+    def test_registry_reader_waits_for_the_adjacent_writer_lock(self) -> None:
+        self.register()
+        evidence_file = self.registration.layout.evidence_file
+        lock_file = evidence_file.with_name(f"{evidence_file.name}.lock")
+        script = (
+            "import sys; "
+            "from tools.evidence_registry import load_evidence_registry; "
+            "print('ready', flush=True); "
+            "registry = load_evidence_registry(sys.argv[1], sys.argv[2]); "
+            "print(len(registry.records), flush=True)"
+        )
+        process: subprocess.Popen[str] | None = None
+        try:
+            with exclusive_stable_file_lock(
+                self.registration.layout.machine_root,
+                lock_file,
+                timeout_seconds=1.0,
+            ):
+                process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-B",
+                        "-c",
+                        script,
+                        str(self.workspace),
+                        self.registration.project_id,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    cwd=REPO_ROOT,
+                )
+                assert process.stdout is not None
+                self.assertEqual(process.stdout.readline().strip(), "ready")
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    process.wait(timeout=0.25)
+
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertEqual(int(stdout.strip()), 1)
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
 
     def test_missing_registry_and_invalid_excerpt_types_fail_closed(self) -> None:
         with self.assertRaises(EvidenceError):
