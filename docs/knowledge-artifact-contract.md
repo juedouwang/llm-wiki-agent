@@ -324,6 +324,34 @@ in [`claim-lifecycle.md`](claim-lifecycle.md). F-04 remains partial until later
 controlled persistence and product integration can materialize accepted host
 decisions without overwriting prior conclusions.
 
+## F-05A controlled Markdown update planning
+
+F-05A adds a pure, in-memory update planner for current Knowledge Schema v2 pages.
+The host supplies the complete proposal and every semantic choice. Core validates the
+canonical project-relative path, exact caller-supplied current-snapshot SHA-256 precondition, immutable
+project/type/ownership/`generated_at`, strictly advancing `updated_at`, and the closed
+`generated | mixed | user` body-ownership contract. Schema v1 remains read-only and
+future versions fail closed.
+
+`generated` and `user` pages assign the complete body to their declared owner. Mixed
+pages use bounded, duplicate-free, LF/CRLF-delimited protected regions. Regeneration
+takes the generated skeleton from the proposal but restores each region's exact user
+content from the caller-supplied base snapshot; a user edit may change only region bodies and must preserve the
+generated skeleton and ordered region IDs byte-for-byte. Unicode line separators are
+ordinary content rather than hidden marker boundaries. A generator may create only
+empty protected regions, so it cannot manufacture text and label it user-confirmed.
+
+This ownership gate covers the Markdown body only. Structurally valid mutable
+frontmatter changes are reported, not semantically authorized; callers must compose
+F-02/F-03/F-04 proofs and explicit user authorization as applicable. The plan contains
+canonical output bytes plus content-free hashes/metadata for a later writer. The plan
+ID is correlation metadata rather than a write-authorization token; a writer must freshly
+rebind the live base/proposal and trusted host/user decisions before exact-CAS persistence.
+F-05A does not persist, lock, append audit state, read Sources/binaries, send externally, or
+add CLI/MCP/Web behavior. See
+[`controlled-markdown-writes.md`](controlled-markdown-writes.md). F-05 remains partial
+until F-05B supplies exact-CAS persistence and an accountable audit record.
+
 ## Strict parsing and canonical serialization
 
 `parse_knowledge_page(payload, path=...)` accepts bytes so it can enforce strict
@@ -361,6 +389,6 @@ Markdown, Evidence-registry, Source-registry, run-state, or status write. It doe
 not migrate Schema v1, infer stance/conflicts, persist stale propagation, or add a
 public interface.
 
-Controlled mixed/user Markdown writes, conflict audit records, protection of
-user-confirmed content, and persistent propagation of stale state remain F-05 or
-later work and require their own authorized units.
+F-05A now supplies in-memory mixed/user body protection and a content-free update
+plan only. Filesystem persistence, conflict/audit ledger writes, product Web editing,
+and persistent propagation of stale state remain F-05B or later authorized work.

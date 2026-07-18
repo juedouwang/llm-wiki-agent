@@ -445,6 +445,15 @@ write Markdown/registries, reopen Sources, infer scientific transitions or
 conflicts, or claim F-05 controlled-write behavior. See
 [`claim-lifecycle.md`](claim-lifecycle.md).
 
+F-05A's controlled Markdown planner is another standalone deterministic Core
+primitive rather than a service or transport operation. It validates exact caller-supplied current
+bytes, current Schema v2/path identity, timestamps, and explicit generated/user/mixed
+body ownership, preserving declared user regions without inferring authorship. Mutable
+frontmatter remains structurally checked but requires separate semantic/user
+authorization. F-05A performs no filesystem I/O, locking, audit persistence, Source or
+binary read, network call, CLI/MCP/Web publication, or ResearchCoreService mutation.
+See [`controlled-markdown-writes.md`](controlled-markdown-writes.md).
+
 The accepted deterministic Core slices also include the standalone B-07
 reading-priority operation. It does not add an MCP operation, run creation or
 stage advancement, extraction, semantic reading, `project_understand`, H-07
