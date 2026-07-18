@@ -437,6 +437,14 @@ knowledge bytes and perform no filesystem I/O. F-03A deliberately adds no
 task-level workflows may compose the primitive after persistence and controlled
 writer boundaries exist. See [`research-relations.md`](research-relations.md).
 
+F-04A's Claim lifecycle and conflict-coexistence validators are likewise
+standalone in-memory Core primitives. They consume caller-supplied F-03A
+registries, Schema v2 frontmatter/page bytes, and optional F-02B results. They do
+not add a `ResearchCoreService` method or transport operation, persist status,
+write Markdown/registries, reopen Sources, infer scientific transitions or
+conflicts, or claim F-05 controlled-write behavior. See
+[`claim-lifecycle.md`](claim-lifecycle.md).
+
 The accepted deterministic Core slices also include the standalone B-07
 reading-priority operation. It does not add an MCP operation, run creation or
 stage advancement, extraction, semantic reading, `project_understand`, H-07

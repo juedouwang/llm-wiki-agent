@@ -163,6 +163,12 @@ F-03A:
 - does not persist `relations.jsonl` or the project-index projection; and
 - adds no CLI, MCP, Hook, Skill, Plugin, or Web operation.
 
+F-04A may consume this immutable registry and caller-supplied current page bytes
+to validate Claim lifecycle and explicit conflict coexistence. That later
+validator does not change F-03A identities or relations, infer conflict from a
+`conflicts-with` label, or impose exclusive ownership when two Claim variants
+interpret the same Result entities. See [`claim-lifecycle.md`](claim-lifecycle.md).
+
 ## Validation
 
 Focused validation covers deterministic identity, all entity types and canonical

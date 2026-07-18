@@ -1,4 +1,4 @@
-# Project Knowledge Artifact Contract (F-01 / F-02 / F-03, Schema v2)
+# Project Knowledge Artifact Contract (F-01 / F-02 / F-03 / F-04, Schema v2)
 
 F-01 defines the deterministic project-relative path and empty-layout contract
 for curated Markdown under `<knowledge_projects_root>/<project_id>/`. F-02A
@@ -8,17 +8,22 @@ pages. F-02B adds a separate deterministic, read-only currentness validator over
 caller-supplied Claim frontmatter, current Source/Evidence registries, actual
 Source bytes, Locator, and exact excerpt hash. F-03A adds an in-memory,
 project-scoped scientific entity/relation registry plus deterministic backlink
-and project-index projection over caller-supplied current pages.
+and project-index projection over caller-supplied current pages. F-04A adds a
+separate in-memory validator for host-declared Claim lifecycle transitions and
+explicit coexistence of conflicting Claim/Result variants.
 
 The Schema/path implementation is
 [`tools/knowledge_artifacts.py`](../tools/knowledge_artifacts.py); the F-02B
 closure is [`tools/claim_evidence.py`](../tools/claim_evidence.py) and is specified
 in [`claim-evidence-currentness.md`](claim-evidence-currentness.md). F-03A is
 [`tools/research_relations.py`](../tools/research_relations.py) and is specified in
-[`research-relations.md`](research-relations.md). None of these modules opens or
-writes a Markdown page body. Later controlled writers and renderers must use
-these contracts instead of guessing an artifact's role from body text or ad hoc
-filenames.
+[`research-relations.md`](research-relations.md). F-04A is
+[`tools/claim_lifecycle.py`](../tools/claim_lifecycle.py) and is specified in
+[`claim-lifecycle.md`](claim-lifecycle.md). None of these modules writes a
+Markdown page body. Only F-02B opens policy-authorized Source bytes for exact
+currentness validation; F-04A consumes its result without reopening a Source.
+Later controlled writers and renderers must use these contracts instead of
+guessing an artifact's role from body text or ad hoc filenames.
 
 ## P-08 responsibility boundary
 
@@ -35,8 +40,12 @@ keyword scoring, or semantic heuristic and never infer stance or conflict.
 F-02B reports currentness without changing Markdown, Claim status, Evidence, or
 Source bindings. For F-03A, the host explicitly supplies entity identities and
 directed relation labels; Core checks identity, canonical page binding, endpoint
-integrity, and backlinks without inferring entities or relationship meaning. F-05
-controlled mixed/user-body protection remains separate.
+integrity, and backlinks without inferring entities or relationship meaning. For
+F-04A, the host explicitly chooses lifecycle targets and conflict membership;
+Core checks current Schema v2, identity/timestamp invariants, a matching F-02B
+proof for `verified`, and distinct Claim/Result coexistence without inferring a
+conflict, winner, or replacement. F-05 controlled mixed/user-body protection and
+persistent status materialization remain separate.
 
 ## Required frontmatter
 
@@ -279,6 +288,41 @@ is built. The projection contains deterministic entity groups and incoming/
 outgoing relation IDs, but is not project `index.md` content. F-03A performs no
 filesystem I/O or persistence; later approved writers must keep relation machine
 state under `.llmwiki/` and curated Markdown under `wiki/projects/`.
+
+## F-04A Claim lifecycle and conflict coexistence
+
+F-04A validates host-declared transitions across the existing closed status set:
+`draft`, `verified`, `stale`, `conflicting`, and `rejected`. Core intentionally
+has no scientific transition matrix. It binds both current and proposed
+frontmatter to the same materialized F-03A Claim identity, preserves immutable
+identity fields while allowing a coordinated display-title rename to the current
+registry title, requires a strictly advancing `updated_at`, preserves the most
+recent real verification time across non-verified transitions, and classifies the
+change without persisting it.
+
+A target `verified` Claim must include `last_verified_at == updated_at` and a
+matching current F-02B `ClaimEvidenceValidationResult` for the exact Claim
+frontmatter fingerprint, project, path, Source IDs, directional Evidence
+references, and verified-currentness outcome. F-04A fingerprints that result but
+does not rerun Source access or
+register Evidence. A non-verified target may report Evidence currentness as an
+independent dimension and is never silently promoted.
+
+Conflict coexistence is also explicit. The host supplies a stable project-local
+conflict key and at least two distinct F-03A Claim variants, each already marked
+`conflicting` and referencing one or more duplicate-free Result entities. Core
+validates current Schema v2 Claim/Result page bindings and at least two distinct
+Results overall. A Result may support multiple competing interpretations; Core
+does not invent exclusive ownership, and Result pages need not themselves carry
+`status: conflicting`. It retains every variant and emits no winner or
+replacement. Opposing Evidence and relation labels do not infer a conflict. A
+`conflicting` transition is complete only when it binds a coexistence proof whose
+target path and frontmatter fingerprint match the proposed Claim revision.
+
+The full read-only API, audit records, and fail-closed boundaries are specified
+in [`claim-lifecycle.md`](claim-lifecycle.md). F-04 remains partial until later
+controlled persistence and product integration can materialize accepted host
+decisions without overwriting prior conclusions.
 
 ## Strict parsing and canonical serialization
 
