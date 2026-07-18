@@ -19,6 +19,7 @@ from tools.research_relations import (
     RESEARCH_ENTITY_TYPES,
     ResearchEntity,
     ResearchEntityBindingError,
+    ResearchRelation,
     ResearchRelationConflictError,
     ResearchRelationError,
     ResearchRelationRegistry,
@@ -330,6 +331,59 @@ class ResearchRelationIdentityTests(unittest.TestCase):
             ),
         )
 
+    def test_relation_evidence_iterables_fail_with_contract_errors(self) -> None:
+        source = create_research_entity(
+            PROJECT_ID,
+            entity_type="method",
+            identity_key="method:evidence-input",
+            title="Evidence Input Method",
+        )
+        target = create_research_entity(
+            PROJECT_ID,
+            entity_type="dataset",
+            identity_key="dataset:evidence-input",
+            title="Evidence Input Dataset",
+        )
+
+        with self.assertRaisesRegex(ResearchRelationError, "evidence_ids entries"):
+            create_research_relation(
+                PROJECT_ID,
+                relation_type="evaluates-on",
+                source_entity_id=source.entity_id,
+                target_entity_id=target.entity_id,
+                evidence_ids=(EVIDENCE_A, 1),  # type: ignore[arg-type]
+            )
+        with self.assertRaisesRegex(ResearchRelationError, "iterable"):
+            create_research_relation(
+                PROJECT_ID,
+                relation_type="evaluates-on",
+                source_entity_id=source.entity_id,
+                target_entity_id=target.entity_id,
+                evidence_ids=None,  # type: ignore[arg-type]
+            )
+
+        relation_id = research_relation_id_for(
+            PROJECT_ID, "evaluates-on", source.entity_id, target.entity_id
+        )
+        with self.assertRaisesRegex(ResearchRelationError, "iterable"):
+            ResearchRelation(
+                project_id=PROJECT_ID,
+                relation_id=relation_id,
+                relation_type="evaluates-on",
+                source_entity_id=source.entity_id,
+                target_entity_id=target.entity_id,
+                evidence_ids=None,  # type: ignore[arg-type]
+            )
+        with self.assertRaisesRegex(ResearchRelationError, "canonical sorted order"):
+            ResearchRelation(
+                project_id=PROJECT_ID,
+                relation_id=relation_id,
+                relation_type="evaluates-on",
+                source_entity_id=source.entity_id,
+                target_entity_id=target.entity_id,
+                evidence_ids=(EVIDENCE_B, EVIDENCE_A),
+            )
+
     def test_relation_labels_are_open_but_normalized_without_semantic_matrix(self) -> None:
         question = create_research_entity(
             PROJECT_ID,
@@ -448,6 +502,22 @@ class ResearchRelationSerializationTests(unittest.TestCase):
         self.assertEqual(parsed.serialized_bytes(), payload)
         self.assertTrue(payload.endswith(b"\n"))
         self.assertNotIn(b"\r", payload)
+
+    def test_unicode_line_separators_inside_json_strings_round_trip(self) -> None:
+        entity = create_research_entity(
+            PROJECT_ID,
+            entity_type="paper",
+            identity_key="paper:line\u2028paragraph\u2029separator",
+            title="Line\u2028Paragraph\u2029Separator",
+        )
+        registry = ResearchRelationRegistry(PROJECT_ID, (entity,))
+        payload = registry.serialized_bytes()
+
+        self.assertIn("\u2028".encode(), payload)
+        self.assertIn("\u2029".encode(), payload)
+        parsed = deserialize_research_relation_registry(payload, project_id=PROJECT_ID)
+        self.assertEqual(parsed, registry)
+        self.assertEqual(parsed.serialized_bytes(), payload)
 
     def test_empty_registry_is_a_valid_canonical_summary(self) -> None:
         registry = ResearchRelationRegistry(PROJECT_ID)

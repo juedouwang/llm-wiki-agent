@@ -190,12 +190,25 @@ def _anchor(value: object) -> str | None:
     return normalized
 
 
-def _evidence_ids(value: object) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        raise ResearchRelationError("evidence_ids must be a JSON array")
+def _evidence_ids(
+    value: object,
+    *,
+    require_json_array: bool = True,
+    require_canonical_order: bool = True,
+) -> tuple[str, ...]:
+    if require_json_array:
+        if not isinstance(value, list):
+            raise ResearchRelationError("evidence_ids must be a JSON array")
+        items = value
+    else:
+        if isinstance(value, (str, bytes)) or not isinstance(value, Iterable):
+            raise ResearchRelationError(
+                "evidence_ids must be an iterable of Evidence IDs"
+            )
+        items = list(value)
     normalized: list[str] = []
     seen: set[str] = set()
-    for item in value:
+    for item in items:
         if not isinstance(item, str) or _EVIDENCE_ID_PATTERN.fullmatch(item) is None:
             raise ResearchRelationError(
                 "evidence_ids entries must use 'evd-' plus 64 lowercase hex digits"
@@ -206,9 +219,9 @@ def _evidence_ids(value: object) -> tuple[str, ...]:
             )
         seen.add(item)
         normalized.append(item)
-    if normalized != sorted(normalized):
+    if require_canonical_order and normalized != sorted(normalized):
         raise ResearchRelationError("evidence_ids must use canonical sorted order")
-    return tuple(normalized)
+    return tuple(normalized if require_canonical_order else sorted(normalized))
 
 
 def research_entity_id_for(
@@ -347,7 +360,9 @@ class ResearchRelation:
             raise ResearchRelationConflictError(
                 "research relations must not point an entity to itself"
             )
-        evidence_ids = _evidence_ids(list(self.evidence_ids))
+        evidence_ids = _evidence_ids(
+            self.evidence_ids, require_json_array=False
+        )
         expected_id = research_relation_id_for(
             project_id, relation_type, source, target
         )
@@ -406,7 +421,11 @@ def create_research_relation(
     target_entity_id: str,
     evidence_ids: Iterable[str] = (),
 ) -> ResearchRelation:
-    normalized_evidence_ids = tuple(sorted(evidence_ids))
+    normalized_evidence_ids = _evidence_ids(
+        evidence_ids,
+        require_json_array=False,
+        require_canonical_order=False,
+    )
     return ResearchRelation(
         project_id=project_id,
         relation_id=research_relation_id_for(
@@ -724,7 +743,7 @@ def deserialize_research_relation_registry(
         raise ResearchRelationError("research relation registry is empty")
     if not text.endswith("\n"):
         raise ResearchRelationError("research relation registry must end with LF")
-    raw_lines = text.splitlines()
+    raw_lines = text[:-1].split("\n")
     if not raw_lines or any(not line for line in raw_lines):
         raise ResearchRelationError(
             "research relation registry must not contain blank rows"
