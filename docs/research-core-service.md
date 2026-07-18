@@ -64,6 +64,7 @@ project and does not create state in the research source tree.
 | `project_run_status(project_id, run_id)` | strict read-only run loading | local/path-bearing `ProjectRunResult` |
 | `source_open(...)` | `tools.source_access.open_source` or `open_evidence` | local/path-bearing `SourceOpenResult` |
 | `source_open_view(...)` | policy-enforced `source_open(...)` plus host-safe projection | path-free `HostSourceOpenResult` |
+| `knowledge_render(...)` | deterministic E-07 renderer plus F-05A/F-05B controlled writes | content-free `KnowledgeRenderingResult` observations |
 
 ### Register
 
@@ -543,6 +544,15 @@ audit. Neither primitive decides scientific/frontmatter semantics. They add no
 `ResearchCoreService` method, CLI command, MCP tool, Hook, or Web operation and read
 no Source or research-binary content. See
 [`controlled-markdown-writes.md`](controlled-markdown-writes.md).
+
+E-07 adds the `knowledge_render(...)` facade operation. It consumes only
+current machine artifacts and explicit host data, creates all fifteen curated
+product entries plus deterministic detail/index/daily-plan pages, and reports
+missing inputs as drafts. It does not open the registered source project or call
+an LLM. With persistence enabled it delegates every page to the F-05A controlled
+plan and F-05B authorization/CAS/audit boundary; it is not a replacement writer
+and does not authorize semantic/frontmatter changes by itself. See
+[`knowledge-rendering.md`](knowledge-rendering.md).
 
 The accepted deterministic Core slices also include the standalone B-07
 reading-priority operation. It does not add an MCP operation, run creation or

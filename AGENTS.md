@@ -135,6 +135,24 @@ Schema v1 `.llmwiki/projects/<project_id>/indexes/experiment-chains.json` under
 Markdown, reads no research binary, and sends nothing externally. See
 `docs/experiment-chains.md`.
 
+Render the complete E-07 project knowledge package with:
+
+```python
+core.knowledge_render(project_id, persist=True, host_context=..., decision_id=...)
+```
+
+`tools/knowledge_renderer.py` owns the deterministic fifteen-artifact contract,
+collection detail pages, the unified `index.md`, and the daily plan. It consumes
+current E-02--E-06 machine artifacts plus explicit host overrides, emits stable
+`DRAFT` placeholders for missing inputs, and keeps C-07 `deferred/not_started`.
+Use `persist=False` for content-free planning observations. Persisted pages must
+flow through F-05A and F-05B; Schema v1/future/malformed, user-owned, mixed, and
+non-draft pages are protected, and mixed user regions are preserved byte-for-byte.
+The operation writes curated Markdown only below the registered/custom knowledge
+root, never the research source or machine-state tree, calls no LLM, sends nothing
+externally, and adds no alternate write path. See
+`docs/knowledge-rendering.md` and `docs/research-core-service.md`.
+
 Prioritize a current B-06 Manifest with:
 
 ```bash
