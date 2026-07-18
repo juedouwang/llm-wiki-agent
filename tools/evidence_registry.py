@@ -12,7 +12,6 @@ import json
 import math
 import os
 import re
-import tempfile
 import time
 import uuid
 from contextlib import contextmanager
@@ -34,6 +33,14 @@ if __package__:
     )
     from .project_registry import load_registered_project
     from .source_registry import SourceRecord, SourceRegistry, load_source_registry
+    from .stable_file_access import (
+        StableFileAccessError,
+        StableFileBoundaryError,
+        StableFileMissingError,
+        StableFileRedirectionError,
+        read_stable_regular_file,
+        write_atomic_stable_file,
+    )
 else:
     from extraction_schema import (  # type: ignore[no-redef]
         EXTRACTION_SCHEMA_VERSION,
@@ -51,6 +58,14 @@ else:
         SourceRecord,
         SourceRegistry,
         load_source_registry,
+    )
+    from stable_file_access import (  # type: ignore[no-redef]
+        StableFileAccessError,
+        StableFileBoundaryError,
+        StableFileMissingError,
+        StableFileRedirectionError,
+        read_stable_regular_file,
+        write_atomic_stable_file,
     )
 
 
@@ -368,7 +383,9 @@ class EvidenceRegistry:
 
     def __post_init__(self) -> None:
         project_id = validate_project_id(self.project_id)
-        evidence_file = Path(self.evidence_file).expanduser().resolve()
+        evidence_file = Path(
+            os.path.abspath(os.fspath(Path(self.evidence_file).expanduser()))
+        )
         records = tuple(self.records)
         if not all(isinstance(record, Evidence) for record in records):
             raise EvidenceError("records must contain only Evidence objects")
@@ -548,24 +565,38 @@ def _bind_record(record: Evidence, source_registry: SourceRegistry) -> None:
 def _load_evidence_file(
     path: Path,
     *,
+    trusted_root: Path,
     project_id: str,
     source_registry: SourceRegistry,
     missing_ok: bool,
 ) -> EvidenceRegistry:
-    evidence_file = Path(path).expanduser().resolve()
-    if not evidence_file.exists():
+    evidence_file = Path(os.path.abspath(os.fspath(Path(path).expanduser())))
+    try:
+        observation = read_stable_regular_file(
+            trusted_root,
+            evidence_file,
+            reject_redirection=True,
+            capture_bytes=True,
+        )
+    except StableFileMissingError as exc:
         if missing_ok:
             return EvidenceRegistry(project_id, evidence_file)
-        raise EvidenceError(f"Evidence registry does not exist: {evidence_file}")
-    if evidence_file.is_symlink():
-        raise EvidenceError(f"Evidence registry must not be a symbolic link: {evidence_file}")
+        raise EvidenceError(f"Evidence registry does not exist: {evidence_file}") from exc
+    except (StableFileBoundaryError, StableFileRedirectionError) as exc:
+        raise EvidenceError(
+            "Evidence registry must remain a non-redirected file inside the "
+            f"project machine-state root: {evidence_file}: {exc}"
+        ) from exc
+    except StableFileAccessError as exc:
+        raise EvidenceError(
+            f"could not read Evidence registry {evidence_file}: {exc}"
+        ) from exc
+    if observation.data is None:
+        raise EvidenceError(f"Evidence registry read returned no bytes: {evidence_file}")
     try:
-        raw = evidence_file.read_bytes()
-        text = raw.decode("utf-8")
+        text = observation.data.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise EvidenceError(f"Evidence registry must be UTF-8: {evidence_file}") from exc
-    except OSError as exc:
-        raise EvidenceError(f"could not read Evidence registry {evidence_file}: {exc}") from exc
     lines = text.splitlines()
     if not lines:
         raise EvidenceError(f"Evidence registry is empty: {evidence_file}")
@@ -622,6 +653,7 @@ def load_evidence_registry(
     source_registry = load_source_registry(workspace_root, registration.project_id)
     return _load_evidence_file(
         registration.layout.evidence_file,
+        trusted_root=registration.layout.machine_root,
         project_id=registration.project_id,
         source_registry=source_registry,
         missing_ok=False,
@@ -710,44 +742,19 @@ def _exclusive_evidence_lock(
             ) from exc
 
 
-def _write_evidence_atomic(registry: EvidenceRegistry) -> bool:
+def _write_evidence_atomic(
+    registry: EvidenceRegistry,
+    *,
+    trusted_root: Path,
+) -> bool:
     path = registry.evidence_file
-    if path.is_symlink():
-        raise EvidenceError(f"Evidence registry must not be a symbolic link: {path}")
     payload = registry.serialized_bytes()
-    if path.exists():
-        try:
-            if path.read_bytes() == payload:
-                return False
-        except OSError as exc:
-            raise EvidenceError(
-                f"could not compare Evidence registry {path}: {exc}"
-            ) from exc
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = -1
-    temporary: Path | None = None
     try:
-        descriptor, raw_path = tempfile.mkstemp(
-            prefix=".evidence.jsonl.",
-            suffix=".tmp",
-            dir=path.parent,
-        )
-        temporary = Path(raw_path)
-        with os.fdopen(descriptor, "wb") as target:
-            descriptor = -1
-            target.write(payload)
-            target.flush()
-            os.fsync(target.fileno())
-        os.replace(temporary, path)
-        temporary = None
-        return True
-    except OSError as exc:
-        raise EvidenceError(f"could not write Evidence registry {path}: {exc}") from exc
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+        return write_atomic_stable_file(trusted_root, path, payload)
+    except StableFileAccessError as exc:
+        raise EvidenceError(
+            f"could not securely write Evidence registry {path}: {exc}"
+        ) from exc
 
 
 def register_evidence(
@@ -798,6 +805,7 @@ def register_evidence(
         _bind_record(candidate, source_registry)
         registry = _load_evidence_file(
             evidence_file,
+            trusted_root=registration.layout.machine_root,
             project_id=registration.project_id,
             source_registry=source_registry,
             missing_ok=True,
@@ -817,7 +825,10 @@ def register_evidence(
                     )
                 ),
             )
-            wrote_registry = _write_evidence_atomic(updated)
+            wrote_registry = _write_evidence_atomic(
+                updated,
+                trusted_root=registration.layout.machine_root,
+            )
             registry = updated
             persisted = candidate
     return EvidenceRegistrationResult(

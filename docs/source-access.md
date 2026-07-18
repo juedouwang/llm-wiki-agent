@@ -44,16 +44,23 @@ only the registered current path and does not hash a normally resolvable path. I
 that access fails, D-05 may repair one unique exact-hash relocation, reload the
 registry, and resolve the recovered path. Ambiguous recovery fails explicitly.
 
-`open_source` reads the resolved file, computes its SHA-256, and refuses to
-extract a locator unless the bytes still match the source registry's current
-content hash. A read or content mismatch may trigger one D-05 recovery attempt
-and one retry. Optional expected content and excerpt hashes still require the
-requested current identity and exact excerpt; recovery does not weaken them.
+`open_source` opens the lexical project path once, verifies the opened
+descriptor's final target remains inside the registered project **before reading
+any bytes**, hashes and reads through that same descriptor, and rejects path or
+file-identity changes during the read. It refuses to extract a locator unless
+the stable bytes still match the source registry's current content hash. A read
+or content mismatch may trigger one D-05 recovery attempt and one retry. Optional
+expected content and excerpt hashes still require the requested current identity
+and exact excerpt; recovery does not weaken them.
 
-`recover_relocation` defaults to `True` for compatibility with D-05. Passing
-`False` makes locate/open fail on the registered path without invoking the
-mutating recovery path. F-02B uses this strict mode and, after a failure, calls
-the separate read-only relocation inspector only for diagnostics.
+`recover_relocation` defaults to `True` for compatibility with D-05. It is a
+write-authorization boundary and therefore accepts only a literal boolean;
+non-boolean truthy/falsy values fail closed with `TypeError`. Passing `False`
+makes locate/open fail on the registered path without invoking the mutating
+recovery path. F-02B uses this strict mode and, after a failure, calls the
+separate read-only relocation inspector only for diagnostics. See
+[`stable-file-access.md`](stable-file-access.md) for the descriptor and
+fail-closed platform contract.
 
 `open_evidence` loads one persisted D-03 Evidence record and requires all of:
 

@@ -8,7 +8,10 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
+from tools import evidence_registry as evidence_registry_module
+from tools import stable_file_access as stable_file_access_module
 from tools.evidence_registry import (
     EVIDENCE_HASH_ALGORITHM,
     EVIDENCE_IDENTITY_VERSION,
@@ -492,6 +495,134 @@ class EvidenceSchemaTests(unittest.TestCase):
         })
         self.assertEqual(sum(item.wrote_registry for item in results), 1)
         self.assertEqual(before, self.source_snapshot())
+
+    def test_loader_rejects_a_redirected_evidence_registry(self) -> None:
+        self.register()
+        evidence_file = self.registration.layout.evidence_file
+        outside = self.root / "outside-evidence.jsonl"
+        outside.write_bytes(evidence_file.read_bytes())
+        evidence_file.unlink()
+        try:
+            os.symlink(outside, evidence_file)
+        except OSError as exc:
+            evidence_file.write_bytes(outside.read_bytes())
+            self.skipTest(f"symbolic links unavailable: {exc}")
+
+        with self.assertRaisesRegex(EvidenceError, "non-redirected"):
+            load_evidence_registry(
+                self.workspace,
+                self.registration.project_id,
+            )
+
+    def test_registration_never_resolves_a_raced_registry_symlink_target(self) -> None:
+        self.register(LineRangeLocator(1, 1), "VALUE = 1\n")
+        evidence_file = self.registration.layout.evidence_file
+        outside = self.root / "outside-evidence.jsonl"
+        sentinel = b"outside file must remain unchanged\n"
+        outside.write_bytes(sentinel)
+        real_load = evidence_registry_module._load_evidence_file
+        swapped = False
+
+        def load_then_redirect(*args, **kwargs):
+            nonlocal swapped
+            registry = real_load(*args, **kwargs)
+            if not swapped:
+                evidence_file.unlink()
+                try:
+                    os.symlink(outside, evidence_file)
+                except OSError as exc:
+                    evidence_file.write_bytes(registry.serialized_bytes())
+                    self.skipTest(f"symbolic links unavailable: {exc}")
+                swapped = True
+            return registry
+
+        with mock.patch.object(
+            evidence_registry_module,
+            "_load_evidence_file",
+            side_effect=load_then_redirect,
+        ):
+            with self.assertRaisesRegex(EvidenceError, "securely write"):
+                self.register(LineRangeLocator(2, 2), "print(VALUE)\n")
+
+        self.assertEqual(outside.read_bytes(), sentinel)
+        self.assertTrue(evidence_file.is_symlink())
+
+    def test_atomic_writer_pins_machine_root_during_evidence_registry_replace(self) -> None:
+        self.register(LineRangeLocator(1, 1), "VALUE = 1\n")
+        evidence_file = self.registration.layout.evidence_file
+        before_registry = evidence_file.read_bytes()
+        machine_root = self.registration.layout.machine_root
+        displaced = machine_root.with_name(f"{machine_root.name}-displaced")
+        outside = self.root / "outside-machine-state"
+        outside.mkdir()
+        outside_registry = outside / "evidence.jsonl"
+        outside_lock = outside / "evidence.jsonl.lock"
+        registry_sentinel = b"outside Evidence registry sentinel\n"
+        lock_sentinel = b"outside Evidence lock sentinel\n"
+        outside_registry.write_bytes(registry_sentinel)
+        outside_lock.write_bytes(lock_sentinel)
+        real_write_all = stable_file_access_module._write_all
+        attack_attempted = False
+        attack_succeeded = False
+
+        def write_while_replacing_root(descriptor: int, payload: bytes) -> None:
+            nonlocal attack_attempted, attack_succeeded
+            if not attack_attempted:
+                attack_attempted = True
+                try:
+                    machine_root.rename(displaced)
+                except OSError:
+                    pass
+                else:
+                    try:
+                        os.symlink(outside, machine_root, target_is_directory=True)
+                    except OSError:
+                        displaced.rename(machine_root)
+                    else:
+                        attack_succeeded = True
+            real_write_all(descriptor, payload)
+
+        error: EvidenceError | None = None
+        result = None
+        try:
+            with mock.patch(
+                "tools.stable_file_access._write_all",
+                side_effect=write_while_replacing_root,
+            ):
+                try:
+                    result = self.register(
+                        LineRangeLocator(2, 2),
+                        "print(VALUE)\n",
+                    )
+                except EvidenceError as exc:
+                    error = exc
+        finally:
+            if machine_root.is_symlink():
+                machine_root.unlink()
+            if displaced.exists():
+                displaced.rename(machine_root)
+            evidence_file.with_name("evidence.jsonl.lock").unlink(missing_ok=True)
+
+        self.assertTrue(attack_attempted)
+        self.assertEqual(outside_registry.read_bytes(), registry_sentinel)
+        self.assertEqual(outside_lock.read_bytes(), lock_sentinel)
+        if attack_succeeded:
+            self.assertIsNotNone(error)
+            self.assertEqual(evidence_file.read_bytes(), before_registry)
+        else:
+            self.assertIsNone(error)
+            self.assertIsNotNone(result)
+            assert result is not None
+            self.assertTrue(result.wrote_registry)
+            self.assertEqual(
+                len(
+                    load_evidence_registry(
+                        self.workspace,
+                        self.registration.project_id,
+                    ).records
+                ),
+                2,
+            )
 
     def test_missing_registry_and_invalid_excerpt_types_fail_closed(self) -> None:
         with self.assertRaises(EvidenceError):

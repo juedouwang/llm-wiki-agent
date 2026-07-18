@@ -85,6 +85,12 @@ Every recovered candidate must:
 - remain stable while read; and
 - exactly match the current source version's recorded SHA-256.
 
+Candidate bytes are hashed through one stable descriptor whose final target is
+proven inside the registered project before the first read. Symbolic-link or
+reparse-point redirection and path/file identity changes fail closed. The
+read-only inspector and mutating recovery share this candidate-verification
+primitive.
+
 Unreadable, unstable, outside-root, symlink/reparse, or otherwise unverifiable
 paths are never bound. If a priority group contains a blocked candidate, the
 result is `unresolved` with reason
@@ -113,8 +119,11 @@ fails the same project-boundary and exact-hash checks used by other groups.
 `record_source_relocation(...)` owns the only persistence path. Under the
 existing `sources.jsonl.lock`, it reloads current state and verifies the expected
 source ID, current path/version/hash, final candidate boundary, regular-file
-status, stable bytes, and SHA-256. It then atomically writes one updated source
-record.
+status, stable bytes, and SHA-256. It retains that candidate descriptor across the
+registry replacement, re-hashes it immediately before and after the commit, and
+atomically restores the previous registry if post-commit identity/path/hash
+verification fails. A changed candidate therefore never produces a successful
+relocation binding.
 
 Relocation preserves:
 

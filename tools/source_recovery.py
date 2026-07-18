@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import shutil
@@ -29,6 +28,15 @@ if __package__:
         load_source_registry,
         record_source_relocation,
     )
+    from .stable_file_access import (
+        StableFileAccessError,
+        StableFileBoundaryError,
+        StableFileChangedError,
+        StableFileMissingError,
+        StableFileRedirectionError,
+        StableFileTypeError,
+        read_stable_regular_file,
+    )
 else:
     from project_inventory import (  # type: ignore[no-redef]
         PROJECT_MANIFEST_VERSION,
@@ -50,6 +58,15 @@ else:
         SourceRegistryError,
         load_source_registry,
         record_source_relocation,
+    )
+    from stable_file_access import (  # type: ignore[no-redef]
+        StableFileAccessError,
+        StableFileBoundaryError,
+        StableFileChangedError,
+        StableFileMissingError,
+        StableFileRedirectionError,
+        StableFileTypeError,
+        read_stable_regular_file,
     )
 
 
@@ -335,57 +352,37 @@ def _path_policy_included(policy: ScanPolicy, path: str) -> bool:
     return policy.decide_path(path, is_directory=False).included
 
 
-def _file_signature(metadata: os.stat_result) -> tuple[object, ...]:
-    signature: tuple[object, ...] = (
-        stat.S_IFMT(metadata.st_mode),
-        metadata.st_dev,
-        metadata.st_ino,
-        metadata.st_size,
-        metadata.st_mtime_ns,
-    )
-    if os.name != "nt":
-        signature += (metadata.st_ctime_ns,)
-    return signature
-
-
-def _hash_stable_regular_file(path: Path) -> tuple[str, str | None]:
+def _hash_stable_regular_file(
+    project_root: Path,
+    path: Path,
+    *,
+    reject_redirection: bool,
+) -> tuple[str, str | None]:
     try:
-        before = path.stat(follow_symlinks=False)
-    except FileNotFoundError:
+        observation = read_stable_regular_file(
+            project_root,
+            path,
+            reject_redirection=reject_redirection,
+            capture_bytes=False,
+        )
+    except StableFileMissingError:
         return "", "candidate-missing"
-    except OSError:
-        return "", "candidate-metadata-unreadable"
-    if not stat.S_ISREG(before.st_mode):
+    except StableFileTypeError:
         return "", "candidate-not-regular-file"
-
-    digest = hashlib.sha256()
-    try:
-        with path.open("rb") as source:
-            opened = os.fstat(source.fileno())
-            if not stat.S_ISREG(opened.st_mode):
-                return "", "candidate-not-regular-file"
-            if _file_signature(opened) != _file_signature(before):
-                return "", "candidate-changed-during-verification"
-            while True:
-                chunk = source.read(1024 * 1024)
-                if not chunk:
-                    break
-                digest.update(chunk)
-            after_descriptor = os.fstat(source.fileno())
-    except OSError:
+    except StableFileBoundaryError:
+        return "", "candidate-outside-project"
+    except StableFileRedirectionError:
+        reason = (
+            "candidate-symlink-or-reparse-point"
+            if reject_redirection
+            else "candidate-outside-project"
+        )
+        return "", reason
+    except StableFileChangedError:
+        return "", "candidate-changed-during-verification"
+    except StableFileAccessError:
         return "", "candidate-read-failed"
-
-    try:
-        after_path = path.stat(follow_symlinks=False)
-    except OSError:
-        return "", "candidate-changed-during-verification"
-    signature = _file_signature(before)
-    if (
-        _file_signature(after_descriptor) != signature
-        or _file_signature(after_path) != signature
-    ):
-        return "", "candidate-changed-during-verification"
-    return digest.hexdigest(), None
+    return observation.content_sha256, None
 
 
 def _resolve_observation_path(
@@ -421,7 +418,10 @@ def _resolve_observation_path(
         return None, "candidate-outside-project"
     if not resolved.is_file():
         return None, "candidate-not-regular-file"
-    return resolved, None
+    # Return the registered lexical path. The stable reader must bind its own
+    # descriptor to whatever that path targets at open time; returning the
+    # pre-resolved target would reintroduce a symlink TOCTOU gap.
+    return candidate, None
 
 
 def _observe_candidate(
@@ -441,12 +441,12 @@ def _observe_candidate(
             "candidate-outside-scan-boundary",
             "candidate is excluded by the current deterministic scan policy",
         )
-    resolved, failure = _resolve_observation_path(
+    candidate_path, failure = _resolve_observation_path(
         project_root,
         normalized,
         reject_reparse_points=reject_reparse_points,
     )
-    if resolved is None:
+    if candidate_path is None:
         state = "missing" if failure == "candidate-missing" else "blocked"
         return _CandidateObservation(
             normalized,
@@ -454,7 +454,11 @@ def _observe_candidate(
             failure or "candidate-resolution-failed",
             "candidate path could not be verified as a project-contained regular file",
         )
-    observed, hash_failure = _hash_stable_regular_file(resolved)
+    observed, hash_failure = _hash_stable_regular_file(
+        project_root,
+        candidate_path,
+        reject_redirection=reject_reparse_points,
+    )
     if hash_failure is not None:
         state = "missing" if hash_failure == "candidate-missing" else "blocked"
         return _CandidateObservation(

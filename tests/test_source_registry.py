@@ -8,7 +8,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from tools import source_registry as source_registry_module
+from tools import stable_file_access as stable_file_access_module
 from tools.project_inventory import inventory_project
 from tools.project_registry import register_project
 from tools.source_registry import (
@@ -467,6 +470,173 @@ class SourceRegistryTests(unittest.TestCase):
                 self.registration.project_id,
             )
         self.assertEqual(self.registration.layout.sources_file.read_bytes(), payload)
+
+    def test_loader_rejects_descriptor_escape_before_read(self) -> None:
+        sync_source_registry(self.workspace, self.registration.project_id)
+        outside = self.root / "outside-sources.jsonl"
+        outside.write_bytes(self.registration.layout.sources_file.read_bytes())
+
+        with patch(
+            "tools.stable_file_access._descriptor_final_path",
+            return_value=outside.resolve(),
+        ), patch("tools.stable_file_access.os.read") as read_mock:
+            with self.assertRaisesRegex(
+                SourceRegistryError,
+                "stable, non-redirected regular file",
+            ):
+                load_source_registry(
+                    self.workspace,
+                    self.registration.project_id,
+                )
+
+        read_mock.assert_not_called()
+
+    def test_loader_rejects_redirected_registry(self) -> None:
+        sync_source_registry(self.workspace, self.registration.project_id)
+        sources_file = self.registration.layout.sources_file
+        outside = self.root / "outside-sources.jsonl"
+        outside.write_bytes(sources_file.read_bytes())
+        sources_file.unlink()
+        try:
+            os.symlink(outside, sources_file)
+        except OSError as exc:
+            sources_file.write_bytes(outside.read_bytes())
+            self.skipTest(f"symbolic links unavailable: {exc}")
+
+        with self.assertRaisesRegex(
+            SourceRegistryError,
+            "stable, non-redirected regular file",
+        ):
+            load_source_registry(
+                self.workspace,
+                self.registration.project_id,
+            )
+
+    def test_sync_rejects_registry_redirected_after_locked_load(self) -> None:
+        sync_source_registry(self.workspace, self.registration.project_id)
+        sources_file = self.registration.layout.sources_file
+        outside = self.root / "outside-sources.jsonl"
+        sentinel = b"outside file must remain unchanged\n"
+        outside.write_bytes(sentinel)
+        real_load = source_registry_module._load_source_registry_file
+        swapped = False
+
+        def load_then_redirect(*args, **kwargs):
+            nonlocal swapped
+            registry = real_load(*args, **kwargs)
+            if not swapped:
+                original = sources_file.read_bytes()
+                sources_file.unlink()
+                try:
+                    os.symlink(outside, sources_file)
+                except OSError as exc:
+                    sources_file.write_bytes(original)
+                    self.skipTest(f"symbolic links unavailable: {exc}")
+                swapped = True
+            return registry
+
+        with patch.object(
+            source_registry_module,
+            "_load_source_registry_file",
+            side_effect=load_then_redirect,
+        ):
+            with self.assertRaisesRegex(
+                SourceRegistryError,
+                "securely write",
+            ):
+                sync_source_registry(
+                    self.workspace,
+                    self.registration.project_id,
+                )
+
+        self.assertEqual(outside.read_bytes(), sentinel)
+        self.assertTrue(sources_file.is_symlink())
+
+    def test_atomic_writer_pins_machine_root_during_source_registry_replace(self) -> None:
+        sync_source_registry(self.workspace, self.registration.project_id)
+        before_registry = self.registration.layout.sources_file.read_bytes()
+        (self.project / "added.txt").write_text(
+            "new source\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        inventory_project(self.workspace, self.registration.project_id)
+
+        machine_root = self.registration.layout.machine_root
+        displaced = machine_root.with_name(f"{machine_root.name}-displaced")
+        outside = self.root / "outside-machine-state"
+        outside.mkdir()
+        outside_registry = outside / "sources.jsonl"
+        outside_lock = outside / "sources.jsonl.lock"
+        registry_sentinel = b"outside source registry sentinel\n"
+        lock_sentinel = b"outside source lock sentinel\n"
+        outside_registry.write_bytes(registry_sentinel)
+        outside_lock.write_bytes(lock_sentinel)
+        real_write_all = stable_file_access_module._write_all
+        attack_attempted = False
+        attack_succeeded = False
+
+        def write_while_replacing_root(descriptor: int, payload: bytes) -> None:
+            nonlocal attack_attempted, attack_succeeded
+            if not attack_attempted:
+                attack_attempted = True
+                try:
+                    machine_root.rename(displaced)
+                except OSError:
+                    pass
+                else:
+                    try:
+                        os.symlink(outside, machine_root, target_is_directory=True)
+                    except OSError:
+                        displaced.rename(machine_root)
+                    else:
+                        attack_succeeded = True
+            real_write_all(descriptor, payload)
+
+        error: SourceRegistryError | None = None
+        result = None
+        try:
+            with patch(
+                "tools.stable_file_access._write_all",
+                side_effect=write_while_replacing_root,
+            ):
+                try:
+                    result = sync_source_registry(
+                        self.workspace,
+                        self.registration.project_id,
+                    )
+                except SourceRegistryError as exc:
+                    error = exc
+        finally:
+            if machine_root.is_symlink():
+                machine_root.unlink()
+            if displaced.exists():
+                displaced.rename(machine_root)
+            self.registration.layout.sources_file.with_name(
+                "sources.jsonl.lock"
+            ).unlink(missing_ok=True)
+
+        self.assertTrue(attack_attempted)
+        self.assertEqual(outside_registry.read_bytes(), registry_sentinel)
+        self.assertEqual(outside_lock.read_bytes(), lock_sentinel)
+        if attack_succeeded:
+            self.assertIsNotNone(error)
+            self.assertEqual(
+                self.registration.layout.sources_file.read_bytes(),
+                before_registry,
+            )
+        else:
+            self.assertIsNone(error)
+            self.assertIsNotNone(result)
+            assert result is not None
+            self.assertTrue(result.wrote_registry)
+            self.assertIn(
+                "added.txt",
+                load_source_registry(
+                    self.workspace,
+                    self.registration.project_id,
+                ).current_by_path,
+            )
 
     def test_existing_lock_times_out_without_modifying_state(self) -> None:
         sync_source_registry(self.workspace, self.registration.project_id)

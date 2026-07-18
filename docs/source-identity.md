@@ -70,7 +70,7 @@ Rows are sorted by normalized project-relative POSIX path. Every `source_id` and
 
 ## Concurrency and fail-closed behavior
 
-Writers serialize through the adjacent `sources.jsonl.lock` file. The registry is reloaded while holding the lock, so concurrent synchronizations cannot allocate multiple IDs for the same path. New data is written to a same-directory temporary file, flushed, and installed with `os.replace`.
+Writers serialize through the adjacent `sources.jsonl.lock` file. The registry is reloaded while holding the lock, so concurrent synchronizations cannot allocate multiple IDs for the same path. Ordinary loads and under-lock reloads read `sources.jsonl` through a stable, non-redirected descriptor beneath the project machine-state root. Existing-registry equality checks and atomic replacement use the same trusted-root boundary; redirected paths or changed file identity fail closed.
 
 The following state is rejected without replacing the existing registry:
 

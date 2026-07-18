@@ -11,6 +11,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tools import source_recovery as source_recovery_module
+from tools import source_registry as source_registry_module
+from tools import stable_file_access as stable_file_access_module
 from tools.evidence_registry import register_evidence
 from tools.extraction_schema import LineRangeLocator
 from tools.project_inventory import inventory_project
@@ -33,7 +36,12 @@ from tools.source_recovery import (
     inspect_source_relocation,
     recover_source,
 )
-from tools.source_registry import load_source_registry, sync_source_registry
+from tools.source_registry import (
+    SourceRegistryConflictError,
+    load_source_registry,
+    record_source_relocation,
+    sync_source_registry,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -451,6 +459,146 @@ class SourceRecoveryTests(unittest.TestCase):
         self.assertEqual(result.recovery_method, "content-hash")
         self.assertIn("candidates/linked.txt", result.attempts[-1].blocked_paths)
         self.assertEqual(sources_file.read_bytes(), before_registry)
+
+    def test_inspection_binds_read_to_registered_lexical_path(self) -> None:
+        internal = self.project / "docs" / "internal-target.txt"
+        outside = self.root / "outside-race.txt"
+        internal.write_bytes(self.source_bytes)
+        outside.write_bytes(self.source_bytes)
+        self.original.unlink()
+        try:
+            os.symlink(internal.name, self.original)
+        except OSError as exc:
+            self.original.write_bytes(self.source_bytes)
+            self.skipTest(f"symbolic links unavailable: {exc}")
+        sources_file = self.registration.layout.sources_file
+        before_registry = sources_file.read_bytes()
+        real_resolve = source_recovery_module._resolve_observation_path
+        redirected = False
+
+        def resolve_then_redirect(
+            project_root: Path,
+            path: str,
+            *,
+            reject_reparse_points: bool,
+        ):
+            nonlocal redirected
+            result = real_resolve(
+                project_root,
+                path,
+                reject_reparse_points=reject_reparse_points,
+            )
+            if not redirected and path == "docs/original.txt":
+                self.original.unlink()
+                try:
+                    os.symlink(outside, self.original)
+                except OSError as exc:
+                    self.skipTest(f"symbolic-link retargeting unavailable: {exc}")
+                redirected = True
+            return result
+
+        with mock.patch.object(
+            source_recovery_module,
+            "_resolve_observation_path",
+            side_effect=resolve_then_redirect,
+        ):
+            result = inspect_source_relocation(
+                self.workspace,
+                self.registration.project_id,
+                self.source.source_id,
+            )
+
+        self.assertNotEqual(result.status, "current")
+        self.assertEqual(
+            result.current_failure_reason_code,
+            "source-path-outside-project",
+        )
+        self.assertEqual(sources_file.read_bytes(), before_registry)
+
+    def test_mutating_relocation_rejects_descriptor_escape_before_read(self) -> None:
+        moved = self.move_original("moved/descriptor-race.txt")
+        outside = self.root / "outside.txt"
+        outside.write_bytes(self.source_bytes)
+        sources_file = self.registration.layout.sources_file
+        before_registry = sources_file.read_bytes()
+        assert self.source.current_content_hash is not None
+        assert self.source.current_version is not None
+
+        real_descriptor_path = stable_file_access_module._descriptor_final_path
+        moved_path = moved.resolve()
+
+        def redirect_candidate_descriptor(descriptor: int):
+            actual = real_descriptor_path(descriptor)
+            if actual == moved_path:
+                return outside.resolve()
+            return actual
+
+        with mock.patch(
+            "tools.stable_file_access._descriptor_final_path",
+            side_effect=redirect_candidate_descriptor,
+        ):
+            with self.assertRaises(SourceRegistryConflictError):
+                record_source_relocation(
+                    self.workspace,
+                    self.registration.project_id,
+                    source_id=self.source.source_id,
+                    recovered_path=moved.relative_to(self.project).as_posix(),
+                    expected_content_hash=self.source.current_content_hash,
+                    expected_current_path=self.source.current_path,
+                    expected_current_version=self.source.current_version,
+                )
+
+        self.assertEqual(sources_file.read_bytes(), before_registry)
+        self.assertEqual(self.current_source().current_path, self.source.current_path)
+
+    def test_relocation_restores_registry_if_candidate_changes_during_commit(self) -> None:
+        moved = self.move_original("moved/commit-race.txt")
+        sources_file = self.registration.layout.sources_file
+        before_registry = sources_file.read_bytes()
+        replacement = moved.with_name("candidate-replacement.txt")
+        attacker_bytes = b"candidate changed during registry commit\n"
+        real_write = source_registry_module._write_registry_atomic
+        attacked = False
+        assert self.source.current_content_hash is not None
+        assert self.source.current_version is not None
+
+        def write_after_candidate_change(registry, *, trusted_root: Path):
+            nonlocal attacked
+            if not attacked:
+                attacked = True
+                replacement.write_bytes(attacker_bytes)
+                try:
+                    replacement.replace(moved)
+                except OSError:
+                    try:
+                        moved.write_bytes(attacker_bytes)
+                    except OSError as exc:
+                        self.skipTest(f"concurrent candidate mutation unavailable: {exc}")
+            return real_write(registry, trusted_root=trusted_root)
+
+        with mock.patch.object(
+            source_registry_module,
+            "_write_registry_atomic",
+            side_effect=write_after_candidate_change,
+        ):
+            with self.assertRaisesRegex(
+                SourceRegistryConflictError,
+                "previous source registry was restored",
+            ):
+                record_source_relocation(
+                    self.workspace,
+                    self.registration.project_id,
+                    source_id=self.source.source_id,
+                    recovered_path=moved.relative_to(self.project).as_posix(),
+                    expected_content_hash=self.source.current_content_hash,
+                    expected_current_path=self.source.current_path,
+                    expected_current_version=self.source.current_version,
+                )
+
+        self.assertTrue(attacked)
+        self.assertEqual(sources_file.read_bytes(), before_registry)
+        self.assertEqual(self.current_source().current_path, self.source.current_path)
+        self.assertEqual(moved.read_bytes(), attacker_bytes)
 
     def test_concurrent_cli_recovery_has_one_writer_and_no_duplicate_history(self) -> None:
         moved = self.move_original("moved/concurrent.txt")

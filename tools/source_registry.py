@@ -9,13 +9,10 @@ separate D-03 through D-06 concerns.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
 import re
-import stat
-import tempfile
 import time
 import unicodedata
 import uuid
@@ -33,6 +30,14 @@ if __package__:
     )
     from .project_layout import CURRENT_SCHEMA_VERSION, LayoutError, schema_version_of
     from .project_registry import load_registered_project
+    from .stable_file_access import (
+        StableFileAccessError,
+        StableFileLease,
+        StableFileMissingError,
+        lease_stable_regular_file,
+        read_stable_regular_file,
+        write_atomic_stable_file,
+    )
 else:
     from project_inventory import (  # type: ignore[no-redef]
         CONTENT_HASH_ALGORITHM,
@@ -46,6 +51,14 @@ else:
         schema_version_of,
     )
     from project_registry import load_registered_project  # type: ignore[no-redef]
+    from stable_file_access import (  # type: ignore[no-redef]
+        StableFileAccessError,
+        StableFileLease,
+        StableFileMissingError,
+        lease_stable_regular_file,
+        read_stable_regular_file,
+        write_atomic_stable_file,
+    )
 
 
 SOURCE_REGISTRY_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
@@ -799,15 +812,31 @@ def _decode_registry_line(raw_line: str, *, path: Path, line_number: int) -> obj
         raise _registry_error(path, str(exc), line_number) from exc
 
 
-def _load_registry_lines(path: Path) -> list[object]:
-    if path.is_symlink():
-        raise SourceRegistryError(f"source registry must not be a symbolic link: {path}")
-    if not path.is_file():
-        raise SourceRegistryError(f"source registry is not a regular file: {path}")
+def _load_registry_lines(
+    path: Path,
+    *,
+    trusted_root: Path,
+) -> list[object]:
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        raise SourceRegistryError(f"could not read source registry {path}: {exc}") from exc
+        observation = read_stable_regular_file(
+            trusted_root,
+            path,
+            reject_redirection=True,
+            capture_bytes=True,
+        )
+    except StableFileMissingError:
+        raise
+    except StableFileAccessError as exc:
+        raise SourceRegistryError(
+            "source registry must remain a stable, non-redirected regular file "
+            f"inside the project machine-state root: {path}: {exc}"
+        ) from exc
+    if observation.data is None:
+        raise SourceRegistryError(f"source registry read returned no bytes: {path}")
+    try:
+        text = observation.data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SourceRegistryError(f"source registry must be UTF-8: {path}") from exc
     raw_lines = text.splitlines()
     if not raw_lines:
         raise _registry_error(path, "the registry is empty")
@@ -1083,19 +1112,21 @@ def _load_v2_registry(
 def _load_source_registry_file(
     sources_file: Path,
     *,
+    trusted_root: Path,
     project_id: str,
     missing_ok: bool,
 ) -> SourceRegistry:
-    path = Path(sources_file)
-    if not path.exists():
+    path = Path(os.path.abspath(os.fspath(Path(sources_file).expanduser())))
+    try:
+        rows = _load_registry_lines(path, trusted_root=trusted_root)
+    except StableFileMissingError as exc:
         if missing_ok:
             return SourceRegistry(
                 project_id=project_id,
                 sources_file=path,
                 records=(),
             )
-        raise SourceRegistryError(f"source registry does not exist: {path}")
-    rows = _load_registry_lines(path)
+        raise SourceRegistryError(f"source registry does not exist: {path}") from exc
     if not isinstance(rows[0], dict):
         raise _registry_error(path, "summary row must contain an object", 1)
     registry_version = rows[0].get("registry_version")
@@ -1119,6 +1150,7 @@ def load_source_registry(
     registration = load_registered_project(workspace_root, project_id)
     return _load_source_registry_file(
         registration.layout.sources_file,
+        trusted_root=registration.layout.machine_root,
         project_id=registration.project_id,
         missing_ok=False,
     )
@@ -1185,6 +1217,19 @@ def _exclusive_registry_lock(
                     f"timed out waiting for source registry lock: {lock_file}"
                 ) from exc
             time.sleep(_LOCK_RETRY_SECONDS)
+        except PermissionError as exc:
+            # Windows may report access denied while the previous owner is
+            # deleting the just-released lock rather than FileExistsError.
+            if os.name == "nt" and time.monotonic() < deadline:
+                time.sleep(_LOCK_RETRY_SECONDS)
+                continue
+            if os.name == "nt":
+                raise SourceRegistryLockError(
+                    f"timed out waiting for source registry lock: {lock_file}"
+                ) from exc
+            raise SourceRegistryLockError(
+                f"could not create source registry lock {lock_file}: {exc}"
+            ) from exc
         except OSError as exc:
             raise SourceRegistryLockError(
                 f"could not create source registry lock {lock_file}: {exc}"
@@ -1210,167 +1255,47 @@ def _exclusive_registry_lock(
             ) from exc
 
 
-def _write_registry_atomic(registry: SourceRegistry) -> bool:
+def _write_registry_atomic(
+    registry: SourceRegistry,
+    *,
+    trusted_root: Path,
+) -> bool:
     path = registry.sources_file
-    if path.is_symlink():
-        raise SourceRegistryError(f"source registry must not be a symbolic link: {path}")
     payload = registry.serialized_bytes()
-    if path.exists():
-        try:
-            if path.read_bytes() == payload:
-                return False
-        except OSError as exc:
-            raise SourceRegistryError(
-                f"could not compare source registry {path}: {exc}"
-            ) from exc
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = -1
-    temporary: Path | None = None
     try:
-        descriptor, raw_path = tempfile.mkstemp(
-            prefix=".sources.jsonl.",
-            suffix=".tmp",
-            dir=path.parent,
-        )
-        temporary = Path(raw_path)
-        with os.fdopen(descriptor, "wb") as target:
-            descriptor = -1
-            target.write(payload)
-            target.flush()
-            os.fsync(target.fileno())
-        os.replace(temporary, path)
-        temporary = None
-        return True
-    except OSError as exc:
-        raise SourceRegistryError(f"could not write source registry {path}: {exc}") from exc
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+        return write_atomic_stable_file(trusted_root, path, payload)
+    except StableFileAccessError as exc:
+        raise SourceRegistryError(
+            f"could not securely write source registry {path}: {exc}"
+        ) from exc
 
 
-def _file_snapshot_signature(metadata: os.stat_result) -> tuple[object, ...]:
-    signature: tuple[object, ...] = (
-        stat.S_IFMT(metadata.st_mode),
-        metadata.st_dev,
-        metadata.st_ino,
-        metadata.st_size,
-        metadata.st_mtime_ns,
-    )
-    if os.name != "nt":
-        signature += (metadata.st_ctime_ns,)
-    return signature
-
-
-def _reject_relocation_reparse_points(project_root: Path, path: str) -> Path:
-    candidate = project_root
-    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    for part in PurePosixPath(path).parts:
-        candidate = candidate / part
-        try:
-            metadata = candidate.lstat()
-        except FileNotFoundError as exc:
-            raise SourceRegistryConflictError(
-                f"recovered source path does not exist: {path}"
-            ) from exc
-        except OSError as exc:
-            raise SourceRegistryConflictError(
-                f"could not inspect recovered source path {path}: {exc}"
-            ) from exc
-        if stat.S_ISLNK(metadata.st_mode) or (
-            reparse_flag
-            and getattr(metadata, "st_file_attributes", 0) & reparse_flag
-        ):
-            raise SourceRegistryConflictError(
-                "recovered source path must not contain a symbolic link or "
-                f"reparse point: {path}"
-            )
-    return candidate
-
-
-def _verify_relocation_candidate(
+@contextmanager
+def _verified_relocation_candidate(
     project_root: Path,
     recovered_path: str,
     expected_content_hash: str,
-) -> Path:
+) -> Iterator[StableFileLease]:
     relative_path = _manifest_path(recovered_path)
     expected = _content_hash(expected_content_hash)
-    root = project_root.resolve(strict=True)
-    candidate = _reject_relocation_reparse_points(root, relative_path)
+    root = Path(os.path.abspath(os.fspath(project_root)))
+    candidate = root.joinpath(*PurePosixPath(relative_path).parts)
     try:
-        resolved = candidate.resolve(strict=True)
-    except OSError as exc:
-        raise SourceRegistryConflictError(
-            f"could not resolve recovered source path {relative_path}: {exc}"
-        ) from exc
-    try:
-        resolved.relative_to(root)
-    except ValueError as exc:
-        raise SourceRegistryConflictError(
-            "recovered source path resolves outside the registered project: "
-            f"{relative_path}"
-        ) from exc
-
-    try:
-        before = candidate.stat(follow_symlinks=False)
-    except OSError as exc:
-        raise SourceRegistryConflictError(
-            f"could not stat recovered source path {relative_path}: {exc}"
-        ) from exc
-    if not stat.S_ISREG(before.st_mode):
-        raise SourceRegistryConflictError(
-            f"recovered source path is not a regular file: {relative_path}"
-        )
-
-    digest = hashlib.sha256()
-    try:
-        with candidate.open("rb") as source:
-            opened = os.fstat(source.fileno())
-            if not stat.S_ISREG(opened.st_mode):
+        with lease_stable_regular_file(
+            root,
+            candidate,
+            reject_redirection=True,
+        ) as lease:
+            if lease.content_sha256 != expected:
                 raise SourceRegistryConflictError(
-                    "recovered source descriptor is not a regular file: "
-                    f"{relative_path}"
+                    "recovered source bytes do not match the recorded current version: "
+                    f"expected {expected}; observed {lease.content_sha256}"
                 )
-            if _file_snapshot_signature(opened) != _file_snapshot_signature(before):
-                raise SourceRegistryConflictError(
-                    "recovered source changed before verification: "
-                    f"{relative_path}"
-                )
-            while True:
-                chunk = source.read(1024 * 1024)
-                if not chunk:
-                    break
-                digest.update(chunk)
-            after_descriptor = os.fstat(source.fileno())
-    except SourceRegistryConflictError:
-        raise
-    except OSError as exc:
+            yield lease
+    except StableFileAccessError as exc:
         raise SourceRegistryConflictError(
-            f"could not read recovered source path {relative_path}: {exc}"
+            f"could not securely verify recovered source path {relative_path}: {exc}"
         ) from exc
-
-    try:
-        after_path = candidate.stat(follow_symlinks=False)
-    except OSError as exc:
-        raise SourceRegistryConflictError(
-            f"could not restat recovered source path {relative_path}: {exc}"
-        ) from exc
-    signature = _file_snapshot_signature(before)
-    if (
-        _file_snapshot_signature(after_descriptor) != signature
-        or _file_snapshot_signature(after_path) != signature
-    ):
-        raise SourceRegistryConflictError(
-            f"recovered source changed during verification: {relative_path}"
-        )
-    observed = digest.hexdigest()
-    if observed != expected:
-        raise SourceRegistryConflictError(
-            "recovered source bytes do not match the recorded current version: "
-            f"expected {expected}; observed {observed}"
-        )
-    return resolved
 
 
 def record_source_relocation(
@@ -1410,6 +1335,7 @@ def record_source_relocation(
     ):
         registry = _load_source_registry_file(
             sources_file,
+            trusted_root=registration.layout.machine_root,
             project_id=registration.project_id,
             missing_ok=False,
         )
@@ -1442,45 +1368,67 @@ def record_source_relocation(
             )
 
         previous_path = record.current_path
-        _verify_relocation_candidate(
+        with _verified_relocation_candidate(
             registration.project_root,
             normalized_path,
             expected_hash,
-        )
-        if record.current_path == normalized_path:
-            return SourceRegistryRelocationResult(
-                project_id=registration.project_id,
-                project_root=registration.project_root,
-                sources_file=sources_file,
-                previous_path=previous_path,
-                recovered_path=normalized_path,
-                record=record,
-                wrote_registry=False,
-                already_current=True,
-            )
+        ) as candidate_lease:
+            if record.current_path == normalized_path:
+                return SourceRegistryRelocationResult(
+                    project_id=registration.project_id,
+                    project_root=registration.project_root,
+                    sources_file=sources_file,
+                    previous_path=previous_path,
+                    recovered_path=normalized_path,
+                    record=record,
+                    wrote_registry=False,
+                    already_current=True,
+                )
 
-        path_owner = registry.by_path.get(normalized_path)
-        if path_owner is not None and path_owner.source_id != normalized_id:
-            raise SourceRegistryConflictError(
-                "recovered path is already assigned to another source: "
-                f"{normalized_path} -> {path_owner.source_id}"
+            path_owner = registry.by_path.get(normalized_path)
+            if path_owner is not None and path_owner.source_id != normalized_id:
+                raise SourceRegistryConflictError(
+                    "recovered path is already assigned to another source: "
+                    f"{normalized_path} -> {path_owner.source_id}"
+                )
+            updated_record = record.relocate(normalized_path)
+            records = tuple(
+                sorted(
+                    (
+                        updated_record if item.source_id == normalized_id else item
+                        for item in registry.records
+                    ),
+                    key=lambda item: item.source_id,
+                )
             )
-        updated_record = record.relocate(normalized_path)
-        records = tuple(
-            sorted(
-                (
-                    updated_record if item.source_id == normalized_id else item
-                    for item in registry.records
-                ),
-                key=lambda item: item.source_id,
+            updated_registry = SourceRegistry(
+                project_id=registration.project_id,
+                sources_file=sources_file,
+                records=records,
             )
-        )
-        updated_registry = SourceRegistry(
-            project_id=registration.project_id,
-            sources_file=sources_file,
-            records=records,
-        )
-        wrote_registry = _write_registry_atomic(updated_registry)
+            candidate_lease.revalidate()
+            wrote_registry = _write_registry_atomic(
+                updated_registry,
+                trusted_root=registration.layout.machine_root,
+            )
+            try:
+                candidate_lease.revalidate()
+            except StableFileAccessError as exc:
+                try:
+                    _write_registry_atomic(
+                        registry,
+                        trusted_root=registration.layout.machine_root,
+                    )
+                except SourceRegistryError as rollback_exc:
+                    raise SourceRegistryConflictError(
+                        "recovered source changed while the relocation binding was "
+                        "being committed, and the previous source registry could not "
+                        f"be restored: {rollback_exc}"
+                    ) from rollback_exc
+                raise SourceRegistryConflictError(
+                    "recovered source changed while the relocation binding was being "
+                    "committed; the previous source registry was restored"
+                ) from exc
 
     return SourceRegistryRelocationResult(
         project_id=registration.project_id,
@@ -1545,6 +1493,7 @@ def sync_source_registry(
     ):
         registry = _load_source_registry_file(
             sources_file,
+            trusted_root=registration.layout.machine_root,
             project_id=registration.project_id,
             missing_ok=True,
         )
@@ -1593,7 +1542,10 @@ def sync_source_registry(
                 sorted(records_by_id.values(), key=lambda item: item.source_id)
             ),
         )
-        wrote_registry = _write_registry_atomic(updated_registry)
+        wrote_registry = _write_registry_atomic(
+            updated_registry,
+            trusted_root=registration.layout.machine_root,
+        )
 
     return SourceRegistrySyncResult(
         project_id=registration.project_id,

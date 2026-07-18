@@ -46,7 +46,8 @@ For one structurally valid Schema v2 Claim, F-02B:
 5. validates the Evidence's recorded `source_version + content_hash` binding and
    requires that exact version to remain current;
 6. reopens the exact Locator from current Source bytes with automatic relocation
-   recovery disabled;
+   recovery disabled, using a descriptor whose final target is proven inside the
+   registered project before any bytes are read;
 7. requires the actual current bytes, Locator, and reopened excerpt hash to match
    the Evidence record; and
 8. computes the verified-state closure described below.
@@ -110,8 +111,13 @@ state raises through the existing fail-closed compatibility layers.
 
 ## Read-only relocation inspection
 
-F-02B calls `open_source(..., recover_relocation=False)`. A failed current path
-or content check therefore cannot invoke D-05's mutating recovery path.
+F-02B calls `open_source(..., recover_relocation=False)`. The flag is a strict
+boolean write boundary, and a failed current path or content check therefore
+cannot invoke D-05's mutating recovery path. Source and relocation-candidate
+bytes are descriptor-bound and project-contained before their first read;
+Source and Evidence registry bytes are descriptor-bound beneath the machine-state
+root and must not traverse a symbolic link or reparse point. The shared hardening contract
+is documented in [`stable-file-access.md`](stable-file-access.md).
 
 It may then call `inspect_source_relocation(...)`, which evaluates the same
 ordered deterministic candidate groups as D-05:

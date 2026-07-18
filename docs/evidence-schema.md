@@ -142,7 +142,7 @@ Example Evidence row:
 
 ## Validation and writes
 
-The loader rejects malformed UTF-8 or JSON, duplicate JSON keys, non-finite values, missing/legacy/future Schema versions, unknown fields, unsupported artifact versions, invalid IDs or hashes, noncanonical row order, duplicate IDs, count mismatches, unknown sources, unrecorded source versions, and source-version hash mismatches.
+The loader rejects malformed UTF-8 or JSON, duplicate JSON keys, non-finite values, missing/legacy/future Schema versions, unknown fields, unsupported artifact versions, invalid IDs or hashes, noncanonical row order, duplicate IDs, count mismatches, unknown sources, unrecorded source versions, and source-version hash mismatches. It also opens `evidence.jsonl` through a stable descriptor beneath the registered project machine-state root, rejects every symbolic-link/reparse-point component, verifies the descriptor target before reading, and fails closed if the path or file identity changes during the read.
 
 Writers use an adjacent exclusive lock, reload both source and Evidence state under the lock, and atomically replace `evidence.jsonl` from the same directory. Concurrent identical registrations produce one record. Source-project paths and bytes are never modified.
 

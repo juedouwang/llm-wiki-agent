@@ -53,6 +53,12 @@ if __package__:
     from .project_registry import load_registered_project
     from .source_recovery import SourceRecoveryError, recover_source
     from .source_registry import SourceRecord, load_source_registry
+    from .stable_file_access import (
+        StableFileAccessError,
+        StableFileBoundaryError,
+        StableFileRedirectionError,
+        read_stable_regular_file,
+    )
     from .text_extractor import (
         SUPPORTED_TEXT_FORMATS,
         TextExtractionLimits,
@@ -114,6 +120,12 @@ else:
     from source_registry import (  # type: ignore[no-redef]
         SourceRecord,
         load_source_registry,
+    )
+    from stable_file_access import (  # type: ignore[no-redef]
+        StableFileAccessError,
+        StableFileBoundaryError,
+        StableFileRedirectionError,
+        read_stable_regular_file,
     )
     from text_extractor import (  # type: ignore[no-redef]
         SUPPORTED_TEXT_FORMATS,
@@ -427,6 +439,8 @@ def locate_source(
 ) -> SourceLocation:
     """Resolve the current path, optionally recovering identity after access failure."""
 
+    if not isinstance(recover_relocation, bool):
+        raise TypeError("recover_relocation must be a bool")
     try:
         registration = load_registered_project(workspace_root, project_id)
     except (LayoutError, OSError) as exc:
@@ -523,19 +537,33 @@ def _assert_manifest_content_access_allowed(
 
 
 def _read_verified_source(location: SourceLocation) -> bytes:
+    lexical_path = location.project_root.joinpath(
+        *PurePosixPath(location.current_path).parts
+    )
     try:
-        data = location.absolute_path.read_bytes()
-    except OSError as exc:
+        observation = read_stable_regular_file(
+            location.project_root,
+            lexical_path,
+            reject_redirection=False,
+            capture_bytes=True,
+        )
+    except (StableFileBoundaryError, StableFileRedirectionError) as exc:
+        raise SourceBoundaryError(
+            f"current source escaped the registered project during open: "
+            f"{location.current_path}: {exc}"
+        ) from exc
+    except StableFileAccessError as exc:
         raise SourceReadError(
             f"could not read current source {location.current_path}: {exc}"
         ) from exc
-    observed = hashlib.sha256(data).hexdigest()
-    if observed != location.content_hash:
+    if observation.data is None:
+        raise SourceReadError("stable source read did not return source bytes")
+    if observation.content_sha256 != location.content_hash:
         raise SourceContentMismatchError(
             "current source bytes do not match the recorded source version: "
-            f"expected {location.content_hash}; observed {observed}"
+            f"expected {location.content_hash}; observed {observation.content_sha256}"
         )
-    return data
+    return observation.data
 
 
 def _line_excerpt(
@@ -882,6 +910,8 @@ def open_source(
 ) -> SourceOpenResult:
     """Open one locator at the current path and verify exact current bytes."""
 
+    if not isinstance(recover_relocation, bool):
+        raise TypeError("recover_relocation must be a bool")
     normalized_locator = _normalize_locator(locator)
     location = locate_source(
         workspace_root,

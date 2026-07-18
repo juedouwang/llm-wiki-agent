@@ -23,6 +23,7 @@ from pypdf.generic import (
     NameObject,
 )
 
+from tools import stable_file_access as stable_file_access_module
 from tools.evidence_registry import excerpt_sha256, register_evidence
 from tools.extraction_schema import (
     EXTRACTION_SCHEMA_VERSION,
@@ -1010,6 +1011,58 @@ class SourceAccessTests(unittest.TestCase):
                         )
         finally:
             manifest_file.write_text(original_text, encoding="utf-8")
+
+    def test_relocation_write_control_requires_a_real_boolean(self) -> None:
+        source = self.source_for("src/model.py")
+        before = self.registration.layout.sources_file.read_bytes()
+
+        for value in (None, 0, 1, "false", "true"):
+            with self.subTest(operation="locate", value=value):
+                with self.assertRaises(TypeError):
+                    locate_source(
+                        self.workspace,
+                        self.registration.project_id,
+                        source.source_id,
+                        recover_relocation=value,  # type: ignore[arg-type]
+                    )
+            with self.subTest(operation="open", value=value):
+                with self.assertRaises(TypeError):
+                    open_source(
+                        self.workspace,
+                        self.registration.project_id,
+                        source_id=source.source_id,
+                        locator=LineRangeLocator(1, 1),
+                        recover_relocation=value,  # type: ignore[arg-type]
+                    )
+
+        self.assertEqual(self.registration.layout.sources_file.read_bytes(), before)
+
+    def test_descriptor_escape_is_rejected_before_source_bytes_are_read(self) -> None:
+        source = self.source_for("src/model.py")
+        outside = self.root / "outside-descriptor.py"
+        outside.write_bytes(self.code_bytes)
+
+        real_descriptor_path = stable_file_access_module._descriptor_final_path
+        source_path = self.code_path.resolve()
+
+        def redirect_source_descriptor(descriptor: int):
+            actual = real_descriptor_path(descriptor)
+            if actual == source_path:
+                return outside.resolve()
+            return actual
+
+        with patch(
+            "tools.stable_file_access._descriptor_final_path",
+            side_effect=redirect_source_descriptor,
+        ):
+            with self.assertRaises(SourceBoundaryError):
+                open_source(
+                    self.workspace,
+                    self.registration.project_id,
+                    source_id=source.source_id,
+                    locator=LineRangeLocator(1, 1),
+                    recover_relocation=False,
+                )
 
     def test_symlink_escape_is_rejected_before_source_content_is_opened(self) -> None:
         source = self.source_for("src/model.py")
