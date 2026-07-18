@@ -58,7 +58,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | E-01 resumable staged run orchestration | complete | `146fc0f` | `checkpoint/e-01-run-orchestrator` |
 | E-08 deterministic one-action prefix (R2 slice) | complete | `b2e04ca` | `checkpoint/e-08-deterministic-understand` |
 | F-01 项目知识页面契约 | complete after F-01A/F-01B validation on 2026-07-17 | `829cb54` | `checkpoint/f-01b-canonical-knowledge-layout` |
-| F-02 Claim-Evidence directional binding and currentness | complete after F-02A/F-02B validation and F-02C stable-object hardening on 2026-07-18 | `ba3846c`, `564cf0a`, `41e347e`, `6c9016a` | `checkpoint/f-02a-claim-evidence-schema-v2`, `checkpoint/f-02b-claim-evidence-currentness`, `checkpoint/f-02c-stable-file-access`, `checkpoint/f-02c-stable-file-access-review-fix` |
+| F-02 Claim-Evidence directional binding and currentness | complete after F-02A/F-02B validation and F-02C stable-object plus registry-coordination hardening on 2026-07-18 | `ba3846c`, `564cf0a`, `41e347e`, `6c9016a`, `d84f128` | `checkpoint/f-02a-claim-evidence-schema-v2`, `checkpoint/f-02b-claim-evidence-currentness`, `checkpoint/f-02c-stable-file-access`, `checkpoint/f-02c-stable-file-access-review-fix`, `checkpoint/f-02c-registry-read-write-coordination` |
 | F-03 project research entities and directed relations | complete after F-03A validation on 2026-07-18 | `dcfa1d7`, `04856ce` | `checkpoint/f-03a-research-relations-final` |
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
@@ -585,12 +585,23 @@ F-02C then hardened the underlying stable-object transactions in `41e347e` and
 `checkpoint/f-02c-stable-file-access-review-fix`. Root-bound persistent OS locks,
 same-lease load/commit/rollback, explicit post-replace states, exact preimage CAS
 rollback, and Windows no-write/no-delete stable reads close the scoped filesystem
-race findings without adding research semantics or a public interface. Final
-F-02C validation produced **162 passed, 20 skipped** across the focused stable-file,
-Claim currentness, Knowledge, Source, Evidence, health, layout, and registration
-suites; the transient concurrent recovery case passed ten consecutive isolated
-runs; full regression produced **545 passed, 24 skipped**; changed-file Ruff and
-`git diff --check` passed.
+race findings without adding research semantics or a public interface.
+
+A fresh integrated regression later exposed that ordinary Windows registry readers
+could still hold a read-only descriptor outside the adjacent lock protocol and deny
+a concurrent atomic replacement. Repair `d84f128`, designated by
+`checkpoint/f-02c-registry-read-write-coordination`, makes all ordinary Source and
+Evidence registry reads join their persistent adjacent locks, establishes the
+canonical nested order **Source registry lock → Evidence registry lock**, retains
+one Source snapshot through Evidence binding, and makes Claim currentness consume
+that bound snapshot. Readers do not change registry content.
+
+Final repair validation produced **101 passed, 17 skipped** across the focused
+stable-file, Claim currentness, Source, Evidence, recovery, access, and health
+suites. Source and Evidence subprocess readers both waited for their adjacent lock;
+the previously reproducible five-process recovery case passed **30 consecutive**
+isolated runs; full regression produced **574 passed, 24 skipped**. Changed-file
+Ruff, manual High/Medium review, and `git diff --check` passed.
 
 F-05 controlled mixed/user Markdown writing and C-07 remain `not_started`; these
 F-02 units read no research-binary content, perform no external send, and do not
