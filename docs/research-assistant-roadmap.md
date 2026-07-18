@@ -775,3 +775,22 @@ calls no LLM, writes no curated Markdown, and performs no external send or
 research-binary extraction. C-07 remains `deferred/not_started`. See
 [`hierarchical-understanding.md`](hierarchical-understanding.md).
 
+E-04 is complete after validation on **2026-07-18** at implementation
+`c94e122`, designated by `checkpoint/e-04-execution-flow`. The strict Schema v1
+`llmwiki-execution-flow` artifact (`execution-flow-v1`) records bounded directed
+nodes and call/data-flow edges. Hosts may supply grounded node/edge observations
+with Evidence IDs and `observed`/`inferred`/`uncertain` certainty; uncertainty
+reasons remain explicit and are never promoted to facts. Without observations,
+E-04 emits a deterministic Manifest-metadata fallback with inferred entrypoint
+candidates and unresolved paths marked uncertain.
+
+The artifact binds to the exact current Manifest generation, ordinary-file
+count/bytes, and SHA-256. Strict canonical JSON, closed fields, stable IDs,
+current file-path projection, shared `machine-state.lock`, atomic publication,
+and pre-replace Manifest revalidation are enforced. Validation produced **30
+passed, 1 skipped** in focused suites and **699 passed, 28 skipped** in full
+regression; changed-file Ruff, `py_compile`, and `git diff --check` passed. E-04
+opens no source bytes, calls no LLM, writes no curated Markdown, performs no
+binary semantic extraction, and sends nothing externally. C-07 remains
+`deferred/not_started`. See [`execution-flow.md`](execution-flow.md).
+
