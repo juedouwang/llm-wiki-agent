@@ -4,13 +4,17 @@ import hashlib
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
 from tools.claim_evidence import (
     CLAIM_EVIDENCE_VALIDATION_KIND,
     CLAIM_EVIDENCE_VALIDATION_VERSION,
+    ClaimEvidenceResultIntegrityError,
+    claim_frontmatter_sha256,
     validate_claim_evidence,
+    validate_claim_evidence_result_integrity,
 )
 from tools.evidence_registry import register_evidence
 from tools.extraction_schema import LineRangeLocator
@@ -19,6 +23,7 @@ from tools.knowledge_artifacts import (
     KNOWLEDGE_SCHEMA_VERSION,
     KnowledgeFrontmatterError,
     UnsupportedKnowledgeSchemaVersionError,
+    validate_knowledge_frontmatter,
 )
 from tools.project_inventory import inventory_project
 from tools.project_layout import CURRENT_SCHEMA_VERSION
@@ -153,15 +158,18 @@ class ClaimEvidenceValidationTests(unittest.TestCase):
             line=1,
             excerpt="delta = 4\n",
         )
-        result = self.validate(
-            self.payload(
-                source_ids=[self.primary.source_id, self.secondary.source_id],
-                evidence_refs=[
-                    self.ref(supporting.evidence_id),
-                    self.ref(opposing.evidence_id, "opposing"),
-                    self.ref(context.evidence_id, "context"),
-                ],
-            )
+        claim_payload = self.payload(
+            source_ids=[self.primary.source_id, self.secondary.source_id],
+            evidence_refs=[
+                self.ref(supporting.evidence_id),
+                self.ref(opposing.evidence_id, "opposing"),
+                self.ref(context.evidence_id, "context"),
+            ],
+        )
+        result = self.validate(claim_payload)
+        frontmatter = validate_knowledge_frontmatter(
+            claim_payload,
+            path="claims/primary.md",
         )
 
         self.assertTrue(result.valid)
@@ -170,14 +178,99 @@ class ClaimEvidenceValidationTests(unittest.TestCase):
         self.assertEqual(result.current_supporting_evidence_count, 1)
         self.assertEqual(result.reason_codes, ("claim-evidence-current",))
         self.assertTrue(all(item.current for item in result.evidence_references))
+        self.assertEqual(
+            result.claim_frontmatter_sha256,
+            claim_frontmatter_sha256(frontmatter),
+        )
         payload = result.as_dict()
         self.assertEqual(payload["schema_version"], CURRENT_SCHEMA_VERSION)
         self.assertEqual(payload["kind"], CLAIM_EVIDENCE_VALIDATION_KIND)
+        self.assertEqual(CLAIM_EVIDENCE_VALIDATION_VERSION, "claim-evidence-validation-v2")
         self.assertEqual(
             payload["validation_version"],
             CLAIM_EVIDENCE_VALIDATION_VERSION,
         )
+        self.assertEqual(
+            payload["claim_frontmatter_sha256"],
+            result.claim_frontmatter_sha256,
+        )
         self.assertTrue(payload["read_only"])
+        validate_claim_evidence_result_integrity(
+            result,
+            path="claims/primary.md",
+            frontmatter=frontmatter,
+        )
+
+    def test_result_integrity_binds_exact_claim_revision_and_current_fields(self) -> None:
+        evidence = self.register_text_evidence()
+        claim_payload = self.payload(
+            evidence_refs=[self.ref(evidence.evidence_id)],
+        )
+        result = self.validate(claim_payload)
+        frontmatter = validate_knowledge_frontmatter(
+            claim_payload,
+            path="claims/primary.md",
+        )
+        with patch(
+            "tools.claim_evidence.open_source",
+            side_effect=AssertionError("integrity validation must not reopen Source"),
+        ):
+            validate_claim_evidence_result_integrity(
+                result,
+                path="claims/primary.md",
+                frontmatter=frontmatter,
+            )
+
+        invalid_frontmatter = replace(frontmatter, title="")
+        with self.assertRaisesRegex(
+            ClaimEvidenceResultIntegrityError,
+            "strict normalized Knowledge Schema v2 frontmatter",
+        ):
+            validate_claim_evidence_result_integrity(
+                result,
+                path="claims/primary.md",
+                frontmatter=invalid_frontmatter,
+            )
+
+        changed_updated_at = dict(claim_payload)
+        changed_updated_at["updated_at"] = "2026-07-18T07:00:00Z"
+        changed_updated_at["last_verified_at"] = "2026-07-18T07:00:00Z"
+        changed_ownership = dict(claim_payload)
+        changed_ownership["ownership"] = "mixed"
+        for changed in (changed_updated_at, changed_ownership):
+            revised_frontmatter = validate_knowledge_frontmatter(
+                changed,
+                path="claims/primary.md",
+            )
+            with self.subTest(revision=changed):
+                with self.assertRaisesRegex(
+                    ClaimEvidenceResultIntegrityError,
+                    "exact Claim frontmatter revision",
+                ):
+                    validate_claim_evidence_result_integrity(
+                        result,
+                        path="claims/primary.md",
+                        frontmatter=revised_frontmatter,
+                    )
+
+        inconsistent_result = replace(
+            result,
+            evidence_references=(
+                replace(
+                    result.evidence_references[0],
+                    observed_excerpt_hash=None,
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(
+            ClaimEvidenceResultIntegrityError,
+            "complete current Source/excerpt result",
+        ):
+            validate_claim_evidence_result_integrity(
+                inconsistent_result,
+                path="claims/primary.md",
+                frontmatter=frontmatter,
+            )
 
     def test_missing_evidence_and_unregistered_claim_source_fail_closed(self) -> None:
         missing_id = "evd-" + "f" * 64

@@ -85,8 +85,9 @@ or noncurrent. F-02B reports currentness; it never changes the page's status.
 `ClaimEvidenceValidationResult.as_dict()` emits Schema v1 structured data with:
 
 - `kind: llmwiki-claim-evidence-validation`;
-- `validation_version: claim-evidence-validation-v1`;
+- `validation_version: claim-evidence-validation-v2`;
 - requested project, canonical Claim path, status, and `key_claim` role;
+- `claim_frontmatter_sha256`, the canonical SHA-256 of the exact normalized Claim frontmatter revision validated;
 - duplicate-free stable reason codes;
 - one Source-binding result per declared `source_id`;
 - one directional currentness result per declared Evidence reference;
@@ -102,6 +103,17 @@ original Source-access reason remains primary and
 `relocation_inspection_reason_code` records the independent inspection failure.
 A relocation result and an inspection-failure code are mutually exclusive. The
 result never includes the reopened excerpt or raw Source bytes.
+
+`validate_claim_evidence_result_integrity(...)` is the read-only handoff gate for
+downstream Core validators. It first revalidates the supplied frontmatter through
+the strict current Schema v2 path-bound validator, requires the result fingerprint
+to match that exact normalized Claim frontmatter, then rechecks canonical path/role, project/status,
+ordered Source and directional Evidence declarations, per-binding closure,
+aggregate reason codes, supporting count, and verified-state outcome. Therefore a
+result for an older Claim revision cannot be replayed after `updated_at`, title,
+ownership, Source, Evidence, or any other frontmatter field changes. This
+integrity check does not reopen Source bytes; callers that need fresh source
+currentness must obtain a new F-02B result.
 
 Stable failures distinguish missing registry identities, project/source binding
 errors, historical/current source-version mismatches, physical content mismatch,

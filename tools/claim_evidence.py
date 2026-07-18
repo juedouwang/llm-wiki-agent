@@ -10,6 +10,9 @@ relocation recovery explicitly disabled.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,6 +24,7 @@ from tools.evidence_registry import (
     validate_evidence,
 )
 from tools.knowledge_artifacts import (
+    KNOWLEDGE_SCHEMA_VERSION,
     EvidenceRef,
     EvidenceStance,
     KnowledgeFrontmatter,
@@ -43,7 +47,39 @@ CLAIM_EVIDENCE_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
 CLAIM_EVIDENCE_VALIDATION_KIND = "llmwiki-claim-evidence-validation"
 CLAIM_EVIDENCE_SOURCE_KIND = "llmwiki-claim-source-binding-validation"
 CLAIM_EVIDENCE_REFERENCE_KIND = "llmwiki-claim-evidence-reference-validation"
-CLAIM_EVIDENCE_VALIDATION_VERSION = "claim-evidence-validation-v1"
+CLAIM_EVIDENCE_VALIDATION_VERSION = "claim-evidence-validation-v2"
+_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+
+
+def _is_sha256(value: object) -> bool:
+    return isinstance(value, str) and _SHA256_PATTERN.fullmatch(value) is not None
+
+
+class ClaimEvidenceResultIntegrityError(ValueError):
+    """Raised when an F-02B result is inconsistent with its exact Claim input."""
+
+
+def _canonical_json(value: object) -> bytes:
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence data must be canonical JSON-compatible"
+        ) from exc
+
+
+def claim_frontmatter_sha256(frontmatter: KnowledgeFrontmatter) -> str:
+    """Fingerprint one normalized Claim frontmatter revision deterministically."""
+
+    if not isinstance(frontmatter, KnowledgeFrontmatter):
+        raise TypeError("frontmatter must be a KnowledgeFrontmatter")
+    return hashlib.sha256(_canonical_json(frontmatter.as_dict())).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -116,6 +152,7 @@ class ClaimEvidenceValidationResult:
 
     project_id: str
     path: str
+    claim_frontmatter_sha256: str
     claim_status: str
     key_claim: bool
     valid: bool
@@ -130,8 +167,35 @@ class ClaimEvidenceValidationResult:
         object.__setattr__(self, "reason_codes", tuple(self.reason_codes))
         object.__setattr__(self, "source_bindings", tuple(self.source_bindings))
         object.__setattr__(self, "evidence_references", tuple(self.evidence_references))
+        if not isinstance(self.project_id, str) or not self.project_id:
+            raise ValueError("project_id must be a non-empty string")
+        if not isinstance(self.path, str) or not self.path:
+            raise ValueError("path must be a non-empty string")
+        if not _is_sha256(self.claim_frontmatter_sha256):
+            raise ValueError("claim_frontmatter_sha256 must be 64 lowercase hex digits")
+        if not isinstance(self.claim_status, str) or not self.claim_status:
+            raise ValueError("claim_status must be a non-empty string")
+        if type(self.key_claim) is not bool:
+            raise ValueError("key_claim must be a boolean")
+        if type(self.valid) is not bool:
+            raise ValueError("valid must be a boolean")
+        if type(self.all_evidence_current) is not bool:
+            raise ValueError("all_evidence_current must be a boolean")
+        if (
+            not isinstance(self.current_supporting_evidence_count, int)
+            or isinstance(self.current_supporting_evidence_count, bool)
+        ):
+            raise ValueError("current supporting Evidence count must be an integer")
         if len(set(self.reason_codes)) != len(self.reason_codes):
             raise ValueError("claim validation reason_codes must be duplicate-free")
+        if len({item.source_id for item in self.source_bindings}) != len(
+            self.source_bindings
+        ):
+            raise ValueError("claim source bindings must be duplicate-free")
+        if len({item.evidence_id for item in self.evidence_references}) != len(
+            self.evidence_references
+        ):
+            raise ValueError("claim Evidence references must be duplicate-free")
         if self.current_supporting_evidence_count < 0:
             raise ValueError("current supporting Evidence count must be non-negative")
         if self.claim_status == "verified" and self.verified_state_current is None:
@@ -146,6 +210,7 @@ class ClaimEvidenceValidationResult:
             "validation_version": CLAIM_EVIDENCE_VALIDATION_VERSION,
             "project_id": self.project_id,
             "path": self.path,
+            "claim_frontmatter_sha256": self.claim_frontmatter_sha256,
             "claim_status": self.claim_status,
             "key_claim": self.key_claim,
             "valid": self.valid,
@@ -161,6 +226,221 @@ class ClaimEvidenceValidationResult:
             "verified_state_current": self.verified_state_current,
             "read_only": True,
         }
+
+
+def validate_claim_evidence_result_integrity(
+    value: ClaimEvidenceValidationResult,
+    *,
+    path: str,
+    frontmatter: KnowledgeFrontmatter,
+) -> None:
+    """Fail closed unless an F-02B result exactly closes over one Claim revision.
+
+    This is a structural integrity check over an already produced result. It does
+    not reopen Source bytes. The exact Claim frontmatter fingerprint prevents a
+    currentness result for an older revision from being replayed after any
+    frontmatter edit.
+    """
+
+    if not isinstance(value, ClaimEvidenceValidationResult):
+        raise TypeError("value must be a ClaimEvidenceValidationResult")
+    if not isinstance(frontmatter, KnowledgeFrontmatter):
+        raise TypeError("frontmatter must be a KnowledgeFrontmatter")
+    contract = artifact_contract_for_path(path)
+    if contract.path != value.path:
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence result path does not match the requested Claim"
+        )
+    if frontmatter.schema_version != KNOWLEDGE_SCHEMA_VERSION:
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence result integrity requires current Knowledge Schema v2"
+        )
+    try:
+        frontmatter = validate_knowledge_frontmatter(
+            frontmatter.as_dict(),
+            path=contract.path,
+        )
+    except (AttributeError, KnowledgeFrontmatterError, TypeError, ValueError) as exc:
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence result integrity requires strict normalized "
+            "Knowledge Schema v2 frontmatter"
+        ) from exc
+    if contract.artifact_type != "claim" or frontmatter.artifact_type != "claim":
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence result integrity requires a canonical Claim path and type"
+        )
+    if value.claim_frontmatter_sha256 != claim_frontmatter_sha256(frontmatter):
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence result does not match the exact Claim frontmatter revision"
+        )
+    if value.claim_status != frontmatter.status:
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence result status does not match the Claim revision"
+        )
+    expected_key_claim = contract.page_role == "detail"
+    if value.key_claim != expected_key_claim:
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence result key-Claim role does not match the canonical path"
+        )
+
+    if value.reason_codes == ("claim-project-mismatch",):
+        expected_verified = False if frontmatter.status == "verified" else None
+        if value.project_id == frontmatter.project_id:
+            raise ClaimEvidenceResultIntegrityError(
+                "project-mismatch result unexpectedly matches the Claim project"
+            )
+        if (
+            value.valid
+            or value.source_bindings
+            or value.evidence_references
+            or value.all_evidence_current
+            or value.current_supporting_evidence_count != 0
+            or value.verified_state_current is not expected_verified
+        ):
+            raise ClaimEvidenceResultIntegrityError(
+                "project-mismatch result has inconsistent closure fields"
+            )
+        return
+
+    if value.project_id != frontmatter.project_id:
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence result belongs to another project"
+        )
+    observed_source_ids = tuple(item.source_id for item in value.source_bindings)
+    if observed_source_ids != frontmatter.source_ids:
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence Source bindings do not match the Claim revision"
+        )
+    declared_refs = tuple(
+        (item.evidence_id, item.stance) for item in frontmatter.evidence_refs or ()
+    )
+    observed_refs = tuple(
+        (item.evidence_id, item.stance) for item in value.evidence_references
+    )
+    if observed_refs != declared_refs:
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence references do not match the Claim revision"
+        )
+
+    for binding in value.source_bindings:
+        if (
+            not isinstance(binding.source_id, str)
+            or not binding.source_id
+            or type(binding.valid) is not bool
+            or not isinstance(binding.reason_code, str)
+            or not binding.reason_code
+            or not isinstance(binding.detail, str)
+            or not binding.detail
+        ):
+            raise ClaimEvidenceResultIntegrityError(
+                "Claim Source binding fields must use strict non-empty types"
+            )
+        expected_reason = (
+            "claim-source-registered"
+            if binding.valid
+            else "claim-source-not-registered"
+        )
+        if binding.reason_code != expected_reason:
+            raise ClaimEvidenceResultIntegrityError(
+                "Claim Source binding has an inconsistent validity reason"
+            )
+
+    source_binding_validity = {
+        binding.source_id: binding.valid for binding in value.source_bindings
+    }
+    for reference in value.evidence_references:
+        if (
+            not isinstance(reference.evidence_id, str)
+            or not reference.evidence_id
+            or type(reference.current) is not bool
+            or not isinstance(reference.reason_code, str)
+            or not reference.reason_code
+            or not isinstance(reference.detail, str)
+            or not reference.detail
+            or (
+                reference.source_id is not None
+                and (
+                    not isinstance(reference.source_id, str)
+                    or not reference.source_id
+                )
+            )
+        ):
+            raise ClaimEvidenceResultIntegrityError(
+                "Claim Evidence reference fields must use strict non-empty types"
+            )
+        if reference.current:
+            if (
+                reference.source_id not in frontmatter.source_ids
+                or source_binding_validity.get(reference.source_id) is not True
+                or reference.reason_code != "evidence-current"
+                or reference.observed_excerpt_hash is None
+                or not _is_sha256(reference.observed_excerpt_hash)
+                or reference.relocation is not None
+                or reference.relocation_inspection_reason_code is not None
+            ):
+                raise ClaimEvidenceResultIntegrityError(
+                    "current Evidence reference lacks a complete current Source/excerpt result"
+                )
+        elif (
+            reference.reason_code == "evidence-current"
+            or reference.observed_excerpt_hash is not None
+        ):
+            raise ClaimEvidenceResultIntegrityError(
+                "non-current Evidence reference has inconsistent currentness fields"
+            )
+
+    binding_valid = all(item.valid for item in value.source_bindings)
+    all_evidence_current = all(item.current for item in value.evidence_references)
+    supporting_count = sum(
+        item.current and item.stance == "supporting"
+        for item in value.evidence_references
+    )
+    if value.all_evidence_current != all_evidence_current:
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence result has inconsistent Evidence currentness"
+        )
+    if value.current_supporting_evidence_count != supporting_count:
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence result has an inconsistent supporting Evidence count"
+        )
+
+    reason_codes: list[str] = []
+    for binding in value.source_bindings:
+        if not binding.valid:
+            _append_reason(reason_codes, binding.reason_code)
+    for reference in value.evidence_references:
+        if not reference.current:
+            _append_reason(reason_codes, reference.reason_code)
+
+    verified_state_current: bool | None = None
+    timestamp_current = frontmatter.last_verified_at == frontmatter.updated_at
+    if frontmatter.status == "verified":
+        if not timestamp_current:
+            _append_reason(reason_codes, "verified-claim-modified-after-verification")
+        if expected_key_claim and supporting_count == 0:
+            _append_reason(reason_codes, "verified-claim-missing-current-support")
+        if not all_evidence_current:
+            _append_reason(reason_codes, "verified-claim-declares-noncurrent-evidence")
+        verified_state_current = (
+            binding_valid
+            and all_evidence_current
+            and (not expected_key_claim or supporting_count > 0)
+            and timestamp_current
+        )
+    if value.verified_state_current is not verified_state_current:
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence result has an inconsistent verified-state outcome"
+        )
+
+    valid = binding_valid and all_evidence_current
+    if verified_state_current is not None:
+        valid = valid and verified_state_current
+    if valid:
+        reason_codes.append("claim-evidence-current")
+    if value.valid is not valid or value.reason_codes != tuple(reason_codes):
+        raise ClaimEvidenceResultIntegrityError(
+            "Claim Evidence result has inconsistent validity or reason aggregation"
+        )
 
 
 def _append_reason(reason_codes: list[str], reason_code: str) -> None:
@@ -369,9 +649,10 @@ def _project_mismatch_result(
     frontmatter: KnowledgeFrontmatter,
     key_claim: bool,
 ) -> ClaimEvidenceValidationResult:
-    return ClaimEvidenceValidationResult(
+    result = ClaimEvidenceValidationResult(
         project_id=requested_project_id,
         path=path,
+        claim_frontmatter_sha256=claim_frontmatter_sha256(frontmatter),
         claim_status=frontmatter.status,
         key_claim=key_claim,
         valid=False,
@@ -382,6 +663,12 @@ def _project_mismatch_result(
         current_supporting_evidence_count=0,
         verified_state_current=False if frontmatter.status == "verified" else None,
     )
+    validate_claim_evidence_result_integrity(
+        result,
+        path=path,
+        frontmatter=frontmatter,
+    )
+    return result
 
 
 def validate_claim_evidence(
@@ -485,9 +772,10 @@ def validate_claim_evidence(
     if valid:
         reason_codes.append("claim-evidence-current")
 
-    return ClaimEvidenceValidationResult(
+    result = ClaimEvidenceValidationResult(
         project_id=registration.project_id,
         path=contract.path,
+        claim_frontmatter_sha256=claim_frontmatter_sha256(frontmatter),
         claim_status=frontmatter.status,
         key_claim=key_claim,
         valid=valid,
@@ -498,3 +786,9 @@ def validate_claim_evidence(
         current_supporting_evidence_count=supporting_count,
         verified_state_current=verified_state_current,
     )
+    validate_claim_evidence_result_integrity(
+        result,
+        path=contract.path,
+        frontmatter=frontmatter,
+    )
+    return result
