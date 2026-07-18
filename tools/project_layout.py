@@ -433,6 +433,12 @@ class ProjectLayout:
         return self.indexes_dir / "goals.json"
 
     @property
+    def tasks_file(self) -> Path:
+        """I-02 strict project task-protocol machine artifact."""
+
+        return self.indexes_dir / "tasks.json"
+
+    @property
     def machine_state_lock_file(self) -> Path:
         """Stable advisory lock shared by per-project machine-state mutations."""
 
