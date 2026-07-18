@@ -5,7 +5,7 @@
 - 确认日期：2026-07-15
 - Latest supplement: 2026-07-18 (reviewed E-05 research-linkage-v2 and E-06 experiment chains)
 - 适用分支：`research-assistant`
-- 当前实现边界（截至 2026-07-18）：确定性入口包括项目注册/盘点、B-07 `prioritize`、B-08 `coverage`、`project understand` 的 `register -> inventory -> classify` 前缀，以及 H-07/J-05 reconciliation 集成。F-01 至 F-03 已提供严格知识路径、Knowledge Schema v2、Claim–Evidence currentness/result-integrity 和显式研究实体/关系；F-04A 仍只是只读生命周期校验，F-05A/F-05B 已提供受控 Markdown 计划、精确持久化和审计边界。E-02 至 E-06 的当前机器产物包括项目地图、分层理解、执行流、reviewed `research-linkage-v2` 和实验链；其中 E-05 只验证当前项目 Evidence registry 引用完整性，不替代 F-02B 的 Source/Locator/excerpt currentness，也不把 metadata candidate 或 paper claim 自动提升为项目事实。B-07 仍只生成独立机器建议，不推进 `adaptive-read`；H-05 选择性刷新、E-07 的 15 类 Markdown 渲染、Verified Query、成熟规划、产品 Web/`--open` 与 Claude Code 适配仍未完成。
+- Current implementation boundary (2026-07-18): deterministic entry points include project registration/inventory, B-07 `prioritize`, B-08 `coverage`, the complete `project understand` pipeline (`register -> inventory -> classify -> extract -> adaptive-read -> synthesize -> evidence -> status -> plan -> index -> web-render`), and H-07/J-05 reconciliation integration. E-07 provides the fifteen Knowledge Schema v2 Markdown artifacts; E-08 connects them to one-action resumable execution and a self-contained read-only run page. F-01 through F-03 provide strict knowledge paths, Knowledge Schema v2, Claim-Evidence currentness/result integrity, and explicit research entities/relations; F-04A remains a read-only lifecycle validator, while F-05A/F-05B provide controlled Markdown planning, exact persistence, and audit boundaries. E-02 through E-06 provide the project map, hierarchical understanding, execution flow, reviewed `research-linkage-v2`, and experiment-chain artifacts. B-07 remains an independent recommendation operation and does not advance the understand run; H-05 selective refresh, Verified Query, mature planning, and Claude Code adaptation remain incomplete.
 
 ## 1. 产品定义
 
@@ -401,7 +401,7 @@ models/model.ckpt          → metadata_only / 模型权重，不做语义解析
 → 当前宿主继续下一任务
 ```
 
-截至 2026-07-17，当前实现贯通确定性的 `project understand` 前缀、独立 B-07 阅读优先级、H-04 事件输入边界和 H-07 保守 reconciliation 边界。B-07 只有 Core/CLI 入口，不推进项目 run；H-07 可以由 CLI 或 `llmwiki_reconcile` 显式调用，不要求 Hook 存在或可信。任务核验、选择性提取、知识刷新、规划和网页更新仍是后续能力。
+As of 2026-07-18, the deterministic `project understand` pipeline, independent B-07 reading priority, H-04 event-input boundary, and H-07 conservative reconciliation boundary are integrated. E-08 `--open` produces only a self-contained local read-only run page with no external resources; it does not present the legacy development supervision dashboard as the product cockpit. Task protocol, state snapshots, first-run goal drafts, the product Web cockpit, and controlled Web editing remain the subsequent R3 I/J units.
 
 任务执行包保留为 Core 与宿主之间的内部协议：
 

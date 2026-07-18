@@ -153,6 +153,27 @@ root, never the research source or machine-state tree, calls no LLM, sends nothi
 externally, and adds no alternate write path. See
 `docs/knowledge-rendering.md` and `docs/research-core-service.md`.
 
+Run the complete E-08 one-action project understanding pipeline with:
+
+```bash
+python tools/project.py understand <project-root> --json
+python tools/project.py understand <project-root> --open --json
+```
+
+`ResearchCoreService.project_understand(...)` runs the durable stage order
+`register -> inventory -> classify -> extract -> adaptive-read -> synthesize ->
+evidence -> status -> plan -> index -> web-render`. `through_stage` / `--through`
+allow an honest bounded prefix and `resume_run_id` resumes the same run. The E-08
+action opts into the complete runner set; the legacy E-01 `project_run_start` and
+`project_run_resume` defaults retain their original register/inventory/classify
+boundary and `unavailable` semantics. The Core has no browser or HTTP dependency;
+`--open` is a CLI-only best-effort browser action and maps failures to
+`project-understand-browser-unavailable`. The run writes machine artifacts only
+under `.llmwiki/projects/<project_id>/` and curated Markdown through the existing
+controlled writer. It never modifies the registered source project, calls an LLM,
+sends externally, or processes C-07 research binaries. See
+`docs/project-understand.md`.
+
 Prioritize a current B-06 Manifest with:
 
 ```bash

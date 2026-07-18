@@ -59,7 +59,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | E-02 deterministic project map | complete (2026-07-18 validation) | `c3ab7e0` | `checkpoint/e-02-deterministic-project-map` |
 | E-06 experiment chains | complete (2026-07-18 validation) | `c1227f8` | `checkpoint/e-06-experiment-chains-final` |
 | E-07 complete project knowledge rendering | complete (2026-07-18 validation) | `9f4194b` | `checkpoint/e-07-knowledge-rendering` |
-| E-08 deterministic one-action prefix (R2 slice) | complete | `b2e04ca` | `checkpoint/e-08-deterministic-understand` |
+| E-08 complete one-action project understand (R3 slice) | complete | `2da9540` | `checkpoint/e-08-complete-understand` |
 | F-01 项目知识页面契约 | complete after F-01A/F-01B validation on 2026-07-17 | `829cb54` | `checkpoint/f-01b-canonical-knowledge-layout` |
 | F-02 Claim-Evidence directional binding and currentness | complete after F-02A/F-02B validation, F-02C stable-object plus registry-coordination hardening, and F-02D result-integrity repair on 2026-07-18 | `ba3846c`, `564cf0a`, `41e347e`, `6c9016a`, `d84f128`, `4521be9` | `checkpoint/f-02a-claim-evidence-schema-v2`, `checkpoint/f-02b-claim-evidence-currentness`, `checkpoint/f-02c-stable-file-access`, `checkpoint/f-02c-stable-file-access-review-fix`, `checkpoint/f-02c-registry-read-write-coordination`, `checkpoint/f-02d-claim-evidence-result-integrity` |
 | F-03 project research entities and directed relations | complete after F-03A validation on 2026-07-18 | `dcfa1d7`, `04856ce` | `checkpoint/f-03a-research-relations-final` |
@@ -365,6 +365,11 @@ git tag checkpoint/b-01-project-register
 
 ## 6. Next executable task
 
+The next executable R3 unit is **I-01**: implement the strict Goal/Milestone
+Schema and its Markdown/JSON round-trip. Continue in dependency order
+`I-01 -> I-02 -> I-03 -> I-04 -> J-03 -> J-04 -> J-01`. **C-07 remains
+`deferred/not_started` and is not part of this run.**
+
 R1 and the G-01 Core facade remain accepted at their checkpoints. G-07 is
 complete at `checkpoint/g-07-mcp-server`; its stdio transport, seven-tool catalog,
 honest unavailable capability contracts, stable error mapping, privacy boundary,
@@ -380,12 +385,15 @@ recovery, source-read-only boundary, Core/CLI entry points, and honest
 `unavailable` stage semantics are documented in
 [`project-run-orchestration.md`](project-run-orchestration.md).
 
-The initial deterministic R2 slice of E-08 is complete at
-`checkpoint/e-08-deterministic-understand`. The path-based Core/CLI action,
-idempotent registration, exact `register -> inventory -> classify` boundary,
-durable resume behavior, and explicit capability limits are documented in
-[`project-understand.md`](project-understand.md). The full R3 E-08 contract--15
-Markdown artifacts plus Web rendering and `--open`--remains incomplete.
+E-08 is complete at implementation commit `2da9540` and checkpoint
+`checkpoint/e-08-complete-understand`. The path-based Core/CLI action now runs the
+full deterministic `register -> inventory -> classify -> extract -> adaptive-read
+-> synthesize -> evidence -> status -> plan -> index -> web-render` pipeline,
+produces all fifteen curated Markdown deliverables plus a self-contained local
+read-only run page, and supports bounded prefix execution and same-run resume.
+The legacy E-01 public run API keeps its original three-stage/unavailable
+boundary; only the explicit E-08 action opts into the complete runner set. See
+[`project-understand.md`](project-understand.md).
 
 H-04 remains complete at commit `5c2a888` and checkpoint
 `checkpoint/h-04-host-event-ledger`. The closed host-neutral Schema v1 ledger,
@@ -872,3 +880,12 @@ produced **14 passed**, dependent suites **106 passed, 1 skipped**, and full
 regression **732 passed, 28 skipped**; Ruff, `py_compile`, and `git diff --check`
 passed. C-07 remains **deferred/not_started**. See
 [`knowledge-rendering.md`](knowledge-rendering.md).
+
+
+### R3-minus-C-07 progress (2026-07-18)
+
+E-08 full one-action understand is implemented and validated. The complete
+pipeline is deterministic/local-only, keeps the registered source project
+read-only, writes machine state only below `.llmwiki/projects/<project_id>/`,
+and routes curated Markdown through the controlled writer. No C-07 research
+binary extraction is introduced; C-07 remains `deferred/not_started`.
