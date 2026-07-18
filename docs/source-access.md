@@ -17,7 +17,13 @@ classification remains D-06.
 `tools/source_access.py` exposes:
 
 ```python
-locate_source(workspace_root, project_id, source_id) -> SourceLocation
+locate_source(
+    workspace_root,
+    project_id,
+    source_id,
+    *,
+    recover_relocation=True,
+) -> SourceLocation
 open_source(
     workspace_root,
     project_id,
@@ -26,6 +32,7 @@ open_source(
     locator,
     expected_content_hash=None,
     expected_excerpt_hash=None,
+    recover_relocation=True,
 ) -> SourceOpenResult
 open_evidence(workspace_root, project_id, evidence_id) -> SourceOpenResult
 deserialize_locator(payload) -> Locator
@@ -42,6 +49,11 @@ extract a locator unless the bytes still match the source registry's current
 content hash. A read or content mismatch may trigger one D-05 recovery attempt
 and one retry. Optional expected content and excerpt hashes still require the
 requested current identity and exact excerpt; recovery does not weaken them.
+
+`recover_relocation` defaults to `True` for compatibility with D-05. Passing
+`False` makes locate/open fail on the registered path without invoking the
+mutating recovery path. F-02B uses this strict mode and, after a failure, calls
+the separate read-only relocation inspector only for diagnostics.
 
 `open_evidence` loads one persisted D-03 Evidence record and requires all of:
 

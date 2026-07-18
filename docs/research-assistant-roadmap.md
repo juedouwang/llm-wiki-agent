@@ -58,7 +58,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | E-01 resumable staged run orchestration | complete | `146fc0f` | `checkpoint/e-01-run-orchestrator` |
 | E-08 deterministic one-action prefix (R2 slice) | complete | `b2e04ca` | `checkpoint/e-08-deterministic-understand` |
 | F-01 项目知识页面契约 | complete after F-01A/F-01B validation on 2026-07-17 | `829cb54` | `checkpoint/f-01b-canonical-knowledge-layout` |
-| F-02A Knowledge Schema v2 directional references | complete in authorized R3-BATCH unit on 2026-07-17 | pending integration | pending integration |
+| F-02A Knowledge Schema v2 directional references | complete in authorized R3-BATCH unit on 2026-07-17 | `ba3846c` | `checkpoint/f-02a-claim-evidence-schema-v2` |
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
 | J-05 Codex reference adapter package | complete after validation on 2026-07-16 | `62ccbdc` | `checkpoint/j-05-codex-plugin` |
@@ -123,7 +123,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 |---|---|---|---|
 | F-01 `P0/M` | 定义 15 类页面 frontmatter、目录契约和生成/用户所有权字段 | 所有页面 Schema 校验；错误类型和 future version fail closed | 页面格式松散 → 长期知识可升级和审计 |
 | F-02A `P0/S` | Add strict Schema v2 directional `evidence_refs`; verified key Claim details require supporting Evidence and verification time; retain v1 read-only parsing | Focused v2/v1/future-version, duplicate-ID, Claim-index, and pathless-Claim tests | Undirected Evidence IDs -> structurally auditable directional references |
-| F-02B `P0/M` | Validate Evidence registry/source health and currentness, including stale-state closure | Missing or stale Evidence cannot retain a current verified state | Structural gate -> current-version Evidence gate |
+| F-02B `P0/M` | Add a deterministic read-only Claim/project/Source/Evidence currentness validator over exact Source version/hash, Locator, excerpt, verification time, and report-only relocation inspection | Missing/stale Evidence, post-verification edits, A → B → A source versions, and relocation ambiguity cannot retain a current verified state; success and failure paths write nothing | Structural gate → current-version Evidence closure without semantic inference or persistent status mutation |
 | F-03 `P1/M` | 增加 paper/method/dataset/experiment/metric/result/decision/question 等实体和关系 | 关系约束、反向链接和项目索引测试 | 通用 entity/concept → 可表达科研工作流 |
 | F-04 `P1/M` | 支持 `draft/verified/stale/conflicting/rejected` 和冲突并存 | 冲突实验产生两个结果与冲突状态，不覆盖旧结论 | 新结论覆盖旧结论 → 历史与冲突清晰 |
 | F-05 `P0/M` | 受控 Markdown 写入器，保护用户确认区和网站编辑内容 | 重新生成不覆盖用户确认；冲突写入产生审计记录 | 生成器可覆盖人工知识 → 人机协作内容可长期保留 |

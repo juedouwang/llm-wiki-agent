@@ -1,32 +1,35 @@
-# Project Knowledge Artifact Contract (F-01A / F-02A, Schema v2)
+# Project Knowledge Artifact Contract (F-01 / F-02, Schema v2)
 
-F-01A defines the deterministic project-relative path contract for curated
-Markdown under `<knowledge_projects_root>/<project_id>/`. F-02A advances the
-current frontmatter contract to Knowledge Schema v2 with directional Evidence
-references and a structural gate for verified key Claim pages. This remains an
-in-memory validation layer only: it does not create directories, read a research
-source, write a real knowledge page, synthesize prose, resolve an Evidence
-registry, check source health/currentness, or expose CLI/MCP/Hook/Skill/Web
-behavior.
+F-01 defines the deterministic project-relative path and empty-layout contract
+for curated Markdown under `<knowledge_projects_root>/<project_id>/`. F-02A
+advances the current frontmatter contract to Knowledge Schema v2 with explicit
+directional Evidence references and a structural gate for verified key Claim
+pages. F-02B adds a separate deterministic, read-only currentness validator over
+caller-supplied Claim frontmatter, current Source/Evidence registries, actual
+Source bytes, Locator, and exact excerpt hash.
 
-The implementation is [`tools/knowledge_artifacts.py`](../tools/knowledge_artifacts.py).
-Later controlled writers and renderers must use this contract instead of guessing
-an artifact's role from body text or ad hoc filenames.
+The Schema/path implementation is
+[`tools/knowledge_artifacts.py`](../tools/knowledge_artifacts.py); the F-02B
+closure is [`tools/claim_evidence.py`](../tools/claim_evidence.py) and is specified
+in [`claim-evidence-currentness.md`](claim-evidence-currentness.md). Neither
+module opens or writes a Markdown page body. Later controlled writers and
+renderers must use these contracts instead of guessing an artifact's role from
+body text or ad hoc filenames.
 
 ## P-08 responsibility boundary
 
 The host Agent remains responsible for understanding the user's goal, deciding
-what a page means, drafting or revising its body, and proposing source/Evidence
-links. Research Core is responsible for deterministic checks: whether a path is
-canonical, the page type matches that path, Schema v2 directional reference
-entries are structurally valid, key Claim verification has the required supporting
-reference and timestamp, and a future schema fails closed.
+what a page means, drafting or revising its body, and explicitly choosing
+Source/Evidence links and stance. Research Core is responsible for deterministic
+checks: canonical path and type, strict Schema v2 structure, registry identities,
+Source version and hash, Locator/excerpt fidelity, verified-state currentness, and
+future-version fail-closed behavior.
 
-F-01A/F-02A expose no MCP tool. Schema parsing is an internal Core primitive, not
-a task-level operation for the host. It uses no LLM, keyword scoring, or semantic
-heuristic. F-02A does not establish Evidence registry existence, source health, or
-currentness; that remains F-02B. F-05 controlled mixed/user-body protection also
-remains separate.
+F-01/F-02 expose no MCP tool. Schema parsing and Claim currentness are internal
+Core primitives, not task-level operations for the host. They use no LLM,
+keyword scoring, or semantic heuristic and never infer stance or conflict.
+F-02B reports currentness without changing Markdown, Claim status, Evidence, or
+Source bindings. F-05 controlled mixed/user-body protection remains separate.
 
 ## Required frontmatter
 
@@ -66,9 +69,18 @@ Evidence ID may appear only once regardless of stance.
 For Schema v2, a verified key Claim must have a non-null `last_verified_at` and at
 least one `supporting` reference. Canonical `claims/<slug>.md` detail pages are key;
 `claims/index.md` is not. A pathless `artifact_type: claim` is conservatively
-validated as key. These checks are structural only: F-02A does not open an
-Evidence registry or source-health state and does not prove that a referenced ID
-exists or is current. F-02 remains partial pending F-02B currentness validation.
+validated as key by the structural validator.
+
+F-02B then validates a canonical Claim path against the requested project and
+current registries. Every declared Source must be registered; every declared
+Evidence ID must exist, belong to the project, and use a Source declared by the
+Claim; its exact Source version/hash, Locator, and excerpt must still be current.
+A verified key Claim remains current only when all declared Evidence is current,
+at least one current reference is `supporting`, and
+`last_verified_at == updated_at`. A verified `claims/index.md` still requires
+current declared bindings and timestamp equality, but does not acquire a key-Claim
+support requirement. The validator reports this closure and never rewrites a page
+or status.
 
 Schema v1 pages retain strict read-only parsing compatibility with their exact
 `evidence_ids` field. The current validator and serializer reject v1, never infer
@@ -118,8 +130,10 @@ draft | verified | stale | conflicting | rejected
 
 `verified` is not model confidence. Every verified page requires a structurally
 valid, non-null `last_verified_at`; verified key Claims also require a supporting
-Schema v2 reference. The validator never grants or converts the state, and
-source-version/Evidence currentness remains F-02B work.
+Schema v2 reference. F-02B does not grant or convert that state. It reports a
+verified Claim as current only after the explicit registry, Source version/hash,
+Locator/excerpt, all-declared-Evidence, current-support, and timestamp-equality
+checks pass.
 
 Ownership is closed to:
 
@@ -147,6 +161,17 @@ generated_at <= updated_at
 
 generated_at <= last_verified_at <= updated_at   # when non-null
 ```
+
+For a verified Claim to remain current under F-02B, the stronger runtime closure
+is:
+
+```text
+last_verified_at == updated_at
+```
+
+A later controlled modification therefore invalidates current verification until
+a host-directed verification pass succeeds again. F-02B only reports the result;
+it does not persist a status transition.
 
 ## Canonical project-relative paths
 
@@ -247,15 +272,17 @@ Combined F-01 does not:
 
 - create or alter real `wiki/projects/<project_id>/*.md` files;
 - generate any of the 15 page bodies or a unified index;
-- add source-project or research-binary reads;
-- load an Evidence registry or source-health state, establish Evidence currentness,
-  propagate stale state, retrieve sources, perform migration, or control mixed/user
-  writes;
+- read a research source or research-binary payload; or
 - add a ResearchCoreService facade method, CLI command, MCP tool, Skill, Hook,
   Plugin, or Web surface.
 
-F-02A is the structural directional-reference slice only. Overall F-02 remains
-partial until F-02B adds registry/source currentness validation. Controlled
-mixed/user Markdown writes, conflict audit records, and protection of
-user-confirmed content remain F-05 work. Those capabilities require their own
-authorization.
+F-02A is the structural directional-reference gate. F-02B is the read-only
+registry/Source/Locator/excerpt currentness gate for caller-supplied Schema v2
+Claim frontmatter. Its relocation inspection is report-only and it performs no
+Markdown, Evidence-registry, Source-registry, run-state, or status write. It does
+not migrate Schema v1, infer stance/conflicts, persist stale propagation, or add a
+public interface.
+
+Controlled mixed/user Markdown writes, conflict audit records, protection of
+user-confirmed content, and persistent propagation of stale state remain F-05 or
+later work and require their own authorized units.

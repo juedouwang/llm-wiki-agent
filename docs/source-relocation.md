@@ -30,12 +30,12 @@ after recovery. Relocation cannot make stale Evidence current again.
 
 D-05 evaluates exactly one priority group at a time:
 
-1. **Path aliases** ? every historical path in the source record except the
+1. **Path aliases** — every historical path in the source record except the
    failed current path.
-2. **Exact content hash** ? regular-file rows in the current validated Manifest
+2. **Exact content hash** — regular-file rows in the current validated Manifest
    whose `content_sha256` equals the source's recorded current SHA-256. Existing
    path-history entries are excluded because aliases have higher priority.
-3. **Deterministic Git path history** ? committed rename records in chronological
+3. **Deterministic Git path history** — committed rename records in chronological
    order, followed by the current `git diff HEAD` rename records.
 
 A lower-priority group is considered only when the current group has no verified
@@ -49,6 +49,30 @@ fresh `project inventory` before hash recovery. A committed or working-tree Git
 rename can still be recovered while the Manifest is stale. If the Manifest is
 missing, malformed, or unsupported, recovery fails closed before Git history
 because the higher-priority hash group cannot be audited safely.
+
+## Read-only inspection boundary
+
+`inspect_source_relocation(workspace_root, project_id, source_id)` evaluates the
+same current-path check and ordered candidate groups without calling
+`record_source_relocation(...)`. Its versioned result is
+`llmwiki-source-relocation-inspection` / `source-relocation-inspection-v1` and
+has exactly four statuses:
+
+| Status | Meaning | Registry write |
+|---|---|---|
+| `current` | The registered path still matches the current recorded hash | Never |
+| `relocatable` | One exact-hash candidate exists in the highest applicable group | Never |
+| `ambiguous` | Multiple equal-priority exact-hash candidates exist | Never |
+| `unresolved` | No safe candidate exists or a group cannot be audited | Never |
+
+The result includes the registered path, source version/hash, ordered attempts,
+candidate paths, and current-path failure reason. It always emits
+`registry_write_performed: false`. F-02B uses this inspection only after strict
+`open_source(..., recover_relocation=False)` fails, so Claim validation can
+report a move without repairing the Source registry as a side effect.
+
+Persisting a unique candidate remains an explicit D-05 recovery action through
+`recover_source(...)`; inspection alone is never authorization to write.
 
 ## Candidate acceptance and fail-closed behavior
 

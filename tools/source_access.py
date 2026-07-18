@@ -422,8 +422,10 @@ def locate_source(
     workspace_root: str | Path,
     project_id: str,
     source_id: str,
+    *,
+    recover_relocation: bool = True,
 ) -> SourceLocation:
-    """Resolve the current path, recovering identity only after access failure."""
+    """Resolve the current path, optionally recovering identity after access failure."""
 
     try:
         registration = load_registered_project(workspace_root, project_id)
@@ -444,6 +446,8 @@ def locate_source(
             source.current_path,
         )
     except (SourceMissingError, SourceBoundaryError, SourceReadError) as exc:
+        if not recover_relocation:
+            raise
         _recover_failed_access(
             workspace_root,
             registration.project_id,
@@ -874,11 +878,17 @@ def open_source(
     evidence_id: str | None = None,
     evidence_source_version: int | None = None,
     enforce_content_policy: bool = False,
+    recover_relocation: bool = True,
 ) -> SourceOpenResult:
     """Open one locator at the current path and verify exact current bytes."""
 
     normalized_locator = _normalize_locator(locator)
-    location = locate_source(workspace_root, project_id, source_id)
+    location = locate_source(
+        workspace_root,
+        project_id,
+        source_id,
+        recover_relocation=recover_relocation,
+    )
     if enforce_content_policy:
         _assert_manifest_content_access_allowed(workspace_root, location)
 
@@ -909,6 +919,8 @@ def open_source(
     try:
         data = _read_verified_source(location)
     except (SourceContentMismatchError, SourceReadError) as exc:
+        if not recover_relocation:
+            raise
         _recover_failed_access(
             workspace_root,
             location.project_id,
@@ -919,6 +931,7 @@ def open_source(
             workspace_root,
             location.project_id,
             location.source_id,
+            recover_relocation=False,
         )
         if enforce_content_policy:
             _assert_manifest_content_access_allowed(workspace_root, location)

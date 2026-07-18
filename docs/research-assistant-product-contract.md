@@ -3,9 +3,9 @@
 - 状态：**已确认，作为后续开发的产品基线**
 - 决策编号：`P-05 Agent 原生执行闭环`、`P-08 Agent-native 科研工具架构`
 - 确认日期：2026-07-15
-- 最近补充：2026-07-17（P-08 Agent-native 科研工具架构）
+- 最近补充：2026-07-18（F-02B Claim–Evidence 只读当前性校验）
 - 适用分支：`research-assistant`
-- 当前实现边界（截至 2026-07-17）：确定性入口包括项目注册/盘点、B-07 `prioritize`、B-08 `coverage`、`project understand` 的 `register -> inventory -> classify` 前缀，以及 H-07/J-05 reconciliation 集成。B-07 只生成独立机器建议，不推进 `adaptive-read`；H-05 选择性刷新、15 类 Markdown、Verified Query、成熟规划、Web/`--open` 与 Claude Code 适配仍未完成。
+- 当前实现边界（截至 2026-07-18）：确定性入口包括项目注册/盘点、B-07 `prioritize`、B-08 `coverage`、`project understand` 的 `register -> inventory -> classify` 前缀，以及 H-07/J-05 reconciliation 集成；F-01 已提供严格知识路径/Schema 与空目录骨架，F-02A 已提供 Knowledge Schema v2 结构门，F-02B 仅提供 Core 内部、只读的 Claim–Evidence 绑定和当前性校验。B-07 仍只生成独立机器建议，不推进 `adaptive-read`；F-02B 不持久化 `stale` 或修改 Markdown/registry；H-05 选择性刷新、15 类 Markdown、Verified Query、成熟规划、产品 Web/`--open` 与 Claude Code 适配仍未完成。
 
 ## 1. 产品定义
 
@@ -287,37 +287,44 @@ register
 
 `index.md` 应提供这 15 类资料的统一导航，并显示生成状态、最后刷新时间和需要用户确认的项目。
 
-## 6. Markdown ???????
+## 6. Markdown 页面与证据约定
 
-????????????????????
+项目级长期知识页面使用严格 Knowledge Schema v2。完整 frontmatter 字段如下；实际 ID 和时间戳必须使用各自的规范格式，且不得增加未知字段：
 
 ```yaml
 ---
 schema_version: 2
+kind: llmwiki-project-knowledge-page
 project_id: <project_id>
-artifact_type: overview | paper | method | dataset | experiment | result | claim | plan | ...
-status: draft | verified | stale | conflicting | rejected
-ownership: generated | mixed | user
-source_ids: []
+artifact_type: claim
+title: "Claim title"
+status: verified
+ownership: generated
+source_ids:
+  - "src-<32-lowercase-hex>"
 evidence_refs:
-  - evidence_id: <evidence_id>
-    stance: supporting | opposing | context
-generated_at: <timestamp>
-last_verified_at: <timestamp-or-null>
+  - evidence_id: "evd-<64-lowercase-hex>"
+    stance: supporting
+generated_at: "2026-07-18T00:00:00Z"
+updated_at: "2026-07-18T00:00:00Z"
+last_verified_at: "2026-07-18T00:00:00Z"
 ---
 ```
 
-???
+约束：
 
-- ???????????????????
-- Evidence ???? `source_id + content_hash + locator + excerpt_hash`?
-- ??????????PDF ??/???Notebook cell??? sheet/cell range?PPT slide ? DOCX paragraph?
-- `verified` ?????????????F-02A ????????? `claims/<slug>.md` ??? `last_verified_at` ????? `supporting` ???`claims/index.md` ????? Claim???? Claim ??? Claim ?????
-- `evidence_refs` ? Evidence ID ?????? F-02A ??? Evidence registry ?????????????????? current?
-- ???????????????????
-- ?????????????? Claim ????? `stale`????????? registry/source currentness ???? F-02B??? F-02 ?? partial?
+- 关键事实不得只写模糊的“来自某文件”；Evidence 至少绑定 `source_id + source_version + content_hash + locator + excerpt_hash`。
+- 定位可使用代码行号、PDF 页码/区域、Notebook cell、表格 sheet/cell range、PPT slide、DOCX paragraph 或其他已经受 Core Schema 约束的 Locator。
+- F-02A 负责结构门：`evidence_refs` 每项必须且只能包含 `evidence_id` 和显式 `stance`；stance 只能是 `supporting | opposing | context`，Evidence ID 不得重复。Core 不自动推断 stance 或 Claim 冲突语义。
+- F-02A 中，`claims/<slug>.md` 是 key Claim；`verified` key Claim 必须有非空 `last_verified_at` 和至少一个结构上的 `supporting` 引用。`claims/index.md` 是 collection index，不是 key Claim；无路径 Claim 在结构解析时保守按 key Claim 处理。
+- F-02B 只读校验器消费严格 Schema v2 和规范 Claim 路径，核对 Claim 的 project/Source/Evidence 绑定、Evidence 的当前 Source 版本与内容哈希，并从当前原文件重开 Locator、核验 excerpt hash。
+- `verified` key Claim 只有在所有声明 Source 已登记、所有声明 Evidence 均为当前版本、至少一个当前 Evidence 的 stance 为 `supporting`，且 `last_verified_at == updated_at` 时，才保有当前 verified 状态。任何页面修改导致两个时间戳不一致，都需要重新核验。
+- `claims/index.md` 即使是 `verified` 也仍需所有声明绑定/Evidence 当前且两个时间戳相等，但 F-02B 不为 collection index 额外发明 supporting-Evidence 要求。
+- Source relocation 在 F-02B 中只能检查并报告；即使找到唯一 exact-hash 候选，也不得在校验过程中自动修改 Source registry。
+- F-02B 不打开或修改知识 Markdown 正文，不注册或重写 Evidence，不迁移旧页面，不持久化 `stale`/`verified` 状态，也不增加 CLI、MCP 或 Web 接口。依赖传播和受控知识写入属于后续单元。
+- Schema v1 仅可通过兼容层严格只读解析；不得猜测 directional stance 或原地迁移。Schema v3 及未来未知版本必须 fail closed。
 
-Schema v1 ??????????????????????????????/?? Schema v2?????? stance????? v1?Schema v3 ??????????
+详细机器契约见 [`knowledge-artifact-contract.md`](knowledge-artifact-contract.md) 与 [`claim-evidence-currentness.md`](claim-evidence-currentness.md)。
 
 ## 7. 自适应文件阅读策略
 

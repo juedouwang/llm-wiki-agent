@@ -27,6 +27,10 @@ from tools.source_recovery import (
     SOURCE_RECOVERY_ATTEMPT_KIND,
     SOURCE_RECOVERY_KIND,
     SOURCE_RECOVERY_VERSION,
+    SOURCE_RELOCATION_INSPECTION_KIND,
+    SOURCE_RELOCATION_INSPECTION_VERSION,
+    SourceRecoveryError,
+    inspect_source_relocation,
     recover_source,
 )
 from tools.source_registry import load_source_registry, sync_source_registry
@@ -147,6 +151,87 @@ class SourceRecoveryTests(unittest.TestCase):
                 self.source.source_id,
             )
         self.assertEqual(location.current_path, "docs/original.txt")
+
+    def test_read_only_relocation_inspection_never_binds_a_candidate(self) -> None:
+        sources_file = self.registration.layout.sources_file
+        before_registry = sources_file.read_bytes()
+        before_mtime = sources_file.stat().st_mtime_ns
+
+        current = inspect_source_relocation(
+            self.workspace,
+            self.registration.project_id,
+            self.source.source_id,
+        )
+
+        self.assertEqual(current.status, "current")
+        self.assertEqual(current.reason_code, "source-current-path-valid")
+        self.assertFalse(current.as_dict()["registry_write_performed"])
+        self.assertEqual(sources_file.read_bytes(), before_registry)
+        self.assertEqual(sources_file.stat().st_mtime_ns, before_mtime)
+
+        moved = self.move_original("moved/current.txt")
+        inventory_project(self.workspace, self.registration.project_id)
+        source_before_inspection = self.project_snapshot()
+        inspection = inspect_source_relocation(
+            self.workspace,
+            self.registration.project_id,
+            self.source.source_id,
+        )
+
+        self.assertEqual(inspection.status, "relocatable")
+        self.assertEqual(inspection.recovery_method, "content-hash")
+        self.assertEqual(inspection.candidate_paths, ("moved/current.txt",))
+        payload = inspection.as_dict()
+        self.assertEqual(payload["kind"], SOURCE_RELOCATION_INSPECTION_KIND)
+        self.assertEqual(
+            payload["inspection_version"],
+            SOURCE_RELOCATION_INSPECTION_VERSION,
+        )
+        self.assertFalse(payload["registry_write_performed"])
+        self.assertEqual(sources_file.read_bytes(), before_registry)
+        self.assertEqual(sources_file.stat().st_mtime_ns, before_mtime)
+        self.assertEqual(self.project_snapshot(), source_before_inspection)
+        self.assertEqual(moved.read_bytes(), self.source_bytes)
+        self.assertEqual(self.current_source().current_path, "docs/original.txt")
+
+    def test_recovery_fails_closed_if_source_version_changes_after_inspection(self) -> None:
+        self.move_original("moved/candidate.txt")
+        inventory_project(self.workspace, self.registration.project_id)
+        real_inspect = inspect_source_relocation
+
+        def inspect_then_advance(*args, **kwargs):
+            inspection = real_inspect(*args, **kwargs)
+            self.original.parent.mkdir(parents=True, exist_ok=True)
+            self.original.write_text(
+                "replacement version\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            inventory_project(self.workspace, self.registration.project_id)
+            sync_source_registry(self.workspace, self.registration.project_id)
+            return inspection
+
+        with mock.patch(
+            "tools.source_recovery.inspect_source_relocation",
+            side_effect=inspect_then_advance,
+        ):
+            with self.assertRaisesRegex(
+                SourceRecoveryError,
+                "source registry changed during relocation recovery inspection",
+            ):
+                recover_source(
+                    self.workspace,
+                    self.registration.project_id,
+                    self.source.source_id,
+                )
+
+        current = self.current_source()
+        self.assertEqual(current.current_path, "docs/original.txt")
+        self.assertEqual(current.current_version, 2)
+        self.assertEqual(
+            self.original.read_text(encoding="utf-8"),
+            "replacement version\n",
+        )
 
     def test_unique_manifest_hash_move_preserves_identity_versions_and_source(self) -> None:
         moved = self.move_original("moved/current.txt")

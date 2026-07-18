@@ -57,10 +57,18 @@ SOURCE_RECOVERY_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
 SOURCE_RECOVERY_KIND = "llmwiki-source-recovery-result"
 SOURCE_RECOVERY_ATTEMPT_KIND = "llmwiki-source-recovery-attempt"
 SOURCE_RECOVERY_VERSION = "source-recovery-v1"
+SOURCE_RELOCATION_INSPECTION_KIND = "llmwiki-source-relocation-inspection"
+SOURCE_RELOCATION_INSPECTION_VERSION = "source-relocation-inspection-v1"
 SOURCE_RECOVERY_METHODS = ("path-alias", "content-hash", "git-history")
 SOURCE_RECOVERY_STATUSES = (
     "not-needed",
     "recovered",
+    "unresolved",
+    "ambiguous",
+)
+SOURCE_RELOCATION_INSPECTION_STATUSES = (
+    "current",
+    "relocatable",
     "unresolved",
     "ambiguous",
 )
@@ -70,6 +78,12 @@ GIT_TIMEOUT_SECONDS = 15
 
 RecoveryMethod = Literal["path-alias", "content-hash", "git-history"]
 RecoveryStatus = Literal["not-needed", "recovered", "unresolved", "ambiguous"]
+RelocationInspectionStatus = Literal[
+    "current",
+    "relocatable",
+    "unresolved",
+    "ambiguous",
+]
 
 _SOURCE_ID_PATTERN = re.compile(r"src-[0-9a-f]{32}")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -171,6 +185,71 @@ class SourceRecoveryResult:
             "attempts": [attempt.as_dict() for attempt in self.attempts],
             "current_failure_reason_code": self.current_failure_reason_code,
             "wrote_registry": self.wrote_registry,
+            "detail": self.detail,
+        }
+
+
+@dataclass(frozen=True)
+class SourceRelocationInspectionResult:
+    """Read-only deterministic assessment of one registered source path."""
+
+    project_id: str
+    source_id: str
+    status: RelocationInspectionStatus
+    reason_code: str
+    registered_path: str
+    current_version: int
+    content_hash: str
+    recovery_method: RecoveryMethod | None
+    candidate_paths: tuple[str, ...]
+    attempts: tuple[SourceRecoveryAttempt, ...]
+    current_failure_reason_code: str | None
+    detail: str
+
+    def __post_init__(self) -> None:
+        if self.status not in SOURCE_RELOCATION_INSPECTION_STATUSES:
+            raise SourceRecoveryError(
+                f"unsupported relocation inspection status: {self.status}"
+            )
+        if (
+            self.recovery_method is not None
+            and self.recovery_method not in SOURCE_RECOVERY_METHODS
+        ):
+            raise SourceRecoveryError(
+                f"unsupported recovery method: {self.recovery_method}"
+            )
+        object.__setattr__(self, "candidate_paths", tuple(self.candidate_paths))
+        object.__setattr__(self, "attempts", tuple(self.attempts))
+
+    @property
+    def current(self) -> bool:
+        return self.status == "current"
+
+    @property
+    def relocatable(self) -> bool:
+        return self.status == "relocatable"
+
+    @property
+    def ambiguous(self) -> bool:
+        return self.status == "ambiguous"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": SOURCE_RECOVERY_SCHEMA_VERSION,
+            "kind": SOURCE_RELOCATION_INSPECTION_KIND,
+            "inspection_version": SOURCE_RELOCATION_INSPECTION_VERSION,
+            "project_id": self.project_id,
+            "source_id": self.source_id,
+            "status": self.status,
+            "reason_code": self.reason_code,
+            "registered_path": self.registered_path,
+            "current_version": self.current_version,
+            "content_hash": self.content_hash,
+            "recovery_method": self.recovery_method,
+            "candidate_paths": list(self.candidate_paths),
+            "attempts": [attempt.as_dict() for attempt in self.attempts],
+            "current_failure_reason_code": self.current_failure_reason_code,
+            "registry_write_performed": False,
             "detail": self.detail,
         }
 
@@ -485,6 +564,61 @@ def _result(
     )
 
 
+def _inspection_result(
+    *,
+    project_id: str,
+    record: SourceRecord,
+    status: RelocationInspectionStatus,
+    reason_code: str,
+    registered_path: str,
+    recovery_method: RecoveryMethod | None,
+    candidate_paths: tuple[str, ...],
+    attempts: list[SourceRecoveryAttempt],
+    current_failure_reason_code: str | None,
+    detail: str,
+) -> SourceRelocationInspectionResult:
+    if record.current_version is None or record.current_content_hash is None:
+        raise SourceRecoveryError(
+            f"source {record.source_id} has no recorded content version"
+        )
+    return SourceRelocationInspectionResult(
+        project_id=project_id,
+        source_id=record.source_id,
+        status=status,
+        reason_code=reason_code,
+        registered_path=registered_path,
+        current_version=record.current_version,
+        content_hash=record.current_content_hash,
+        recovery_method=recovery_method,
+        candidate_paths=candidate_paths,
+        attempts=tuple(attempts),
+        current_failure_reason_code=current_failure_reason_code,
+        detail=detail,
+    )
+
+
+def _inspection_from_terminal(
+    terminal: SourceRecoveryResult,
+) -> SourceRelocationInspectionResult:
+    status: RelocationInspectionStatus = (
+        "ambiguous" if terminal.status == "ambiguous" else "unresolved"
+    )
+    return SourceRelocationInspectionResult(
+        project_id=terminal.project_id,
+        source_id=terminal.source_id,
+        status=status,
+        reason_code=terminal.reason_code,
+        registered_path=terminal.previous_path,
+        current_version=terminal.current_version,
+        content_hash=terminal.content_hash,
+        recovery_method=terminal.recovery_method,
+        candidate_paths=terminal.candidate_paths,
+        attempts=terminal.attempts,
+        current_failure_reason_code=terminal.current_failure_reason_code,
+        detail=terminal.detail,
+    )
+
+
 def _terminal_attempt_result(
     *,
     project_id: str,
@@ -789,14 +923,12 @@ def _git_history_paths(
     return tuple(sorted(project_paths))
 
 
-def recover_source(
+def inspect_source_relocation(
     workspace_root: str | Path,
     project_id: str,
     source_id: str,
-    *,
-    lock_timeout_seconds: float = 10.0,
-) -> SourceRecoveryResult:
-    """Recover one unavailable source path by deterministic local priority groups."""
+) -> SourceRelocationInspectionResult:
+    """Inspect deterministic relocation candidates without changing the registry."""
 
     try:
         registration = load_registered_project(workspace_root, project_id)
@@ -815,29 +947,27 @@ def recover_source(
             f"source {record.source_id} has no recorded content version"
         )
 
-    previous_path = record.current_path
+    registered_path = record.current_path
     expected_hash = _content_hash(record.current_content_hash)
     current = _observe_candidate(
         registration.project_root,
         policy,
-        previous_path,
+        registered_path,
         expected_hash,
         enforce_policy=False,
         reject_reparse_points=False,
     )
     if current.state == "match":
-        return _result(
+        return _inspection_result(
             project_id=registration.project_id,
             record=record,
-            status="not-needed",
+            status="current",
             reason_code="source-current-path-valid",
-            previous_path=previous_path,
-            current_path=previous_path,
+            registered_path=registered_path,
             recovery_method=None,
             candidate_paths=(),
             attempts=[],
             current_failure_reason_code=None,
-            wrote_registry=False,
             detail=(
                 "the current recorded path is a project-contained regular file and "
                 "matches the recorded current content hash"
@@ -846,12 +976,9 @@ def recover_source(
 
     current_failure_reason_code = _current_failure_reason(current)
     attempts: list[SourceRecoveryAttempt] = []
-    history_paths = {
-        _relative_path(item.path)
-        for item in record.path_history
-    }
+    history_paths = {_relative_path(item.path) for item in record.path_history}
 
-    alias_paths = _sort_paths(history_paths - {previous_path}, policy)
+    alias_paths = _sort_paths(history_paths - {registered_path}, policy)
     alias_observations = [
         _observe_candidate(
             registration.project_root,
@@ -872,25 +999,29 @@ def recover_source(
     terminal = _terminal_attempt_result(
         project_id=registration.project_id,
         record=record,
-        previous_path=previous_path,
+        previous_path=registered_path,
         method="path-alias",
         attempt=alias_attempt,
         attempts=attempts,
         current_failure_reason_code=current_failure_reason_code,
     )
     if terminal is not None:
-        return terminal
+        return _inspection_from_terminal(terminal)
     if len(alias_attempt.candidate_paths) == 1:
-        return _bind_candidate(
-            workspace_root,
-            registration.project_id,
-            record,
-            previous_path=previous_path,
-            method="path-alias",
-            candidate_path=alias_attempt.candidate_paths[0],
+        return _inspection_result(
+            project_id=registration.project_id,
+            record=record,
+            status="relocatable",
+            reason_code="source-relocation-candidate-found",
+            registered_path=registered_path,
+            recovery_method="path-alias",
+            candidate_paths=alias_attempt.candidate_paths,
             attempts=attempts,
             current_failure_reason_code=current_failure_reason_code,
-            lock_timeout_seconds=lock_timeout_seconds,
+            detail=(
+                "one path-alias candidate exactly matches the recorded current "
+                "content hash; the registry was not changed"
+            ),
         )
 
     manifest_paths = _manifest_hash_paths(
@@ -918,25 +1049,29 @@ def recover_source(
     terminal = _terminal_attempt_result(
         project_id=registration.project_id,
         record=record,
-        previous_path=previous_path,
+        previous_path=registered_path,
         method="content-hash",
         attempt=manifest_attempt,
         attempts=attempts,
         current_failure_reason_code=current_failure_reason_code,
     )
     if terminal is not None:
-        return terminal
+        return _inspection_from_terminal(terminal)
     if len(manifest_attempt.candidate_paths) == 1:
-        return _bind_candidate(
-            workspace_root,
-            registration.project_id,
-            record,
-            previous_path=previous_path,
-            method="content-hash",
-            candidate_path=manifest_attempt.candidate_paths[0],
+        return _inspection_result(
+            project_id=registration.project_id,
+            record=record,
+            status="relocatable",
+            reason_code="source-relocation-candidate-found",
+            registered_path=registered_path,
+            recovery_method="content-hash",
+            candidate_paths=manifest_attempt.candidate_paths,
             attempts=attempts,
             current_failure_reason_code=current_failure_reason_code,
-            lock_timeout_seconds=lock_timeout_seconds,
+            detail=(
+                "one current-Manifest candidate exactly matches the recorded current "
+                "content hash; the registry was not changed"
+            ),
         )
 
     git_paths = tuple(
@@ -967,41 +1102,106 @@ def recover_source(
     terminal = _terminal_attempt_result(
         project_id=registration.project_id,
         record=record,
-        previous_path=previous_path,
+        previous_path=registered_path,
         method="git-history",
         attempt=git_attempt,
         attempts=attempts,
         current_failure_reason_code=current_failure_reason_code,
     )
     if terminal is not None:
-        return terminal
+        return _inspection_from_terminal(terminal)
     if len(git_attempt.candidate_paths) == 1:
-        return _bind_candidate(
-            workspace_root,
-            registration.project_id,
-            record,
-            previous_path=previous_path,
-            method="git-history",
-            candidate_path=git_attempt.candidate_paths[0],
+        return _inspection_result(
+            project_id=registration.project_id,
+            record=record,
+            status="relocatable",
+            reason_code="source-relocation-candidate-found",
+            registered_path=registered_path,
+            recovery_method="git-history",
+            candidate_paths=git_attempt.candidate_paths,
             attempts=attempts,
             current_failure_reason_code=current_failure_reason_code,
-            lock_timeout_seconds=lock_timeout_seconds,
+            detail=(
+                "one local-Git-history candidate exactly matches the recorded current "
+                "content hash; the registry was not changed"
+            ),
         )
 
-    return _result(
+    return _inspection_result(
         project_id=registration.project_id,
         record=record,
         status="unresolved",
         reason_code="source-relocation-not-found",
-        previous_path=previous_path,
-        current_path=record.current_path,
+        registered_path=registered_path,
         recovery_method=None,
         candidate_paths=(),
         attempts=attempts,
         current_failure_reason_code=current_failure_reason_code,
-        wrote_registry=False,
         detail=(
             "no project-contained regular file matched the recorded current content "
             "hash through path aliases, the current Manifest, or local Git history"
         ),
+    )
+
+
+def recover_source(
+    workspace_root: str | Path,
+    project_id: str,
+    source_id: str,
+    *,
+    lock_timeout_seconds: float = 10.0,
+) -> SourceRecoveryResult:
+    """Recover one unavailable source path by deterministic local priority groups."""
+
+    inspection = inspect_source_relocation(workspace_root, project_id, source_id)
+    attempts = list(inspection.attempts)
+    if inspection.status != "relocatable":
+        status: RecoveryStatus = (
+            "not-needed" if inspection.status == "current" else inspection.status
+        )
+        return SourceRecoveryResult(
+            project_id=inspection.project_id,
+            source_id=inspection.source_id,
+            status=status,
+            reason_code=inspection.reason_code,
+            previous_path=inspection.registered_path,
+            current_path=inspection.registered_path,
+            current_version=inspection.current_version,
+            content_hash=inspection.content_hash,
+            recovery_method=inspection.recovery_method,
+            candidate_paths=inspection.candidate_paths,
+            attempts=tuple(attempts),
+            current_failure_reason_code=inspection.current_failure_reason_code,
+            wrote_registry=False,
+            detail=inspection.detail,
+        )
+    if inspection.recovery_method is None or len(inspection.candidate_paths) != 1:
+        raise SourceRecoveryError(
+            "relocatable inspection must identify exactly one recovery candidate"
+        )
+    if inspection.current_failure_reason_code is None:
+        raise SourceRecoveryError(
+            "relocatable inspection must retain the current-path failure reason"
+        )
+
+    candidate_path = inspection.candidate_paths[0]
+    record = _load_source(workspace_root, inspection.project_id, inspection.source_id)
+    if (
+        record.current_version != inspection.current_version
+        or record.current_content_hash != inspection.content_hash
+        or record.current_path not in {inspection.registered_path, candidate_path}
+    ):
+        raise SourceRecoveryError(
+            "source registry changed during relocation recovery inspection"
+        )
+    return _bind_candidate(
+        workspace_root,
+        inspection.project_id,
+        record,
+        previous_path=inspection.registered_path,
+        method=inspection.recovery_method,
+        candidate_path=candidate_path,
+        attempts=attempts,
+        current_failure_reason_code=inspection.current_failure_reason_code,
+        lock_timeout_seconds=lock_timeout_seconds,
     )

@@ -108,7 +108,7 @@ Example summary:
   "record_type": "summary",
   "project_id": "example-project",
   "evidence_version": "evidence-v1",
-  "identity_version": "evidence-identity-v1",
+  "identity_version": "evidence-identity-v2",
   "hash_algorithm": "sha256",
   "excerpt_text_encoding": "utf-8",
   "locator_schema_version": 1,

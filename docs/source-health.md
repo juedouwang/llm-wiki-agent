@@ -46,6 +46,12 @@ A unique D-05 recovery may atomically update only `sources.jsonl` before health
 continues. The `source_id`, source versions, and source content hash remain
 unchanged.
 
+Because `evaluate_source_health(...)` may persist that unique D-05 relocation,
+strict read-only F-02B Claim validation does not call the aggregate health pass.
+It composes registry validation,
+`open_source(..., recover_relocation=False)`, and report-only relocation
+inspection instead.
+
 For each persisted Evidence record, sorted by `evidence_id`:
 
 1. If its source is non-valid, inherit that source's `stale`, `missing`, or
