@@ -57,6 +57,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | G-08 budget-bounded Host Context Pack | complete | `3721fb5` | `checkpoint/g-08-host-context-pack` |
 | E-01 resumable staged run orchestration | complete | `146fc0f` | `checkpoint/e-01-run-orchestrator` |
 | E-02 deterministic project map | complete (2026-07-18 validation) | `c3ab7e0` | `checkpoint/e-02-deterministic-project-map` |
+| E-06 experiment chains | complete (2026-07-18 validation) | `c1227f8` | `checkpoint/e-06-experiment-chains-final` |
 | E-08 deterministic one-action prefix (R2 slice) | complete | `b2e04ca` | `checkpoint/e-08-deterministic-understand` |
 | F-01 项目知识页面契约 | complete after F-01A/F-01B validation on 2026-07-17 | `829cb54` | `checkpoint/f-01b-canonical-knowledge-layout` |
 | F-02 Claim-Evidence directional binding and currentness | complete after F-02A/F-02B validation, F-02C stable-object plus registry-coordination hardening, and F-02D result-integrity repair on 2026-07-18 | `ba3846c`, `564cf0a`, `41e347e`, `6c9016a`, `d84f128`, `4521be9` | `checkpoint/f-02a-claim-evidence-schema-v2`, `checkpoint/f-02b-claim-evidence-currentness`, `checkpoint/f-02c-stable-file-access`, `checkpoint/f-02c-stable-file-access-review-fix`, `checkpoint/f-02c-registry-read-write-coordination`, `checkpoint/f-02d-claim-evidence-result-integrity` |
@@ -818,3 +819,28 @@ passed, 28 skipped** in full regression. Changed-file Ruff, `py_compile`, and
 writes no curated Markdown, performs no research-binary extraction, and sends
 nothing externally. C-07 remains `deferred/not_started`. See
 [`research-linkage.md`](research-linkage.md).
+
+E-06 is complete after validation on **2026-07-18** at implementation
+`c1227f8`, designated by `checkpoint/e-06-experiment-chains` and integrated
+with `checkpoint/e-06-experiment-chains-final`. The strict Schema v1
+`llmwiki-experiment-chains` artifact (`experiment-chains-v1`) records explicit
+configuration, run, result, Claim, and result-to-Claim observations as a stable
+`config -> run -> result -> claim` closure. Results retain non-empty conditions,
+metrics, and at least one Evidence ID. Two experiments may coexist even when
+one host-declared result supports a Claim and another contradicts it; Core
+preserves both chains, result conditions, and the Evidence closure without
+inferring a scientific conflict or selecting a winner.
+
+With no host observations, E-06 emits only bounded Manifest-classification
+candidates marked `inferred` with explicit uncertainty and no semantic chain.
+Generation and current loading bind to the exact current B-06 Manifest, share
+`machine-state.lock`, atomically publish and recheck Manifest bytes, and fail
+closed on malformed, legacy/future, unknown-field, duplicate-key,
+noncanonical, stale, invalid-endpoint, or stable-identity-tampered artifacts.
+Validation produced **8 passed** in the focused E-06 suite, **45 passed, 1
+skipped** across dependent E-06/E-05/E-04/layout/Core suites, and **714 passed,
+28 skipped** in full regression. Changed-file Ruff, `py_compile`, and
+`git diff --check` passed. E-06 opens no registered source bytes, reads no
+research binary, calls no LLM, writes no curated Markdown, and sends nothing
+externally. C-07 remains `deferred/not_started`. See
+[`experiment-chains.md`](experiment-chains.md).
