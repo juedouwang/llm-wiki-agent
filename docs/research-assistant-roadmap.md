@@ -68,6 +68,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
 | J-05 Codex reference adapter package | complete after validation on 2026-07-16 | `62ccbdc` | `checkpoint/j-05-codex-plugin` |
+| I-01 strict Goal/Milestone Schema | complete after validation on 2026-07-18 | `ddd5261` | `checkpoint/i-01-goal-schema` |
 
 ## 3. 后续最小改动计划
 
@@ -365,10 +366,10 @@ git tag checkpoint/b-01-project-register
 
 ## 6. Next executable task
 
-The next executable R3 unit is **I-01**: implement the strict Goal/Milestone
-Schema and its Markdown/JSON round-trip. Continue in dependency order
-`I-01 -> I-02 -> I-03 -> I-04 -> J-03 -> J-04 -> J-01`. **C-07 remains
-`deferred/not_started` and is not part of this run.**
+The next executable R3 unit is **I-02**: implement the strict internal task
+protocol. I-01 is complete at `checkpoint/i-01-goal-schema`; continue in
+dependency order `I-02 -> I-03 -> I-04 -> J-03 -> J-04 -> J-01`. **C-07
+remains `deferred/not_started` and is not part of this run.**
 
 R1 and the G-01 Core facade remain accepted at their checkpoints. G-07 is
 complete at `checkpoint/g-07-mcp-server`; its stdio transport, seven-tool catalog,
@@ -887,5 +888,11 @@ passed. C-07 remains **deferred/not_started**. See
 E-08 full one-action understand is implemented and validated. The complete
 pipeline is deterministic/local-only, keeps the registered source project
 read-only, writes machine state only below `.llmwiki/projects/<project_id>/`,
-and routes curated Markdown through the controlled writer. No C-07 research
-binary extraction is introduced; C-07 remains `deferred/not_started`.
+and routes curated Markdown through the controlled writer.
+
+I-01 is now complete at implementation commit `ddd5261` and checkpoint
+`checkpoint/i-01-goal-schema`. The strict Goal/Milestone Schema v1 rejects
+unknown/future/malformed records, round-trips through a Schema v2 `goals.md`
+projection, records explicit draft reasons, and writes only the registered
+machine artifact under the shared mutation lock. No C-07 research binary
+extraction is introduced; C-07 remains `deferred/not_started`.
