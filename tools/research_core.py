@@ -46,6 +46,7 @@ if __package__:
         ProjectInventoryResult,
         inventory_project,
     )
+    from .project_map import ProjectMapResult, generate_project_map
     from .project_orchestrator import (
         ProjectRunOrchestrator,
         StageContext,
@@ -100,6 +101,10 @@ else:
         PROJECT_MANIFEST_VERSION,
         ProjectInventoryResult,
         inventory_project,
+    )
+    from project_map import (  # type: ignore[no-redef]
+        ProjectMapResult,
+        generate_project_map,
     )
     from project_orchestrator import (  # type: ignore[no-redef]
         ProjectRunOrchestrator,
@@ -830,6 +835,14 @@ class ResearchCoreService:
         """Generate deterministic reading priority from the current Manifest."""
 
         return generate_reading_priority(
+            workspace_root=self.workspace_root,
+            project_id=project_id,
+        )
+
+    def project_map(self, project_id: str) -> ProjectMapResult:
+        """Generate the deterministic, Manifest-only E-02 project map."""
+
+        return generate_project_map(
             workspace_root=self.workspace_root,
             project_id=project_id,
         )

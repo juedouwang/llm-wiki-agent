@@ -11,6 +11,7 @@
 - H-04 host-event validation: `tests/test_host_events.py`
 - H-07 reconciliation validation: `tests/test_project_reconciliation.py`
 - B-07 adaptive-reading-priority validation: `tests/test_reading_priority.py`, `tests/test_project_layout.py`
+- E-02 deterministic-project-map validation: `tests/test_project_map.py`
 - B-07 status: implemented and validated on **2026-07-17**; intended checkpoint `checkpoint/b-07-adaptive-reading-priority` is not yet created
 - Existing checkpoints: `checkpoint/g-01-core-service`, `checkpoint/g-07-mcp-server`, `checkpoint/g-08-host-context-pack`, `checkpoint/e-01-run-orchestrator`, `checkpoint/e-08-deterministic-understand`, and `checkpoint/h-04-host-event-ledger`; H-07 is complete after validation on 2026-07-16 and checkpointed as `checkpoint/h-07-project-reconciliation`
 
@@ -49,6 +50,7 @@ project and does not create state in the research source tree.
 | `project_reconcile(project_id, dirty_paths=...)` | `tools.project_reconciliation.reconcile_project` with the E-01 run boundary through `classify` | path-free `ProjectReconciliationResult` |
 | `scan(...)` | `tools.project_inventory.inventory_project` with `ScanPolicyConfig` | `ProjectInventoryResult` |
 | `prioritize(project_id)` | `tools.reading_priority.generate_reading_priority` over the exact current Manifest | local/path-bearing `ReadingPriorityResult` |
+| `project_map(project_id)` | `tools.project_map.generate_project_map` over the exact current Manifest | local/path-bearing `ProjectMapResult` |
 | `coverage(project_id)` | `tools.coverage_report.generate_coverage_report` | local/path-bearing `CoverageReportResult` |
 | `coverage_view(project_id)` | `coverage(...)` plus host-safe projection | path-free `HostCoverageResult` |
 | `host_context_pack(project_id, max_bytes=...)` | `tools.host_context.assemble_host_context_pack` over host-safe Core DTOs and current registries | path-free `HostContextPackResult` |
@@ -229,6 +231,18 @@ symlink behavior, and case sensitivity. Convenience include/exclude/follow
 arguments remain for CLI mapping and cannot be combined with `policy_config`.
 The method runs the accepted B-03 through B-06 chain; `tools.scan_policy` and
 `tools.project_inventory` remain authoritative.
+
+### Deterministic project map
+
+```python
+project_map = core.project_map(registration.project_id)
+```
+
+E-02 derives the canonical machine-only project outline from the exact current
+B-06 Manifest under `machine-state.lock`. It does not open source-project files,
+call an LLM, or write curated Markdown. Current loading independently rebuilds
+the full expected payload so stale or tampered maps cannot authorize later work.
+See [`project-map.md`](project-map.md).
 
 ### Reading priority
 
