@@ -3,9 +3,9 @@
 - 状态：**已确认，作为后续开发的产品基线**
 - 决策编号：`P-05 Agent 原生执行闭环`、`P-08 Agent-native 科研工具架构`
 - 确认日期：2026-07-15
-- 最近补充：2026-07-18（F-02B Claim–Evidence 只读当前性校验）
+- Latest supplement: 2026-07-18 (F-03A project research entities, directed relations, and backlinks)
 - 适用分支：`research-assistant`
-- 当前实现边界（截至 2026-07-18）：确定性入口包括项目注册/盘点、B-07 `prioritize`、B-08 `coverage`、`project understand` 的 `register -> inventory -> classify` 前缀，以及 H-07/J-05 reconciliation 集成；F-01 已提供严格知识路径/Schema 与空目录骨架，F-02A 已提供 Knowledge Schema v2 结构门，F-02B 仅提供 Core 内部、只读的 Claim–Evidence 绑定和当前性校验。B-07 仍只生成独立机器建议，不推进 `adaptive-read`；F-02B 不持久化 `stale` 或修改 Markdown/registry；H-05 选择性刷新、15 类 Markdown、Verified Query、成熟规划、产品 Web/`--open` 与 Claude Code 适配仍未完成。
+- 当前实现边界（截至 2026-07-18）：确定性入口包括项目注册/盘点、B-07 `prioritize`、B-08 `coverage`、`project understand` 的 `register -> inventory -> classify` 前缀，以及 H-07/J-05 reconciliation 集成；F-01 已提供严格知识路径/Schema 与空目录骨架，F-02A 已提供 Knowledge Schema v2 结构门，F-02B 仅提供 Core 内部、只读的 Claim–Evidence 绑定和当前性校验。B-07 仍只生成独立机器建议，不推进 `adaptive-read`；F-02B 不持久化 `stale` 或修改 Markdown/registry；H-05 选择性刷新、15 类 Markdown、Verified Query、成熟规划、产品 Web/`--open` 与 Claude Code 适配仍未完成。 F-03A now adds a Core-internal, read-only project entity/directed-relation schema, current Knowledge Schema v2 page binding, and deterministic backlink/project-index projection; it does not persist relation/index state or modify Markdown.
 
 ## 1. 产品定义
 
@@ -323,8 +323,11 @@ last_verified_at: "2026-07-18T00:00:00Z"
 - Source relocation 在 F-02B 中只能检查并报告；即使找到唯一 exact-hash 候选，也不得在校验过程中自动修改 Source registry。
 - F-02B 不打开或修改知识 Markdown 正文，不注册或重写 Evidence，不迁移旧页面，不持久化 `stale`/`verified` 状态，也不增加 CLI、MCP 或 Web 接口。依赖传播和受控知识写入属于后续单元。
 - Schema v1 仅可通过兼容层严格只读解析；不得猜测 directional stance 或原地迁移。Schema v3 及未来未知版本必须 fail closed。
+- F-03A requires the host Agent to supply explicit project-local identity keys, titles, optional canonical knowledge locations, directed relation labels, and optional Evidence IDs for `paper/method/dataset/experiment/metric/result/claim/decision/question/source`; Core never infers entities or relations from titles/body text and never same-name merges.
+- F-03A deterministically validates stable entity/relation IDs, same-project endpoints, self-loop/duplicate constraints, current Knowledge Schema v2 page type/role binding, and a reversible project-index projection with incoming/outgoing relation IDs. `metric` uses an explicit anchor in a result detail and `question` an explicit anchor in `open-questions.md`, without inventing `metrics/` or `questions/` directories.
+- Optional relation Evidence IDs receive structural and caller-supplied existence checks only. F-03A does not call F-02B, infer stance/currentness or research conclusions, read Sources, write Markdown/registry/index state, or add CLI, MCP, or Web behavior.
 
-详细机器契约见 [`knowledge-artifact-contract.md`](knowledge-artifact-contract.md) 与 [`claim-evidence-currentness.md`](claim-evidence-currentness.md)。
+Detailed machine contracts: [`knowledge-artifact-contract.md`](knowledge-artifact-contract.md), [`claim-evidence-currentness.md`](claim-evidence-currentness.md), and [`research-relations.md`](research-relations.md).
 
 ## 7. 自适应文件阅读策略
 

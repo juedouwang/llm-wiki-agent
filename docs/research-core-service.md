@@ -430,6 +430,13 @@ knowledge, and the absence of LLM/network/Web calls.
 
 ## Explicit non-goals
 
+F-03A's project entity/relation registry and backlink projection are also
+standalone deterministic Core primitives. They accept caller-supplied Schema v2
+knowledge bytes and perform no filesystem I/O. F-03A deliberately adds no
+`ResearchCoreService` method, CLI command, MCP tool, or Web operation; later
+task-level workflows may compose the primitive after persistence and controlled
+writer boundaries exist. See [`research-relations.md`](research-relations.md).
+
 The accepted deterministic Core slices also include the standalone B-07
 reading-priority operation. It does not add an MCP operation, run creation or
 stage advancement, extraction, semantic reading, `project_understand`, H-07

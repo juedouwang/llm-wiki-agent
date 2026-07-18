@@ -1,4 +1,4 @@
-# Project Knowledge Artifact Contract (F-01 / F-02, Schema v2)
+# Project Knowledge Artifact Contract (F-01 / F-02 / F-03, Schema v2)
 
 F-01 defines the deterministic project-relative path and empty-layout contract
 for curated Markdown under `<knowledge_projects_root>/<project_id>/`. F-02A
@@ -6,15 +6,19 @@ advances the current frontmatter contract to Knowledge Schema v2 with explicit
 directional Evidence references and a structural gate for verified key Claim
 pages. F-02B adds a separate deterministic, read-only currentness validator over
 caller-supplied Claim frontmatter, current Source/Evidence registries, actual
-Source bytes, Locator, and exact excerpt hash.
+Source bytes, Locator, and exact excerpt hash. F-03A adds an in-memory,
+project-scoped scientific entity/relation registry plus deterministic backlink
+and project-index projection over caller-supplied current pages.
 
 The Schema/path implementation is
 [`tools/knowledge_artifacts.py`](../tools/knowledge_artifacts.py); the F-02B
 closure is [`tools/claim_evidence.py`](../tools/claim_evidence.py) and is specified
-in [`claim-evidence-currentness.md`](claim-evidence-currentness.md). Neither
-module opens or writes a Markdown page body. Later controlled writers and
-renderers must use these contracts instead of guessing an artifact's role from
-body text or ad hoc filenames.
+in [`claim-evidence-currentness.md`](claim-evidence-currentness.md). F-03A is
+[`tools/research_relations.py`](../tools/research_relations.py) and is specified in
+[`research-relations.md`](research-relations.md). None of these modules opens or
+writes a Markdown page body. Later controlled writers and renderers must use
+these contracts instead of guessing an artifact's role from body text or ad hoc
+filenames.
 
 ## P-08 responsibility boundary
 
@@ -29,7 +33,10 @@ F-01/F-02 expose no MCP tool. Schema parsing and Claim currentness are internal
 Core primitives, not task-level operations for the host. They use no LLM,
 keyword scoring, or semantic heuristic and never infer stance or conflict.
 F-02B reports currentness without changing Markdown, Claim status, Evidence, or
-Source bindings. F-05 controlled mixed/user-body protection remains separate.
+Source bindings. For F-03A, the host explicitly supplies entity identities and
+directed relation labels; Core checks identity, canonical page binding, endpoint
+integrity, and backlinks without inferring entities or relationship meaning. F-05
+controlled mixed/user-body protection remains separate.
 
 ## Required frontmatter
 
@@ -245,6 +252,33 @@ skeleton fail closed rather than being overwritten or adopted.
 Directory initialization creates no Markdown page, does not read source or
 research-binary content, does not create or rewrite a knowledge Schema, and does not decide research
 semantics.
+
+## F-03A entity, relation, and backlink projection
+
+F-03A represents project-local `paper`, `method`, `dataset`, `experiment`,
+`metric`, `result`, `claim`, `decision`, `question`, and `source` entities. An
+explicit `identity_key` rather than the display title defines identity, so same
+titles never trigger an automatic merge. Direct entities bind canonical detail
+pages. A project metric binds an explicit anchor inside a result detail page and
+a question binds an explicit anchor inside `open-questions.md`; this preserves
+the F-01 path contract without inventing `metrics/` or `questions/` directories.
+Entities may remain unmaterialized until a later controlled writer creates their
+knowledge representation.
+
+Relations are explicit, directed, project-local edges with caller-declared
+lowercase kebab-case labels. Core validates endpoint existence, self-loop and
+duplicate constraints, stable IDs, canonical serialization, and optional
+Evidence-ID referential integrity. It does not apply a semantic endpoint matrix,
+infer a relation from body text, infer stance/currentness, or merge same-named
+objects.
+
+The strict canonical JSONL registry and read-only renderer projection are defined
+in [`research-relations.md`](research-relations.md). Current Schema v2 pages must
+match entity project, path type/role, and direct-page title before the projection
+is built. The projection contains deterministic entity groups and incoming/
+outgoing relation IDs, but is not project `index.md` content. F-03A performs no
+filesystem I/O or persistence; later approved writers must keep relation machine
+state under `.llmwiki/` and curated Markdown under `wiki/projects/`.
 
 ## Strict parsing and canonical serialization
 
