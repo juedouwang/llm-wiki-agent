@@ -747,3 +747,31 @@ full regression. Changed-file Ruff, `py_compile`, and `git diff --check` passed.
 No registered source bytes, curated Markdown, LLM, external send, semantic
 inference, or research-binary extraction were used. C-07 remains
 `deferred/not_started`. See [`project-map.md`](project-map.md).
+
+E-03 is complete after validation on **2026-07-18** at implementation
+`4fcd413`, designated by `checkpoint/e-03-hierarchical-understanding`. The
+strict Schema v1 `llmwiki-hierarchical-understanding` artifact uses
+`understanding_version=hierarchical-understanding-v1` and stores bounded,
+deterministic `chunk -> file -> module -> project` closure. Explicit host
+observations carry canonical source-chunk/module identities, summaries, input
+budgets, and duplicate-free Evidence IDs; when semantic observations are absent,
+E-03 emits an explicit Manifest metadata-only fallback rather than pretending to
+have read source content.
+
+Every level preserves lower-level IDs, Evidence closure, input-byte/token closure,
+and a bounded deterministic summary. Stable identities bind chunk observations,
+current file hashes, module identity, project ID, and exact current Manifest hash.
+Strict loading rejects malformed, legacy/future, unknown, duplicate-key,
+noncanonical, over-budget, closure-inconsistent, summary-tampered, and stable-ID-
+tampered artifacts. Current loading runs under `machine-state.lock`, validates the
+exact current Manifest generation/hash/count/bytes and represented-file
+classification projection, and deterministically rebuilds metadata-only truth.
+Atomic publication rechecks exact Manifest bytes before replace.
+
+Validation produced **36 passed, 2 skipped** across the focused E-03/layout/Core
+suites and **692 passed, 28 skipped** in the full regression. Changed-file Ruff,
+`py_compile`, and `git diff --check` passed. E-03 opens no registered source file,
+calls no LLM, writes no curated Markdown, and performs no external send or
+research-binary extraction. C-07 remains `deferred/not_started`. See
+[`hierarchical-understanding.md`](hierarchical-understanding.md).
+
