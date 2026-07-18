@@ -61,6 +61,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | F-02 Claim-Evidence directional binding and currentness | complete after F-02A/F-02B validation, F-02C stable-object plus registry-coordination hardening, and F-02D result-integrity repair on 2026-07-18 | `ba3846c`, `564cf0a`, `41e347e`, `6c9016a`, `d84f128`, `4521be9` | `checkpoint/f-02a-claim-evidence-schema-v2`, `checkpoint/f-02b-claim-evidence-currentness`, `checkpoint/f-02c-stable-file-access`, `checkpoint/f-02c-stable-file-access-review-fix`, `checkpoint/f-02c-registry-read-write-coordination`, `checkpoint/f-02d-claim-evidence-result-integrity` |
 | F-03 project research entities and directed relations | complete after F-03A validation on 2026-07-18 | `dcfa1d7`, `04856ce` | `checkpoint/f-03a-research-relations-final` |
 | F-04 Claim lifecycle and explicit conflict coexistence | partial after bounded F-04A validation on 2026-07-18; persistence and controlled Markdown mutation remain outside this unit | `738e086` | `checkpoint/f-04a-claim-lifecycle` |
+| F-05 controlled Markdown writing | partial after bounded F-05A validation on 2026-07-18; live-file exact-CAS persistence, trusted actor attribution, and conflict/audit ledger remain F-05B | `642ab9e` | `checkpoint/f-05a-controlled-markdown-plan` |
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
 | J-05 Codex reference adapter package | complete after validation on 2026-07-16 | `62ccbdc` | `checkpoint/j-05-codex-plugin` |
@@ -131,6 +132,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | F-03A `P1/M` | Add explicit project-local paper/method/dataset/experiment/metric/result/claim/decision/question/source entities plus caller-declared directed relations; validate current Schema v2 page bindings and deterministic backlinks/project-index projection | Stable identity, canonical JSONL, same-project/duplicate/self-loop constraints, relation direction, Evidence-ID referential integrity, page binding, reverse links, and project-index tests | Generic entity/concept pages → deterministic scientific workflow entities and reversible directed links without semantic inference or persistence |
 | F-04A `P1/M` | Add a deterministic Core-internal validator for host-declared `draft/verified/stale/conflicting/rejected` Claim transitions and explicit coexistence of conflicting Claim/Result variants | All 25 host-declared status directions remain structurally composable; exact F-02D proof, F-03 identity/path binding, monotonic time, coordinated title rename, mandatory conflict proof, shared Results, deterministic IDs, and no-I/O boundaries are tested | Ad hoc status fields -> auditable revision/proof-bound lifecycle validation without inventing scientific transition semantics or persisting Markdown |
 | F-04 `P1/M` | 支持 `draft/verified/stale/conflicting/rejected` 和冲突并存 | 冲突实验产生两个结果与冲突状态，不覆盖旧结论 | 新结论覆盖旧结论 → 历史与冲突清晰 |
+| F-05A `P0/M` | Add a deterministic Core-internal in-memory planner over exact caller-supplied Schema v2 page bytes, immutable page identity, advancing timestamps, and explicit generated/user/mixed body ownership | Generated/user intent isolation, exact mixed-region preservation, malformed marker rejection, body-free typed errors, deterministic result integrity, no-I/O checks, and downstream regressions pass | Unbounded body replacement -> auditable ownership-safe candidate bytes without claiming live persistence or semantic authorization |
 | F-05 `P0/M` | 受控 Markdown 写入器，保护用户确认区和网站编辑内容 | 重新生成不覆盖用户确认；冲突写入产生审计记录 | 生成器可覆盖人工知识 → 人机协作内容可长期保留 |
 | F-06 `P1/L` | 建立 `wiki/library/` 显式提升流程、规范标识和跨项目来源关系 | 同名不同对象不自动合并；提升后仍能回到原项目 Evidence | 项目彼此孤立或错误合并 → 可安全跨项目学习 |
 
@@ -678,3 +680,29 @@ Markdown or registry write, Source or research-binary semantic read, stale
 propagation, conflict/winner inference, CLI/MCP/Web publication, or external send.
 F-04 therefore remains `partial`; controlled persistence and mixed/user Markdown
 protection belong to later bounded units, especially F-05.
+
+F-05 is now **partial** through the bounded F-05A in-memory planner implemented in
+`642ab9e` and designated by `checkpoint/f-05a-controlled-markdown-plan`. The host
+Agent supplies the complete proposed Knowledge Schema v2 page, update intent, and every
+semantic or user-authorization decision. Core binds the proposal to exact
+caller-supplied base bytes, canonical path/type/project identity, immutable ownership
+and creation time, and a strictly advancing `updated_at`.
+
+`generated` and `user` pages use whole-body ownership. `mixed` pages use bounded,
+duplicate-free, LF/CRLF-delimited `llmwiki:user-region` markers: regeneration takes
+the generated skeleton from the proposal while restoring exact user bytes from the
+caller-supplied base snapshot, and `user-edit` cannot change generated text, marker
+structure, or ordered region IDs. Successful plans return canonical candidate bytes
+plus content-free hashes/change metadata; typed rejection views do not copy Markdown or
+YAML bodies. A plan ID is deterministic correlation metadata, not authenticated actor
+identity, semantic authorization, filesystem currentness, or permission to persist.
+
+F-05A validation produced **127 passed** across the focused controlled-Markdown,
+Knowledge Schema, Claim Evidence, Claim lifecycle, and research-relation suites; the
+integrated full regression produced **629 passed, 24 skipped**. Changed-file Ruff,
+`py_compile`, manual High/Medium review, and `git diff --check` passed. F-05A performs
+no filesystem I/O, lock, audit persistence, Source or research-binary read, external
+send, stale propagation, or CLI/MCP/Web publication. F-05 remains `partial`; F-05B
+must freshly read the live knowledge file, rebind the exact base/proposal plus trusted
+host/user decisions, perform an exact CAS immediately before atomic replacement, and
+record bounded conflict/audit outcomes.
