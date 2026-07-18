@@ -714,9 +714,14 @@ knowledge directory, non-clobbering creation, an immediate exact-hash recheck be
 atomic replace, and post-publication output-hash verification; conflicts never rebase.
 
 The strict bounded body-free audit ledger records adjacent `prepared -> committed`,
-`conflict`, safe pre-publication `failed`, or `commit-unknown` transactions. Malformed,
-legacy/future, noncanonical, duplicate-key, replayed, or dangling-prepared history fails
-closed. F-05B creates no Markdown directory, decides no semantics, reads no Source or
-research binary, sends nothing externally, and exposes no CLI/MCP/Hook/Web or
-`ResearchCoreService` operation. Product rendering and Web editing remain later R3
-units.
+`conflict`, safe pre-publication `failed`, or `commit-unknown` transactions. The
+prepared phase must reserve both a terminal record slot and maximum terminal-record
+capacity before page publication; the persistence boundary also revalidates the full
+frozen authorization and nested trusted host/session context before any project,
+ledger, or page access. Once publication may be visible, terminal-audit read,
+validation, capacity, CAS, re-read, and durability failures are all reported as
+`commit-audit-unknown` without rollback. Malformed, legacy/future, noncanonical,
+duplicate-key, replayed, or dangling-prepared history fails closed. F-05B creates no
+Markdown directory, decides no semantics, reads no Source or research binary, sends
+nothing externally, and exposes no CLI/MCP/Hook/Web or `ResearchCoreService` operation.
+Product rendering and Web editing remain later R3 units.

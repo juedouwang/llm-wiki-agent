@@ -1202,28 +1202,69 @@ def _append_audit_record(
     *,
     markdown_may_be_committed: bool,
     transaction_id: str | None = None,
+    reserved_record_count: int = 0,
+    reserved_byte_count: int = 0,
 ) -> tuple[dict[str, object], StableFileWriteResult]:
-    state = _read_audit_state(runs_lease, ledger_path)
-    sequence = len(state.records) + 1
-    if sequence > MAX_CONTROLLED_MARKDOWN_AUDIT_RECORDS:
-        raise ControlledMarkdownAuditWriteError(
-            "controlled Markdown audit ledger exceeds its record-count bound"
+    """Append one canonical audit record with phase-aware failure mapping.
+
+    A terminal append runs after page publication may already be visible.  Every
+    state read, record construction/validation, capacity check, CAS, and post-CAS
+    verification therefore belongs to the same uncertainty boundary: a failure
+    there must be reported as ``commit-audit-unknown`` rather than as a normal
+    pre-publication rejection.  Prepared-phase failures retain their precise
+    pre-publication audit errors.
+
+    ``reserved_*`` is used by the prepared phase to leave room for its mandatory
+    terminal record before any page bytes are published.
+    """
+
+    if (
+        type(reserved_record_count) is not int
+        or reserved_record_count < 0
+        or type(reserved_byte_count) is not int
+        or reserved_byte_count < 0
+    ):
+        raise ValueError("audit capacity reservations must be non-negative integers")
+    if markdown_may_be_committed and (
+        type(transaction_id) is not str
+        or _TRANSACTION_ID_RE.fullmatch(transaction_id) is None
+    ):
+        raise ValueError("terminal audit append requires a valid transaction_id")
+
+    record: dict[str, object] | None = None
+
+    def unknown_error() -> ControlledMarkdownCommitAuditUnknownError:
+        # The guard above proves this for every terminal caller.
+        resolved_transaction_id = cast(str, transaction_id)
+        return ControlledMarkdownCommitAuditUnknownError(
+            "Markdown may be committed but terminal audit state is unknown",
+            transaction_id=resolved_transaction_id,
         )
-    record = builder(sequence, state.records)
-    record = _validate_audit_record(record, expected_sequence=sequence)
-    combined_records = list(state.records) + [record]
-    _validate_audit_history(combined_records)
-    line = _canonical_json(record) + b"\n"
-    if len(line) > MAX_CONTROLLED_MARKDOWN_AUDIT_RECORD_BYTES:
-        raise ControlledMarkdownAuditWriteError(
-            "controlled Markdown audit record exceeds its bounded size"
-        )
-    payload = state.payload + line
-    if len(payload) > MAX_CONTROLLED_MARKDOWN_AUDIT_BYTES:
-        raise ControlledMarkdownAuditWriteError(
-            "controlled Markdown audit ledger exceeds its bounded size"
-        )
+
     try:
+        state = _read_audit_state(runs_lease, ledger_path)
+        sequence = len(state.records) + 1
+        if sequence + reserved_record_count > MAX_CONTROLLED_MARKDOWN_AUDIT_RECORDS:
+            raise ControlledMarkdownAuditWriteError(
+                "controlled Markdown audit ledger lacks the reserved record capacity"
+            )
+        record = builder(sequence, state.records)
+        record = _validate_audit_record(record, expected_sequence=sequence)
+        combined_records = list(state.records) + [record]
+        _validate_audit_history(combined_records)
+        line = _canonical_json(record) + b"\n"
+        if len(line) > MAX_CONTROLLED_MARKDOWN_AUDIT_RECORD_BYTES:
+            raise ControlledMarkdownAuditWriteError(
+                "controlled Markdown audit record exceeds its bounded size"
+            )
+        payload = state.payload + line
+        if (
+            len(payload) + reserved_byte_count
+            > MAX_CONTROLLED_MARKDOWN_AUDIT_BYTES
+        ):
+            raise ControlledMarkdownAuditWriteError(
+                "controlled Markdown audit ledger lacks the reserved byte capacity"
+            )
         write_result = compare_and_swap_atomic_stable_file(
             runs_lease.root,
             ledger_path,
@@ -1232,35 +1273,35 @@ def _append_audit_record(
             root_lease=runs_lease,
         )
         verified = _read_audit_state(runs_lease, ledger_path)
-        if verified.payload != payload or verified.records[-1] != record:
+        if not verified.records or verified.payload != payload or verified.records[-1] != record:
             raise ControlledMarkdownAuditWriteError(
                 "controlled Markdown audit append could not be verified"
             )
-    except (
-        ControlledMarkdownAuditStateError,
-        StableFileAccessError,
-        ControlledMarkdownAuditWriteError,
-    ) as exc:
+        if write_result.commit_state != "committed":
+            if markdown_may_be_committed:
+                raise unknown_error()
+            raise ControlledMarkdownAuditWriteError(
+                "prepared audit durability is unknown; Markdown was not published"
+            )
+        return record, write_result
+    except ControlledMarkdownAuthorizationReuseError:
+        # Reuse is a caller/transaction decision error, not publication
+        # uncertainty, and must remain directly observable.
+        raise
+    except ControlledMarkdownCommitAuditUnknownError:
+        raise
+    except Exception as exc:
         if markdown_may_be_committed:
-            raise ControlledMarkdownCommitAuditUnknownError(
-                "Markdown may be committed but terminal audit state is unknown",
-                transaction_id=transaction_id or cast(str, record["transaction_id"]),
-            ) from exc
+            raise unknown_error() from exc
         if isinstance(exc, ControlledMarkdownAuditStateError):
             raise
-        raise ControlledMarkdownAuditWriteError(
-            "controlled Markdown audit append failed before Markdown publication"
-        ) from exc
-    if write_result.commit_state != "committed":
-        if markdown_may_be_committed:
-            raise ControlledMarkdownCommitAuditUnknownError(
-                "Markdown may be committed but terminal audit durability is unknown",
-                transaction_id=transaction_id or cast(str, record["transaction_id"]),
-            )
-        raise ControlledMarkdownAuditWriteError(
-            "prepared audit durability is unknown; Markdown was not published"
-        )
-    return record, write_result
+        if isinstance(exc, ControlledMarkdownAuditWriteError):
+            raise
+        if isinstance(exc, StableFileAccessError):
+            raise ControlledMarkdownAuditWriteError(
+                "controlled Markdown audit append failed before Markdown publication"
+            ) from exc
+        raise
 
 
 def _registration_identity(result: ProjectRegistrationResult) -> tuple[object, ...]:
@@ -1435,6 +1476,8 @@ def _append_prepared(
         ledger_path,
         build,
         markdown_may_be_committed=False,
+        reserved_record_count=1,
+        reserved_byte_count=MAX_CONTROLLED_MARKDOWN_AUDIT_RECORD_BYTES,
     )
     return cast(str, record["transaction_id"]), cast(int, record["sequence"])
 
@@ -1646,6 +1689,26 @@ def _append_commit_unknown_terminal(
     )
 
 
+def _revalidate_authorization_integrity(
+    authorization: ControlledMarkdownWriteAuthorization,
+) -> None:
+    """Re-run constructor invariants at the persistence boundary.
+
+    Frozen dataclasses prevent ordinary assignment but are not an integrity or
+    trust boundary: a caller can still mutate them through reflection or pass a
+    nested mutable object.  Revalidating the nested host context and the complete
+    authorization before any ledger/page access prevents such mutations from
+    reaching the persistence transaction.
+    """
+
+    if type(authorization.host_context) is not TrustedHostSessionContext:
+        raise ControlledMarkdownAuthorizationError(
+            "authorization host_context integrity is invalid"
+        )
+    authorization.host_context.__post_init__()
+    authorization.__post_init__()
+
+
 def persist_controlled_markdown_update(
     workspace_root: str | Path,
     project_id: object,
@@ -1677,6 +1740,7 @@ def persist_controlled_markdown_update(
         raise ControlledMarkdownAuthorizationError(
             "authorization must be an exact ControlledMarkdownWriteAuthorization"
         )
+    _revalidate_authorization_integrity(authorization)
     if type(proposed) is not bytes:
         raise ControlledMarkdownWriteRejectedError(
             "proposed must contain exact UTF-8 page bytes"

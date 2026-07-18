@@ -182,6 +182,13 @@ Under the registered project's persistent `indexes/machine-state.lock`, Core:
    SHA-256 recheck immediately before atomic publication, followed by a live output
    hash verification.
 
+Before step 6 can publish anything, the prepared append also reserves both a terminal
+record slot and the maximum legal terminal-record byte capacity. If either bound
+cannot leave room for a terminal outcome, the prepared record and Markdown page are
+not written. The persistence entry point revalidates the complete frozen authorization
+and its nested trusted host/session context before loading registration, audit state,
+or the knowledge page; frozen dataclasses are not treated as an integrity boundary.
+
 The compare-and-swap boundary serializes all cooperating llm-wiki writers through
 `machine-state.lock`, pins and revalidates the knowledge directory, uses
 non-clobbering creation, and checks the exact live hash immediately before platform
@@ -208,9 +215,12 @@ Each transaction is adjacent and two-phase:
 `failed` is an explicit safe terminal state rather than a success claim. A dangling
 `prepared` record is retained as crash evidence and makes every later transaction
 fail closed until an operator inspects or repairs the ledger; Core never guesses
-whether the authorization can be replayed. If Markdown may be committed but the
-terminal audit append cannot be proved, the caller receives a distinct
-commit-audit-unknown error carrying only the transaction ID.
+whether the authorization can be replayed. Once publication may be visible, every
+terminal-audit read, record construction/validation, capacity check, CAS, re-read, or
+durability failure is inside the same uncertainty boundary: the caller receives a
+distinct `commit-audit-unknown` error carrying only the transaction ID, and no rollback
+is attempted. This includes a terminal append that cannot fit after an unexpected
+ledger-size change.
 
 ## Explicit non-goals
 

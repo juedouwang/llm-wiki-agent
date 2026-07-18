@@ -13,6 +13,7 @@ from tools.controlled_markdown_persistence import (
     CONTROLLED_MARKDOWN_AUDIT_FILE,
     ControlledMarkdownAuditStateError,
     ControlledMarkdownAuditWriteError,
+    ControlledMarkdownAuthorizationError,
     ControlledMarkdownAuthorizationMismatchError,
     ControlledMarkdownAuthorizationReuseError,
     ControlledMarkdownCommitAuditUnknownError,
@@ -92,6 +93,7 @@ class ControlledMarkdownPersistenceTests(unittest.TestCase):
         self.source_before = self.source_file.read_bytes()
         self.registration = register_project(self.workspace, self.source_root)
         self.project_id = self.registration.project_id
+        self.registration_before = self.registration.project_file.read_bytes()
         self.target = self.registration.layout.knowledge_root / "overview.md"
         self.ledger = self.registration.layout.indexes_dir / CONTROLLED_MARKDOWN_AUDIT_FILE
         self.host_context = TrustedHostSessionContext(
@@ -104,6 +106,10 @@ class ControlledMarkdownPersistenceTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.assertEqual(self.source_file.read_bytes(), self.source_before)
+        self.assertEqual(
+            self.registration.project_file.read_bytes(),
+            self.registration_before,
+        )
 
     def make_plan_and_authorization(
         self,
@@ -297,6 +303,52 @@ class ControlledMarkdownPersistenceTests(unittest.TestCase):
 
         with self.assertRaises(ControlledMarkdownAuthorizationMismatchError):
             self.persist(other, authorization)
+
+        self.assertFalse(self.target.exists())
+        self.assertFalse(self.ledger.exists())
+
+    def test_mutated_authorization_integrity_is_rejected_before_project_access(self) -> None:
+        proposed = page_bytes(self.project_id, "accepted\n")
+        plan = plan_controlled_markdown_update(
+            path="overview.md",
+            current=None,
+            proposed=proposed,
+            intent="regenerate",
+            expected_current_sha256=None,
+        )
+
+        mutations = (
+            ("nested-host-context", "actor_type", "system"),
+            ("decision-metadata", "decision_id", "tampered-decision"),
+        )
+        for label, field_name, value in mutations:
+            with self.subTest(label=label):
+                host_context = TrustedHostSessionContext(
+                    host_id="codex",
+                    actor_type="host-agent",
+                    actor_id="agent-1",
+                    session_id="session-1",
+                )
+                authorization = bind_controlled_markdown_authorization(
+                    plan,
+                    host_context=host_context,
+                    decision_id="integrity-decision",
+                    authorized_at="2026-07-18T08:11:00Z",
+                )
+                target = (
+                    authorization.host_context
+                    if label == "nested-host-context"
+                    else authorization
+                )
+                object.__setattr__(target, field_name, value)
+
+                with mock.patch.object(
+                    persistence,
+                    "load_registered_project",
+                    side_effect=AssertionError("project access must not occur"),
+                ):
+                    with self.assertRaises(ControlledMarkdownAuthorizationError):
+                        self.persist(proposed, authorization)
 
         self.assertFalse(self.target.exists())
         self.assertFalse(self.ledger.exists())
@@ -550,6 +602,42 @@ class ControlledMarkdownPersistenceTests(unittest.TestCase):
         self.assertEqual(self.ledger.read_bytes(), before)
         self.assertEqual(self.target.read_bytes(), current)
 
+    def test_prepared_reserves_terminal_record_capacity_before_publication(self) -> None:
+        proposed = page_bytes(self.project_id, "new\n")
+        _plan, authorization = self.make_plan_and_authorization(
+            current=None,
+            proposed=proposed,
+        )
+
+        with mock.patch.object(
+            persistence,
+            "MAX_CONTROLLED_MARKDOWN_AUDIT_RECORDS",
+            1,
+        ):
+            with self.assertRaises(ControlledMarkdownAuditWriteError):
+                self.persist(proposed, authorization)
+
+        self.assertFalse(self.target.exists())
+        self.assertFalse(self.ledger.exists())
+
+    def test_prepared_reserves_maximum_terminal_byte_capacity_before_publication(self) -> None:
+        proposed = page_bytes(self.project_id, "new\n")
+        _plan, authorization = self.make_plan_and_authorization(
+            current=None,
+            proposed=proposed,
+        )
+
+        with mock.patch.object(
+            persistence,
+            "MAX_CONTROLLED_MARKDOWN_AUDIT_BYTES",
+            persistence.MAX_CONTROLLED_MARKDOWN_AUDIT_RECORD_BYTES + 1,
+        ):
+            with self.assertRaises(ControlledMarkdownAuditWriteError):
+                self.persist(proposed, authorization)
+
+        self.assertFalse(self.target.exists())
+        self.assertFalse(self.ledger.exists())
+
     def test_prepared_audit_failure_prevents_page_publication(self) -> None:
         proposed = page_bytes(self.project_id, "new\n")
         _plan, authorization = self.make_plan_and_authorization(current=None, proposed=proposed)
@@ -630,6 +718,52 @@ class ControlledMarkdownPersistenceTests(unittest.TestCase):
         self.assertEqual([record["phase"] for record in self.audit_records()], ["prepared", "commit-unknown"])
         self.assertEqual(self.audit_records()[1]["commit_state"], "unknown")
 
+    def test_page_durability_unknown_records_unknown_without_rollback(self) -> None:
+        proposed = page_bytes(self.project_id, "new\n")
+        _plan, authorization = self.make_plan_and_authorization(
+            current=None,
+            proposed=proposed,
+        )
+        real_cas = persistence.compare_and_swap_atomic_stable_file
+
+        def durability_unknown_page(
+            trusted_root,
+            path,
+            payload,
+            *,
+            expected_current_sha256,
+            root_lease=None,
+        ):
+            if Path(path) == self.target:
+                self.target.write_bytes(payload)
+                return StableFileWriteResult(
+                    wrote=True,
+                    commit_state="committed-durability-unknown",
+                )
+            return real_cas(
+                trusted_root,
+                path,
+                payload,
+                expected_current_sha256=expected_current_sha256,
+                root_lease=root_lease,
+            )
+
+        with mock.patch.object(
+            persistence,
+            "compare_and_swap_atomic_stable_file",
+            side_effect=durability_unknown_page,
+        ):
+            with self.assertRaises(ControlledMarkdownCommitUnknownError):
+                self.persist(proposed, authorization)
+
+        self.assertEqual(self.target.read_bytes(), proposed)
+        records = self.audit_records()
+        self.assertEqual(
+            [record["phase"] for record in records],
+            ["prepared", "commit-unknown"],
+        )
+        self.assertEqual(records[1]["reason_code"], "durability-unknown")
+
     def test_post_write_hash_mismatch_records_unknown(self) -> None:
         proposed = page_bytes(self.project_id, "new\n")
         _plan, authorization = self.make_plan_and_authorization(current=None, proposed=proposed)
@@ -680,6 +814,138 @@ class ControlledMarkdownPersistenceTests(unittest.TestCase):
                 self.persist(proposed, authorization)
         self.assertEqual(self.target.read_bytes(), proposed)
         self.assertEqual([record["phase"] for record in self.audit_records()], ["prepared"])
+
+    def test_terminal_audit_read_failure_is_commit_audit_unknown(self) -> None:
+        proposed = page_bytes(self.project_id, "new\n")
+        _plan, authorization = self.make_plan_and_authorization(
+            current=None,
+            proposed=proposed,
+        )
+        real_read = persistence._read_audit_state
+        read_count = 0
+
+        def fail_terminal_read(*args, **kwargs):
+            nonlocal read_count
+            read_count += 1
+            if read_count == 4:
+                raise ControlledMarkdownAuditStateError("terminal audit read failed")
+            return real_read(*args, **kwargs)
+
+        with mock.patch.object(
+            persistence,
+            "_read_audit_state",
+            side_effect=fail_terminal_read,
+        ):
+            with self.assertRaises(ControlledMarkdownCommitAuditUnknownError) as raised:
+                self.persist(proposed, authorization)
+
+        self.assertEqual(self.target.read_bytes(), proposed)
+        records = self.audit_records()
+        self.assertEqual([record["phase"] for record in records], ["prepared"])
+        self.assertEqual(raised.exception.transaction_id, records[0]["transaction_id"])
+
+    def test_terminal_capacity_failure_after_publication_is_commit_audit_unknown(self) -> None:
+        proposed = page_bytes(self.project_id, "new\n")
+        _plan, authorization = self.make_plan_and_authorization(
+            current=None,
+            proposed=proposed,
+        )
+        real_cas = persistence.compare_and_swap_atomic_stable_file
+
+        def exhaust_after_page_publish(
+            trusted_root,
+            path,
+            payload,
+            *,
+            expected_current_sha256,
+            root_lease=None,
+        ):
+            result = real_cas(
+                trusted_root,
+                path,
+                payload,
+                expected_current_sha256=expected_current_sha256,
+                root_lease=root_lease,
+            )
+            if Path(path) == self.target:
+                persistence.MAX_CONTROLLED_MARKDOWN_AUDIT_RECORDS = 1
+            return result
+
+        with mock.patch.object(
+            persistence,
+            "MAX_CONTROLLED_MARKDOWN_AUDIT_RECORDS",
+            2,
+        ), mock.patch.object(
+            persistence,
+            "compare_and_swap_atomic_stable_file",
+            side_effect=exhaust_after_page_publish,
+        ):
+            with self.assertRaises(ControlledMarkdownCommitAuditUnknownError):
+                self.persist(proposed, authorization)
+
+        self.assertEqual(self.target.read_bytes(), proposed)
+        self.assertEqual(
+            [record["phase"] for record in self.audit_records()],
+            ["prepared"],
+        )
+
+    def test_registered_custom_knowledge_root_is_the_only_markdown_target(self) -> None:
+        custom_workspace = self.root / "custom-workspace"
+        custom_source = self.root / "custom-source"
+        custom_source.mkdir()
+        custom_source_file = custom_source / "README.md"
+        custom_source_file.write_bytes(b"custom source sentinel\n")
+        source_before = custom_source_file.read_bytes()
+        custom_parent = self.root / "custom-knowledge"
+        registration = register_project(
+            custom_workspace,
+            custom_source,
+            knowledge_root=custom_parent,
+        )
+        project_id = registration.project_id
+        target = registration.layout.knowledge_root / "overview.md"
+        proposed = page_bytes(project_id, "custom root\n")
+        plan = plan_controlled_markdown_update(
+            path="overview.md",
+            current=None,
+            proposed=proposed,
+            intent="regenerate",
+            expected_current_sha256=None,
+        )
+        authorization = bind_controlled_markdown_authorization(
+            plan,
+            host_context=TrustedHostSessionContext(
+                host_id="codex",
+                actor_type="host-agent",
+                actor_id="agent-custom",
+                session_id="session-custom",
+            ),
+            decision_id="custom-root-decision",
+            authorized_at="2026-07-18T08:12:00Z",
+        )
+
+        result = persist_controlled_markdown_update(
+            custom_workspace,
+            project_id,
+            path="overview.md",
+            proposed=proposed,
+            intent="regenerate",
+            expected_current_sha256=None,
+            authorization=authorization,
+        )
+
+        self.assertEqual(result.outcome, "committed")
+        self.assertEqual(target.read_bytes(), plan.output_bytes)
+        self.assertEqual(registration.layout.knowledge_root.parent, custom_parent.resolve())
+        default_target = (
+            custom_workspace
+            / "wiki"
+            / "projects"
+            / project_id
+            / "overview.md"
+        )
+        self.assertFalse(default_target.exists())
+        self.assertEqual(custom_source_file.read_bytes(), source_before)
 
     def test_invalid_paths_and_missing_parent_fail_without_creating_directories(self) -> None:
         proposed = page_bytes(self.project_id, "new\n")
