@@ -439,6 +439,12 @@ class ProjectLayout:
         return self.indexes_dir / "tasks.json"
 
     @property
+    def project_state_file(self) -> Path:
+        """I-03 deterministic rebuildable project-state snapshot."""
+
+        return self.indexes_dir / "project-state.json"
+
+    @property
     def machine_state_lock_file(self) -> Path:
         """Stable advisory lock shared by per-project machine-state mutations."""
 
