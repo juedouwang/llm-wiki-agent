@@ -794,3 +794,27 @@ opens no source bytes, calls no LLM, writes no curated Markdown, performs no
 binary semantic extraction, and sends nothing externally. C-07 remains
 `deferred/not_started`. See [`execution-flow.md`](execution-flow.md).
 
+E-05 is complete after validation on **2026-07-18** at implementation
+`23736d9`, designated by `checkpoint/e-05-research-linkage`. The strict Schema
+v1 `llmwiki-research-linkage` artifact (`research-linkage-v1`) records bounded
+paper, method, innovation, dataset, implementation, claim, experiment, and
+result entities plus directed research relations. Every entity and relation
+retains an explicit `implementation`, `paper-claim`, `inference`, or `metadata`
+assertion class, bounded duplicate-free Evidence IDs, and explicit certainty;
+host inference cannot claim observed certainty.
+
+Without semantic observations, E-05 emits a deterministic Manifest-metadata
+candidate inventory, no invented semantic relation, and explicit research gaps.
+The artifact binds to the exact current Manifest generation, ordinary-file
+count/bytes, and SHA-256. Strict canonical JSON, closed fields, stable entity,
+relation, and artifact IDs, current Manifest path projection, shared
+`machine-state.lock`, atomic publication, and exact pre-replace Manifest
+revalidation are enforced.
+
+Validation produced **7 passed** in the focused E-05 suite, **37 passed, 1
+skipped** across dependent linkage/execution-flow/layout/Core suites, and **706
+passed, 28 skipped** in full regression. Changed-file Ruff, `py_compile`, and
+`git diff --check` passed. E-05 opens no registered source bytes, calls no LLM,
+writes no curated Markdown, performs no research-binary extraction, and sends
+nothing externally. C-07 remains `deferred/not_started`. See
+[`research-linkage.md`](research-linkage.md).
