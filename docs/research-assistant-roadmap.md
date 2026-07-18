@@ -58,7 +58,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | E-01 resumable staged run orchestration | complete | `146fc0f` | `checkpoint/e-01-run-orchestrator` |
 | E-08 deterministic one-action prefix (R2 slice) | complete | `b2e04ca` | `checkpoint/e-08-deterministic-understand` |
 | F-01 项目知识页面契约 | complete after F-01A/F-01B validation on 2026-07-17 | `829cb54` | `checkpoint/f-01b-canonical-knowledge-layout` |
-| F-02 Claim-Evidence directional binding and currentness | complete after F-02A/F-02B validation and F-02C stable-object plus registry-coordination hardening on 2026-07-18 | `ba3846c`, `564cf0a`, `41e347e`, `6c9016a`, `d84f128` | `checkpoint/f-02a-claim-evidence-schema-v2`, `checkpoint/f-02b-claim-evidence-currentness`, `checkpoint/f-02c-stable-file-access`, `checkpoint/f-02c-stable-file-access-review-fix`, `checkpoint/f-02c-registry-read-write-coordination` |
+| F-02 Claim-Evidence directional binding and currentness | complete after F-02A/F-02B validation, F-02C stable-object plus registry-coordination hardening, and F-02D result-integrity repair on 2026-07-18 | `ba3846c`, `564cf0a`, `41e347e`, `6c9016a`, `d84f128`, `4521be9` | `checkpoint/f-02a-claim-evidence-schema-v2`, `checkpoint/f-02b-claim-evidence-currentness`, `checkpoint/f-02c-stable-file-access`, `checkpoint/f-02c-stable-file-access-review-fix`, `checkpoint/f-02c-registry-read-write-coordination`, `checkpoint/f-02d-claim-evidence-result-integrity` |
 | F-03 project research entities and directed relations | complete after F-03A validation on 2026-07-18 | `dcfa1d7`, `04856ce` | `checkpoint/f-03a-research-relations-final` |
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
@@ -126,6 +126,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | F-02A `P0/S` | Add strict Schema v2 directional `evidence_refs`; verified key Claim details require supporting Evidence and verification time; retain v1 read-only parsing | Focused v2/v1/future-version, duplicate-ID, Claim-index, and pathless-Claim tests | Undirected Evidence IDs -> structurally auditable directional references |
 | F-02B `P0/M` | Add a deterministic read-only Claim/project/Source/Evidence currentness validator over exact Source version/hash, Locator, excerpt, verification time, and report-only relocation inspection | Missing/stale Evidence, post-verification edits, A → B → A source versions, and relocation ambiguity cannot retain a current verified state; success and failure paths write nothing | Structural gate → current-version Evidence closure without semantic inference or persistent status mutation |
 | F-02C `P0/M` | Harden Source/Evidence/currentness access around stable filesystem objects with a pinned root lease, persistent OS locks, explicit post-replace commit states, exact-CAS relocation rollback, and Windows read sharing that denies concurrent write/delete | Root/symlink swaps, concurrent registry replacement/recovery, rollback races, and Windows write/delete sharing fail closed; repeated concurrency and full regression tests pass | Path-based read/write windows → stable, accountable registry transactions without adding research semantics or a public interface |
+| F-02D `P0/S` | Bind each F-02B result to the exact normalized Knowledge Schema v2 Claim frontmatter revision and provide a deterministic read-only downstream integrity gate that recomputes declared closure without reopening Source bytes | Claim edits and tampered project/path/status/role/Source/Evidence/aggregate fields reject replay; malformed constructed frontmatter fails closed; the integrity helper performs no Source access; focused and full regression tests pass | Auditable currentness object -> revision-bound lifecycle handoff without Markdown-body protection, semantic inference, persistence, or a public interface |
 | F-03A `P1/M` | Add explicit project-local paper/method/dataset/experiment/metric/result/claim/decision/question/source entities plus caller-declared directed relations; validate current Schema v2 page bindings and deterministic backlinks/project-index projection | Stable identity, canonical JSONL, same-project/duplicate/self-loop constraints, relation direction, Evidence-ID referential integrity, page binding, reverse links, and project-index tests | Generic entity/concept pages → deterministic scientific workflow entities and reversible directed links without semantic inference or persistence |
 | F-04 `P1/M` | 支持 `draft/verified/stale/conflicting/rejected` 和冲突并存 | 冲突实验产生两个结果与冲突状态，不覆盖旧结论 | 新结论覆盖旧结论 → 历史与冲突清晰 |
 | F-05 `P0/M` | 受控 Markdown 写入器，保护用户确认区和网站编辑内容 | 重新生成不覆盖用户确认；冲突写入产生审计记录 | 生成器可覆盖人工知识 → 人机协作内容可长期保留 |
@@ -602,6 +603,24 @@ suites. Source and Evidence subprocess readers both waited for their adjacent lo
 the previously reproducible five-process recovery case passed **30 consecutive**
 isolated runs; full regression produced **574 passed, 24 skipped**. Changed-file
 Ruff, manual High/Medium review, and `git diff --check` passed.
+
+A downstream lifecycle integration review then exposed that an otherwise
+self-consistent F-02B result object could be replayed after the Claim frontmatter
+revision changed. F-02D repair `4521be9`, designated by
+`checkpoint/f-02d-claim-evidence-result-integrity`, upgrades the structured result
+to `claim-evidence-validation-v2`, fingerprints the exact normalized current
+Schema v2 Claim frontmatter, and adds a read-only integrity gate that revalidates
+the path-bound Claim and recomputes project/status/role, ordered Source and
+directional Evidence declarations, per-reference closure, aggregate reasons,
+supporting count, and verified-state outcome. The integrity check does not reopen
+Source bytes; fresh currentness still requires a new F-02B validation.
+
+F-02D validation produced **134 passed, 17 skipped** across the focused Claim
+Evidence, Evidence Schema, Source registry/version/access/health/recovery,
+stable-file, and Knowledge Schema suites; full regression produced **600 passed,
+24 skipped**. Changed-file Ruff, manual High/Medium review, and `git diff --check`
+passed. The fingerprint covers normalized frontmatter only and does not claim
+F-05 Markdown-body protection.
 
 F-05 controlled mixed/user Markdown writing and C-07 remain `not_started`; these
 F-02 units read no research-binary content, perform no external send, and do not
