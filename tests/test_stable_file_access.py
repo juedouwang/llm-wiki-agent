@@ -19,9 +19,12 @@ from tools.stable_file_access import (
     StableFileLockTimeoutError,
     StableFileMissingError,
     StableFileRedirectionError,
+    StableFileRevisionConflictError,
     StableFileTypeError,
     StableFileVerificationUnavailableError,
+    compare_and_swap_atomic_stable_file,
     exclusive_stable_file_lock,
+    lease_stable_directory,
     lease_stable_regular_file,
     read_stable_regular_file,
     write_atomic_stable_file,
@@ -532,6 +535,324 @@ class StableFileAccessTests(unittest.TestCase):
                 link,
                 reject_redirection=True,
             )
+
+
+    def test_atomic_cas_replaces_exact_existing_revision(self) -> None:
+        replacement = b"exact-CAS replacement\n"
+        expected_sha256 = hashlib.sha256(self.payload).hexdigest()
+
+        result = compare_and_swap_atomic_stable_file(
+            self.trusted,
+            self.source,
+            replacement,
+            expected_current_sha256=expected_sha256,
+        )
+
+        self.assertTrue(result)
+        self.assertTrue(result.wrote)
+        self.assertIn(
+            result.commit_state,
+            {"committed", "committed-durability-unknown"},
+        )
+        self.assertEqual(self.source.read_bytes(), replacement)
+        self.assertEqual(list(self.trusted.glob(".stable-write.*.tmp")), [])
+
+    def test_atomic_cas_same_payload_revalidates_before_unchanged_result(self) -> None:
+        expected_sha256 = hashlib.sha256(self.payload).hexdigest()
+        raced = b"changed before unchanged result\n"
+        real_assert_expected = (
+            stable_file_access_module._assert_expected_current_sha256
+        )
+        revalidated = False
+
+        def mutate_before_revalidation(lease, target, expected_current_sha256):
+            nonlocal revalidated
+            revalidated = True
+            self.source.write_bytes(raced)
+            return real_assert_expected(lease, target, expected_current_sha256)
+
+        with patch.object(
+            stable_file_access_module,
+            "_assert_expected_current_sha256",
+            side_effect=mutate_before_revalidation,
+        ):
+            with self.assertRaises(StableFileRevisionConflictError) as raised:
+                compare_and_swap_atomic_stable_file(
+                    self.trusted,
+                    self.source,
+                    self.payload,
+                    expected_current_sha256=expected_sha256,
+                )
+
+        self.assertTrue(revalidated)
+        self.assertEqual(raised.exception.expected_current_sha256, expected_sha256)
+        self.assertEqual(
+            raised.exception.observed_current_sha256,
+            hashlib.sha256(raced).hexdigest(),
+        )
+        self.assertEqual(self.source.read_bytes(), raced)
+
+    def test_atomic_cas_revision_mismatches_preserve_live_state(self) -> None:
+        current_sha256 = hashlib.sha256(self.payload).hexdigest()
+        stale_sha256 = hashlib.sha256(b"stale revision\n").hexdigest()
+        replacement = b"must not be published\n"
+
+        with self.assertRaises(StableFileRevisionConflictError) as stale_error:
+            compare_and_swap_atomic_stable_file(
+                self.trusted,
+                self.source,
+                replacement,
+                expected_current_sha256=stale_sha256,
+            )
+        self.assertEqual(stale_error.exception.reason_code, "stable-file-revision-conflict")
+        self.assertEqual(
+            stale_error.exception.expected_current_sha256,
+            stale_sha256,
+        )
+        self.assertEqual(
+            stale_error.exception.observed_current_sha256,
+            current_sha256,
+        )
+        self.assertEqual(self.source.read_bytes(), self.payload)
+
+        with self.assertRaises(StableFileRevisionConflictError) as exists_error:
+            compare_and_swap_atomic_stable_file(
+                self.trusted,
+                self.source,
+                replacement,
+                expected_current_sha256=None,
+            )
+        self.assertIsNone(exists_error.exception.expected_current_sha256)
+        self.assertEqual(
+            exists_error.exception.observed_current_sha256,
+            current_sha256,
+        )
+        self.assertEqual(self.source.read_bytes(), self.payload)
+
+        self.source.unlink()
+        with self.assertRaises(StableFileRevisionConflictError) as missing_error:
+            compare_and_swap_atomic_stable_file(
+                self.trusted,
+                self.source,
+                replacement,
+                expected_current_sha256=current_sha256,
+            )
+        self.assertEqual(
+            missing_error.exception.expected_current_sha256,
+            current_sha256,
+        )
+        self.assertIsNone(missing_error.exception.observed_current_sha256)
+        self.assertFalse(self.source.exists())
+        self.assertEqual(list(self.trusted.glob(".stable-write.*.tmp")), [])
+
+    def test_atomic_cas_none_precondition_creates_missing_target(self) -> None:
+        target = self.trusted / "created-by-cas.jsonl"
+        payload = b'{"created": true}\n'
+
+        result = compare_and_swap_atomic_stable_file(
+            self.trusted,
+            target,
+            payload,
+            expected_current_sha256=None,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(target.read_bytes(), payload)
+        self.assertEqual(list(self.trusted.glob(".stable-write.*.tmp")), [])
+
+    def test_atomic_cas_none_does_not_clobber_target_appearing_before_publish(self) -> None:
+        target = self.trusted / "raced-creation.jsonl"
+        proposed = b'{"writer": "cas"}\n'
+        appeared = b'{"writer": "racer"}\n'
+        real_assert_expected = stable_file_access_module._assert_expected_current_sha256
+        compare_completed = False
+
+        def compare_then_create_racing_target(
+            lease,
+            observed_target: Path,
+            expected_current_sha256: str | None,
+        ) -> None:
+            nonlocal compare_completed
+            real_assert_expected(
+                lease,
+                observed_target,
+                expected_current_sha256,
+            )
+            target.write_bytes(appeared)
+            compare_completed = True
+
+        with patch.object(
+            stable_file_access_module,
+            "_assert_expected_current_sha256",
+            side_effect=compare_then_create_racing_target,
+        ):
+            with self.assertRaises(StableFileRevisionConflictError) as conflict:
+                compare_and_swap_atomic_stable_file(
+                    self.trusted,
+                    target,
+                    proposed,
+                    expected_current_sha256=None,
+                )
+
+        self.assertTrue(compare_completed)
+        self.assertIsNone(conflict.exception.expected_current_sha256)
+        self.assertEqual(target.read_bytes(), appeared)
+        self.assertEqual(list(self.trusted.glob(".stable-write.*.tmp")), [])
+
+    def test_atomic_cas_rejects_invalid_expected_hashes(self) -> None:
+        invalid_hashes = (
+            "A" * 64,
+            "a" * 63,
+            "a" * 65,
+        )
+
+        for expected_current_sha256 in invalid_hashes:
+            with self.subTest(expected_current_sha256=expected_current_sha256):
+                with self.assertRaises(ValueError):
+                    compare_and_swap_atomic_stable_file(
+                        self.trusted,
+                        self.source,
+                        b"must not be published\n",
+                        expected_current_sha256=expected_current_sha256,
+                    )
+                self.assertEqual(self.source.read_bytes(), self.payload)
+
+    def test_atomic_cas_requires_exact_bytes_payload(self) -> None:
+        class BytesSubclass(bytes):
+            pass
+
+        current_sha256 = hashlib.sha256(self.payload).hexdigest()
+        invalid_payloads = (
+            bytearray(b"bytearray payload\n"),
+            memoryview(b"memoryview payload\n"),
+            BytesSubclass(b"bytes subclass payload\n"),
+        )
+
+        for payload in invalid_payloads:
+            self.source.write_bytes(self.payload)
+            with self.subTest(payload_type=type(payload).__name__):
+                with self.assertRaises(TypeError):
+                    compare_and_swap_atomic_stable_file(
+                        self.trusted,
+                        self.source,
+                        payload,  # type: ignore[arg-type]
+                        expected_current_sha256=current_sha256,
+                    )
+                self.assertEqual(self.source.read_bytes(), self.payload)
+
+    def test_atomic_cas_detects_mutation_after_staging_before_final_compare(self) -> None:
+        replacement = b"staged replacement\n"
+        intervening = b"intervening revision\n"
+        expected_sha256 = hashlib.sha256(self.payload).hexdigest()
+        intervening_sha256 = hashlib.sha256(intervening).hexdigest()
+        real_write_all = stable_file_access_module._write_all
+        mutation_completed = False
+
+        def stage_then_mutate_target(descriptor: int, payload: bytes) -> None:
+            nonlocal mutation_completed
+            real_write_all(descriptor, payload)
+            self.source.write_bytes(intervening)
+            mutation_completed = True
+
+        with patch.object(
+            stable_file_access_module,
+            "_write_all",
+            side_effect=stage_then_mutate_target,
+        ):
+            with self.assertRaises(StableFileRevisionConflictError) as conflict:
+                compare_and_swap_atomic_stable_file(
+                    self.trusted,
+                    self.source,
+                    replacement,
+                    expected_current_sha256=expected_sha256,
+                )
+
+        self.assertTrue(mutation_completed)
+        self.assertEqual(
+            conflict.exception.expected_current_sha256,
+            expected_sha256,
+        )
+        self.assertEqual(
+            conflict.exception.observed_current_sha256,
+            intervening_sha256,
+        )
+        self.assertEqual(self.source.read_bytes(), intervening)
+        self.assertEqual(list(self.trusted.glob(".stable-write.*.tmp")), [])
+
+    def test_atomic_cas_rejects_non_regular_target(self) -> None:
+        directory = self.trusted / "directory-target"
+        directory.mkdir()
+
+        with self.assertRaises(StableFileTypeError):
+            compare_and_swap_atomic_stable_file(
+                self.trusted,
+                directory,
+                b"must not replace directory\n",
+                expected_current_sha256=None,
+            )
+
+        self.assertTrue(directory.is_dir())
+        self.assertEqual(list(self.trusted.glob(".stable-write.*.tmp")), [])
+
+    def test_atomic_cas_rejects_redirected_target_without_touching_destination(self) -> None:
+        outside = self.root / "outside-cas-target.jsonl"
+        outside_payload = b"outside CAS sentinel\n"
+        outside.write_bytes(outside_payload)
+        redirected = self.trusted / "redirected-cas-target.jsonl"
+        try:
+            os.symlink(outside, redirected)
+        except OSError as exc:
+            self.skipTest(f"symbolic links unavailable: {exc}")
+
+        with self.assertRaises(StableFileRedirectionError):
+            compare_and_swap_atomic_stable_file(
+                self.trusted,
+                redirected,
+                b"must not follow redirection\n",
+                expected_current_sha256=None,
+            )
+
+        self.assertEqual(outside.read_bytes(), outside_payload)
+        self.assertTrue(redirected.is_symlink())
+
+    def test_atomic_cas_enforces_direct_child_and_root_lease_boundaries(self) -> None:
+        nested = self.trusted / "nested" / "state.jsonl"
+        outside = self.root / "outside-state.jsonl"
+        replacement = b"must not be published\n"
+
+        for target in (nested, outside):
+            with self.subTest(target=target):
+                with self.assertRaises(StableFileBoundaryError):
+                    compare_and_swap_atomic_stable_file(
+                        self.trusted,
+                        target,
+                        replacement,
+                        expected_current_sha256=None,
+                    )
+                self.assertFalse(target.exists())
+
+        other_root = self.root / "other-trusted"
+        other_root.mkdir()
+        with lease_stable_directory(other_root) as wrong_lease:
+            with self.assertRaises(StableFileBoundaryError):
+                compare_and_swap_atomic_stable_file(
+                    self.trusted,
+                    self.source,
+                    replacement,
+                    expected_current_sha256=hashlib.sha256(self.payload).hexdigest(),
+                    root_lease=wrong_lease,
+                )
+
+        with self.assertRaises(TypeError):
+            compare_and_swap_atomic_stable_file(
+                self.trusted,
+                self.source,
+                replacement,
+                expected_current_sha256=hashlib.sha256(self.payload).hexdigest(),
+                root_lease=object(),  # type: ignore[arg-type]
+            )
+
+        self.assertEqual(self.source.read_bytes(), self.payload)
 
 
     def test_atomic_write_replaces_direct_child_and_is_idempotent(self) -> None:

@@ -52,6 +52,23 @@ class StableFileChangedError(StableFileAccessError):
     reason_code = "stable-file-changed-during-read"
 
 
+class StableFileRevisionConflictError(StableFileAccessError):
+    """Raised when a compare-and-swap revision precondition no longer holds."""
+
+    reason_code = "stable-file-revision-conflict"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        expected_current_sha256: str | None,
+        observed_current_sha256: str | None,
+    ) -> None:
+        super().__init__(message)
+        self.expected_current_sha256 = expected_current_sha256
+        self.observed_current_sha256 = observed_current_sha256
+
+
 class StableFileReadError(StableFileAccessError):
     reason_code = "stable-file-read-failed"
 
@@ -1118,21 +1135,67 @@ def _assert_pinned_directory(
     return final_path
 
 
+def _observe_current_sha256_with_lease(
+    lease: StableDirectoryLease,
+    target: Path,
+) -> str | None:
+    """Return the exact current direct-child revision, or ``None`` if missing."""
+
+    try:
+        observation = _read_stable_regular_file_with_lease(
+            lease,
+            target,
+            reject_redirection=True,
+            capture_bytes=False,
+        )
+    except StableFileMissingError:
+        return None
+    return observation.content_sha256
+
+
+def _assert_expected_current_sha256(
+    lease: StableDirectoryLease,
+    target: Path,
+    expected_current_sha256: str | None,
+) -> None:
+    """Recheck one CAS precondition immediately before atomic publication."""
+
+    observed_current_sha256 = _observe_current_sha256_with_lease(lease, target)
+    if observed_current_sha256 != expected_current_sha256:
+        raise StableFileRevisionConflictError(
+            f"stable-file compare-and-swap precondition no longer holds: {target}",
+            expected_current_sha256=expected_current_sha256,
+            observed_current_sha256=observed_current_sha256,
+        )
+
+
 def _write_atomic_posix(
     lease: StableDirectoryLease,
     target: Path,
     payload: bytes,
+    *,
+    replace_existing: bool,
+    enforce_compare: bool,
+    expected_current_sha256: str | None,
 ) -> str:
-    required_dir_fd = (os.open, os.replace, os.unlink)
+    required_dir_fd = [os.open, os.unlink]
+    if replace_existing:
+        required_dir_fd.append(os.replace)
+    else:
+        required_dir_fd.append(os.link)
     if not all(function in os.supports_dir_fd for function in required_dir_fd):
+        operation = "replacement" if replace_existing else "non-clobbering creation"
         raise StableFileVerificationUnavailableError(
-            "the platform cannot perform handle-relative atomic replacement"
+            f"the platform cannot perform handle-relative atomic {operation}"
+        )
+    if not replace_existing and os.link not in os.supports_follow_symlinks:
+        raise StableFileVerificationUnavailableError(
+            "the platform cannot perform non-following handle-relative creation"
         )
     root = lease.root
     root_descriptor = lease.descriptor
     temporary_descriptor = -1
     temporary_name: str | None = None
-    replaced = False
     try:
         lease.revalidate()
         temporary_name = f".stable-write.{uuid.uuid4().hex}.tmp"
@@ -1159,19 +1222,61 @@ def _write_atomic_posix(
             )
         _write_all(temporary_descriptor, payload)
         lease.revalidate()
-        try:
-            os.replace(
-                temporary_name,
-                target.name,
-                src_dir_fd=root_descriptor,
-                dst_dir_fd=root_descriptor,
+        if enforce_compare:
+            _assert_expected_current_sha256(
+                lease,
+                target,
+                expected_current_sha256,
             )
-        except OSError as exc:
-            raise StableFileReadError(
-                f"could not atomically replace stable file {target}: {exc}"
-            ) from exc
-        temporary_name = None
-        replaced = True
+        if replace_existing:
+            try:
+                os.replace(
+                    temporary_name,
+                    target.name,
+                    src_dir_fd=root_descriptor,
+                    dst_dir_fd=root_descriptor,
+                )
+            except OSError as exc:
+                raise StableFileReadError(
+                    f"could not atomically replace stable file {target}: {exc}"
+                ) from exc
+            temporary_name = None
+        else:
+            try:
+                os.link(
+                    temporary_name,
+                    target.name,
+                    src_dir_fd=root_descriptor,
+                    dst_dir_fd=root_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileExistsError as exc:
+                try:
+                    observed_current_sha256 = _observe_current_sha256_with_lease(
+                        lease,
+                        target,
+                    )
+                except StableFileAccessError:
+                    # A target that appeared as a directory, symlink, or reparse
+                    # point must retain its stronger fail-closed classification.
+                    raise
+                raise StableFileRevisionConflictError(
+                    f"stable file appeared during non-clobbering creation: {target}",
+                    expected_current_sha256=None,
+                    observed_current_sha256=observed_current_sha256,
+                ) from exc
+            except OSError as exc:
+                raise StableFileReadError(
+                    f"could not atomically create stable file {target}: {exc}"
+                ) from exc
+            try:
+                os.unlink(temporary_name, dir_fd=root_descriptor)
+            except OSError as exc:
+                raise StableFileCommitUnknownError(
+                    "atomic creation is visible but its temporary link could not be "
+                    f"removed: {target}: {exc}"
+                ) from exc
+            temporary_name = None
 
         try:
             opened_after = os.fstat(temporary_descriptor)
@@ -1198,7 +1303,7 @@ def _write_atomic_posix(
     finally:
         if temporary_descriptor >= 0:
             os.close(temporary_descriptor)
-        if temporary_name is not None and not replaced:
+        if temporary_name is not None:
             try:
                 os.unlink(temporary_name, dir_fd=root_descriptor)
             except FileNotFoundError:
@@ -1356,6 +1461,10 @@ def _write_atomic_windows(
     lease: StableDirectoryLease,
     target: Path,
     payload: bytes,
+    *,
+    replace_existing: bool,
+    enforce_compare: bool,
+    expected_current_sha256: str | None,
 ) -> str:
     root = lease.root
     temporary_descriptor = -1
@@ -1380,11 +1489,35 @@ def _write_atomic_windows(
             )
         _write_all(temporary_descriptor, payload)
         lease.revalidate()
+        if enforce_compare:
+            _assert_expected_current_sha256(
+                lease,
+                target,
+                expected_current_sha256,
+            )
         try:
-            os.replace(temporary_path, target)
+            if replace_existing:
+                os.replace(temporary_path, target)
+            else:
+                # Windows os.rename is non-clobbering when the destination exists.
+                os.rename(temporary_path, target)
+        except FileExistsError as exc:
+            try:
+                observed_current_sha256 = _observe_current_sha256_with_lease(
+                    lease,
+                    target,
+                )
+            except StableFileAccessError:
+                raise
+            raise StableFileRevisionConflictError(
+                f"stable file appeared during non-clobbering creation: {target}",
+                expected_current_sha256=None,
+                observed_current_sha256=observed_current_sha256,
+            ) from exc
         except OSError as exc:
+            operation = "replace" if replace_existing else "create"
             raise StableFileReadError(
-                f"could not atomically replace stable file {target}: {exc}"
+                f"could not atomically {operation} stable file {target}: {exc}"
             ) from exc
         replaced = True
         try:
@@ -1434,9 +1567,89 @@ def _write_atomic_stable_file_with_lease(
         return StableFileWriteResult(wrote=False, commit_state="unchanged")
 
     if os.name == "nt":
-        commit_state = _write_atomic_windows(lease, target, payload)
+        commit_state = _write_atomic_windows(
+            lease,
+            target,
+            payload,
+            replace_existing=True,
+            enforce_compare=False,
+            expected_current_sha256=None,
+        )
     else:
-        commit_state = _write_atomic_posix(lease, target, payload)
+        commit_state = _write_atomic_posix(
+            lease,
+            target,
+            payload,
+            replace_existing=True,
+            enforce_compare=False,
+            expected_current_sha256=None,
+        )
+    return StableFileWriteResult(wrote=True, commit_state=commit_state)
+
+
+def _validate_expected_sha256(value: object) -> str | None:
+    if value is None:
+        return None
+    if (
+        type(value) is not str
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(
+            "expected_current_sha256 must be None or exactly 64 lowercase hex characters"
+        )
+    return value
+
+
+def _compare_and_swap_atomic_stable_file_with_lease(
+    lease: StableDirectoryLease,
+    target: Path,
+    payload: bytes,
+    *,
+    expected_current_sha256: str | None,
+) -> StableFileWriteResult:
+    try:
+        observation = _read_stable_regular_file_with_lease(
+            lease,
+            target,
+            reject_redirection=True,
+            capture_bytes=True,
+        )
+    except StableFileMissingError:
+        observation = None
+
+    observed_sha256 = (
+        None if observation is None else observation.content_sha256
+    )
+    if observed_sha256 != expected_current_sha256:
+        raise StableFileRevisionConflictError(
+            f"stable-file compare-and-swap precondition no longer holds: {target}",
+            expected_current_sha256=expected_current_sha256,
+            observed_current_sha256=observed_sha256,
+        )
+    if observation is not None and observation.data == payload:
+        lease.revalidate()
+        _assert_expected_current_sha256(lease, target, expected_current_sha256)
+        return StableFileWriteResult(wrote=False, commit_state="unchanged")
+
+    if os.name == "nt":
+        commit_state = _write_atomic_windows(
+            lease,
+            target,
+            payload,
+            replace_existing=observation is not None,
+            enforce_compare=True,
+            expected_current_sha256=expected_current_sha256,
+        )
+    else:
+        commit_state = _write_atomic_posix(
+            lease,
+            target,
+            payload,
+            replace_existing=observation is not None,
+            enforce_compare=True,
+            expected_current_sha256=expected_current_sha256,
+        )
     return StableFileWriteResult(wrote=True, commit_state=commit_state)
 
 
@@ -1467,6 +1680,53 @@ def write_atomic_stable_file(
         return _write_atomic_stable_file_with_lease(root_lease, target, payload)
     with lease_stable_directory(root) as lease:
         return _write_atomic_stable_file_with_lease(lease, target, payload)
+
+
+def compare_and_swap_atomic_stable_file(
+    trusted_root: str | Path,
+    path: str | Path,
+    payload: bytes,
+    *,
+    expected_current_sha256: str | None,
+    root_lease: StableDirectoryLease | None = None,
+) -> StableFileWriteResult:
+    """Atomically create or replace one direct-child file after an exact hash check.
+
+    ``expected_current_sha256=None`` is an explicit non-existence precondition; a
+    non-``None`` value is the exact SHA-256 of the live regular file that may be
+    replaced.  The final operation never clobbers a target that appears after the
+    precondition read.
+    """
+
+    if type(payload) is not bytes:
+        raise TypeError("payload must be exact bytes")
+    expected = _validate_expected_sha256(expected_current_sha256)
+    root = _absolute_lexical(trusted_root)
+    target = _absolute_lexical(path)
+    if target.parent != root or target.name in {"", ".", ".."}:
+        raise StableFileBoundaryError(
+            f"atomic stable-file destination must be a direct child of {root}: {target}"
+        )
+    if root_lease is not None:
+        if not isinstance(root_lease, StableDirectoryLease):
+            raise TypeError("root_lease must be a StableDirectoryLease")
+        if _path_key(root_lease.root) != _path_key(root):
+            raise StableFileBoundaryError(
+                f"root lease does not match atomic-CAS trusted root: {root}"
+            )
+        return _compare_and_swap_atomic_stable_file_with_lease(
+            root_lease,
+            target,
+            payload,
+            expected_current_sha256=expected,
+        )
+    with lease_stable_directory(root) as lease:
+        return _compare_and_swap_atomic_stable_file_with_lease(
+            lease,
+            target,
+            payload,
+            expected_current_sha256=expected,
+        )
 
 
 def _open_windows_lock_descriptor(target: Path) -> int:
