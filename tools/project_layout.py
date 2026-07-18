@@ -427,6 +427,12 @@ class ProjectLayout:
         return self.indexes_dir / "experiment-chains.json"
 
     @property
+    def goals_file(self) -> Path:
+        """I-01 strict project Goal/Milestone machine artifact."""
+
+        return self.indexes_dir / "goals.json"
+
+    @property
     def machine_state_lock_file(self) -> Path:
         """Stable advisory lock shared by per-project machine-state mutations."""
 
