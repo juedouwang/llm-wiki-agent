@@ -70,6 +70,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | J-05 Codex reference adapter package | complete after validation on 2026-07-16 | `62ccbdc` | `checkpoint/j-05-codex-plugin` |
 | I-01 strict Goal/Milestone Schema | complete after validation on 2026-07-18 | `ddd5261` | `checkpoint/i-01-goal-schema` |
 | I-02 strict internal task protocol | complete after validation on 2026-07-18 | `76a81e3` | `checkpoint/i-02-task-protocol` |
+| I-03 deterministic project-state snapshot | complete after validation on 2026-07-19 | `5988961` | `checkpoint/i-03-project-state` |
 
 ## 3. 后续最小改动计划
 
@@ -367,10 +368,11 @@ git tag checkpoint/b-01-project-register
 
 ## 6. Next executable task
 
-The next executable R3 unit is **I-03**: implement the deterministic rebuildable
-project-state snapshot. I-02 is complete at `checkpoint/i-02-task-protocol`;
-continue in dependency order `I-03 -> I-04 -> J-03 -> J-04 -> J-01`. **C-07
-remains `deferred/not_started` and is not part of this run.**
+The next executable R3 unit is **I-04**: integrate the first Goal, backlog, and
+daily-plan drafts with the current project state. I-03 is complete at
+`checkpoint/i-03-project-state`; continue in dependency order
+`I-04 -> J-03 -> J-04 -> J-01`. **C-07 remains `deferred/not_started` and is not
+part of this run.**
 
 R1 and the G-01 Core facade remain accepted at their checkpoints. G-07 is
 complete at `checkpoint/g-07-mcp-server`; its stdio transport, seven-tool catalog,
@@ -884,7 +886,7 @@ passed. C-07 remains **deferred/not_started**. See
 [`knowledge-rendering.md`](knowledge-rendering.md).
 
 
-### R3-minus-C-07 progress (2026-07-18)
+### R3-minus-C-07 progress (2026-07-19)
 
 E-08 full one-action understand is implemented and validated. The complete
 pipeline is deterministic/local-only, keeps the registered source project
@@ -910,3 +912,17 @@ remains a separate F-05 controlled-write concern. Focused validation produced
 19 passed and dependent validation 79 passed, 13 skipped; Ruff, `py_compile`,
 and `git diff --check` passed. No source-project content or C-07 research binary
 was read or changed; C-07 remains `deferred/not_started`.
+
+I-03 is complete at implementation commit `5988961` and checkpoint
+`checkpoint/i-03-project-state`. The strict `project-state-v1` artifact binds the
+safe registration projection and exact current Manifest, records version/hash
+bindings for available machine/Knowledge inputs, and deterministically summarizes
+experiments, results, open questions, blockers, stale Knowledge, stale Evidence,
+recent changes, and explicit missing-input gaps. Current loaders fail closed on a
+stale registration or Manifest, and all publication uses the shared machine-state
+lock with exact pre-replace revalidation. Focused validation produced 9 passed;
+dependent validation produced 104 passed, 3 skipped; Ruff, `py_compile`, and
+`git diff --check` passed. The implementation reads no registered source bytes,
+writes no curated Markdown, and performs no C-07 research-binary extraction.
+C-07 remains `deferred/not_started`. See
+[`project-state-snapshot.md`](project-state-snapshot.md).
