@@ -1,7 +1,7 @@
 # 科研助手改造路线图（P-05 / P-08 对齐版）
 
 - 状态：**后续开发的执行计划**
-- 更新日期：2026-07-17
+- 更新日期：2026-07-18
 - 基线分支：`research-assistant`
 - 产品约定：[`research-assistant-product-contract.md`](research-assistant-product-contract.md)
 - 任务原则：每个编号尽量对应一个独立任务分支、一个原子提交和一个检查点标签。
@@ -58,7 +58,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | E-01 resumable staged run orchestration | complete | `146fc0f` | `checkpoint/e-01-run-orchestrator` |
 | E-08 deterministic one-action prefix (R2 slice) | complete | `b2e04ca` | `checkpoint/e-08-deterministic-understand` |
 | F-01 项目知识页面契约 | complete after F-01A/F-01B validation on 2026-07-17 | `829cb54` | `checkpoint/f-01b-canonical-knowledge-layout` |
-| F-02A Knowledge Schema v2 directional references | complete in authorized R3-BATCH unit on 2026-07-17 | `ba3846c` | `checkpoint/f-02a-claim-evidence-schema-v2` |
+| F-02 Claim-Evidence directional binding and currentness | complete after F-02A/F-02B validation on 2026-07-18 | `ba3846c`, `564cf0a` | `checkpoint/f-02a-claim-evidence-schema-v2`, `checkpoint/f-02b-claim-evidence-currentness` |
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
 | J-05 Codex reference adapter package | complete after validation on 2026-07-16 | `62ccbdc` | `checkpoint/j-05-codex-plugin` |
@@ -257,7 +257,7 @@ As of 2026-07-16, R2 is complete. J-05 packages the validated Core boundary as a
 B-07（已完成）
 → C-05 (complete) → C-06 (complete)
 → C-07（用户决定暂缓，保持 not_started）
-→ F-01（complete：F-01A Schema/path + F-01B canonical layout）→ F-02A (complete: structural) -> F-02B → F-03 → F-04 → F-05
+→ F-01（complete：F-01A Schema/path + F-01B canonical layout）→ F-02（complete：F-02A structural + F-02B read-only currentness）→ F-03 → F-04 → F-05
 → E-02 → E-03 → E-04 → E-05 → E-06 → E-07 → E-08（完整）
 → I-01 → I-02 → I-03 → I-04
 → J-03 → J-04
