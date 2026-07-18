@@ -69,6 +69,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
 | J-05 Codex reference adapter package | complete after validation on 2026-07-16 | `62ccbdc` | `checkpoint/j-05-codex-plugin` |
 | I-01 strict Goal/Milestone Schema | complete after validation on 2026-07-18 | `ddd5261` | `checkpoint/i-01-goal-schema` |
+| I-02 strict internal task protocol | complete after validation on 2026-07-18 | `76a81e3` | `checkpoint/i-02-task-protocol` |
 
 ## 3. 后续最小改动计划
 
@@ -366,9 +367,9 @@ git tag checkpoint/b-01-project-register
 
 ## 6. Next executable task
 
-The next executable R3 unit is **I-02**: implement the strict internal task
-protocol. I-01 is complete at `checkpoint/i-01-goal-schema`; continue in
-dependency order `I-02 -> I-03 -> I-04 -> J-03 -> J-04 -> J-01`. **C-07
+The next executable R3 unit is **I-03**: implement the deterministic rebuildable
+project-state snapshot. I-02 is complete at `checkpoint/i-02-task-protocol`;
+continue in dependency order `I-03 -> I-04 -> J-03 -> J-04 -> J-01`. **C-07
 remains `deferred/not_started` and is not part of this run.**
 
 R1 and the G-01 Core facade remain accepted at their checkpoints. G-07 is
@@ -896,3 +897,16 @@ unknown/future/malformed records, round-trips through a Schema v2 `goals.md`
 projection, records explicit draft reasons, and writes only the registered
 machine artifact under the shared mutation lock. No C-07 research binary
 extraction is introduced; C-07 remains `deferred/not_started`.
+
+I-02 is complete at implementation commit `76a81e3` and checkpoint
+`checkpoint/i-02-task-protocol`. Current tasks require explicit `why_now`,
+inputs, bounded project-relative write scopes, DoD, verification, artifacts,
+canonical Evidence IDs, and acyclic same-collection dependencies. A completed
+task requires controlled completion references; title-only and legacy Todo
+records remain non-executable draft compatibility views and cannot be silently
+serialized. The registered store writes only `indexes/tasks.json` under the
+shared mutation lock, while the optional Schema v2 `plans/backlog.md` projection
+remains a separate F-05 controlled-write concern. Focused validation produced
+19 passed and dependent validation 79 passed, 13 skipped; Ruff, `py_compile`,
+and `git diff --check` passed. No source-project content or C-07 research binary
+was read or changed; C-07 remains `deferred/not_started`.
