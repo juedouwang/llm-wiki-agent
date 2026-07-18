@@ -9,10 +9,13 @@ also reject every symbolic-link/reparse-point redirection for machine-state file
 
 from __future__ import annotations
 
+import errno
 import hashlib
+import math
 import os
 import stat
 import sys
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -59,6 +62,36 @@ class StableFileVerificationUnavailableError(StableFileAccessError):
     reason_code = "stable-file-verification-unavailable"
 
 
+class StableFileCommitUnknownError(StableFileAccessError):
+    """Raised when replacement may be visible but cannot be proven current."""
+
+    reason_code = "stable-file-commit-state-unknown"
+
+
+class StableFileLockTimeoutError(StableFileAccessError):
+    """Raised when a root-bound stable lock cannot be acquired in time."""
+
+    reason_code = "stable-file-lock-timeout"
+
+
+@dataclass(frozen=True)
+class StableFileWriteResult:
+    """Explicit atomic-write outcome; pre-commit failures still raise."""
+
+    wrote: bool
+    commit_state: str
+
+    def __post_init__(self) -> None:
+        allowed = {"unchanged", "committed", "committed-durability-unknown"}
+        if self.commit_state not in allowed:
+            raise ValueError(f"unsupported stable-file commit_state: {self.commit_state}")
+        if self.wrote != (self.commit_state != "unchanged"):
+            raise ValueError("wrote must agree with stable-file commit_state")
+
+    def __bool__(self) -> bool:
+        return self.wrote
+
+
 @dataclass(frozen=True)
 class StableFileReadResult:
     """Stable descriptor-bound bytes/hash observation."""
@@ -68,6 +101,145 @@ class StableFileReadResult:
     size_bytes: int
     content_sha256: str
     data: bytes | None
+
+
+class StableDirectoryLease:
+    """Pinned trusted-root identity retained across a complete transaction."""
+
+    def __init__(
+        self,
+        *,
+        root: Path,
+        identity: tuple[int, int],
+        descriptor: int | None = None,
+        windows_handle: int | None = None,
+    ) -> None:
+        self.root = root
+        self.identity = identity
+        self._descriptor = descriptor
+        self._windows_handle = windows_handle
+        self._lock_descriptor: int | None = None
+        self._lock_path: Path | None = None
+        self._lock_identity: tuple[int, int] | None = None
+        self._closed = False
+
+    @property
+    def descriptor(self) -> int:
+        if self._closed or self._descriptor is None:
+            raise StableFileChangedError(
+                f"trusted-root descriptor is unavailable: {self.root}"
+            )
+        return self._descriptor
+
+    @property
+    def windows_handle(self) -> int:
+        if self._closed or self._windows_handle is None:
+            raise StableFileChangedError(
+                f"trusted-root handle is unavailable: {self.root}"
+            )
+        return self._windows_handle
+
+    def revalidate(self) -> Path:
+        """Prove that the pinned directory still owns its lexical path."""
+
+        if self._closed:
+            raise StableFileChangedError(
+                f"trusted-root lease is already closed: {self.root}"
+            )
+        try:
+            current = os.lstat(self.root)
+            resolved = self.root.resolve(strict=True)
+        except OSError as exc:
+            raise StableFileChangedError(
+                f"trusted root disappeared while leased: {self.root}: {exc}"
+            ) from exc
+        if _is_reparse_point(current) or _path_key(resolved) != _path_key(self.root):
+            raise StableFileRedirectionError(
+                f"trusted root changed to a redirection while leased: {self.root}"
+            )
+        if not stat.S_ISDIR(current.st_mode):
+            raise StableFileTypeError(
+                f"trusted root changed to a non-directory while leased: {self.root}"
+            )
+        current_identity = _identity(current)
+        if current_identity is None:
+            raise StableFileVerificationUnavailableError(
+                f"trusted root no longer exposes stable identity: {self.root}"
+            )
+        if current_identity != self.identity:
+            raise StableFileChangedError(
+                f"trusted root identity changed while leased: {self.root}"
+            )
+        if os.name == "nt":
+            final_path = _windows_handle_final_path(self.windows_handle)
+            if _path_key(final_path) != _path_key(self.root):
+                raise StableFileChangedError(
+                    f"trusted root moved while leased: {self.root}"
+                )
+        else:
+            final_path = _assert_pinned_directory(
+                self.descriptor,
+                root=self.root,
+                opened_identity=self.identity,
+            )
+        if self._lock_descriptor is not None:
+            assert self._lock_path is not None
+            assert self._lock_identity is not None
+            try:
+                opened_lock = os.fstat(self._lock_descriptor)
+                current_lock = os.lstat(self._lock_path)
+            except OSError as exc:
+                raise StableFileChangedError(
+                    f"stable lock file changed while held: {self._lock_path}: {exc}"
+                ) from exc
+            if _is_reparse_point(current_lock):
+                raise StableFileRedirectionError(
+                    f"stable lock file changed to a redirection: {self._lock_path}"
+                )
+            if not stat.S_ISREG(opened_lock.st_mode) or not stat.S_ISREG(
+                current_lock.st_mode
+            ):
+                raise StableFileTypeError(
+                    f"stable lock file is not regular: {self._lock_path}"
+                )
+            if _identity(opened_lock) != self._lock_identity or _identity(
+                current_lock
+            ) != self._lock_identity:
+                raise StableFileChangedError(
+                    f"stable lock file identity changed while held: {self._lock_path}"
+                )
+        return final_path
+
+    def bind_lock(self, descriptor: int, path: Path) -> None:
+        if self._lock_descriptor is not None:
+            raise StableFileChangedError(
+                f"trusted-root lease already owns a stable lock: {self.root}"
+            )
+        identity = _identity(os.fstat(descriptor))
+        if identity is None:
+            raise StableFileVerificationUnavailableError(
+                f"stable lock file has no usable identity: {path}"
+            )
+        self._lock_descriptor = descriptor
+        self._lock_path = path
+        self._lock_identity = identity
+        self.revalidate()
+
+    def unbind_lock(self) -> None:
+        self._lock_descriptor = None
+        self._lock_path = None
+        self._lock_identity = None
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        if self._descriptor is not None:
+            os.close(self._descriptor)
+            self._descriptor = None
+        if self._windows_handle is not None:
+            _close_windows_handle(self._windows_handle)
+            self._windows_handle = None
+        self._closed = True
 
 
 class StableFileLease:
@@ -85,6 +257,7 @@ class StableFileLease:
         path_signature: tuple[object, ...],
         size_bytes: int,
         content_sha256: str,
+        root_lease: StableDirectoryLease,
     ) -> None:
         self._descriptor = descriptor
         self.lexical_path = lexical_path
@@ -95,6 +268,7 @@ class StableFileLease:
         self._path_signature = path_signature
         self.size_bytes = size_bytes
         self.content_sha256 = content_sha256
+        self._root_lease = root_lease
         self._closed = False
 
     @property
@@ -116,6 +290,7 @@ class StableFileLease:
             raise StableFileChangedError(
                 f"stable file lease is already closed: {self.lexical_path}"
             )
+        self._root_lease.revalidate()
         descriptor_before = os.fstat(self._descriptor)
         if _signature(descriptor_before) != self._descriptor_signature:
             raise StableFileChangedError(
@@ -431,262 +606,313 @@ def _assert_same_identity(
         )
 
 
-def read_stable_regular_file(
-    trusted_root: str | Path,
-    path: str | Path,
-    *,
-    reject_redirection: bool,
-    capture_bytes: bool = True,
-) -> StableFileReadResult:
-    """Read/hash one stable regular file without crossing ``trusted_root``.
 
-    The descriptor's final path is checked before the first byte is read. On
-    platforms without a descriptor-path primitive or stable file identity, the
-    operation fails closed before reading. The same descriptor is used for the
-    complete read and checked again before close.
-    """
+def _close_windows_handle(handle: int) -> None:
+    import ctypes
 
-    if not isinstance(reject_redirection, bool):
-        raise TypeError("reject_redirection must be a bool")
-    if not isinstance(capture_bytes, bool):
-        raise TypeError("capture_bytes must be a bool")
-
-    root = _absolute_lexical(trusted_root)
-    target = _absolute_lexical(path)
-    if not _is_within(target, root):
-        raise StableFileBoundaryError(
-            f"file path is outside the trusted lexical root: {target}"
+    if not ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(handle):
+        raise StableFileReadError(
+            f"could not close trusted-root handle: {ctypes.WinError(ctypes.get_last_error())}"
         )
+
+
+def _validated_root_identity(root: Path) -> tuple[int, int]:
     try:
-        root_metadata = os.lstat(root)
-        resolved_root = root.resolve(strict=True)
+        metadata = os.lstat(root)
+        resolved = root.resolve(strict=True)
     except OSError as exc:
         raise StableFileReadError(f"trusted root is unavailable: {root}: {exc}") from exc
-    if _is_reparse_point(root_metadata) or _path_key(resolved_root) != _path_key(root):
+    if _is_reparse_point(metadata) or _path_key(resolved) != _path_key(root):
         raise StableFileRedirectionError(
             f"trusted root must not be a symbolic link or reparse point: {root}"
         )
-    if not stat.S_ISDIR(root_metadata.st_mode) or not resolved_root.is_dir():
+    if not stat.S_ISDIR(metadata.st_mode) or not resolved.is_dir():
         raise StableFileTypeError(f"trusted root is not a directory: {root}")
-
-    if reject_redirection:
-        _preflight_no_redirection(root, target)
-    else:
-        try:
-            resolved_before = target.resolve(strict=True)
-        except FileNotFoundError as exc:
-            raise StableFileMissingError(f"file path is unavailable: {target}") from exc
-        except OSError as exc:
-            raise StableFileReadError(f"could not resolve file path {target}: {exc}") from exc
-        if not _is_within(resolved_before, resolved_root):
-            raise StableFileBoundaryError(
-                f"file path resolves outside the trusted root: {target}"
-            )
-        if not resolved_before.is_file():
-            raise StableFileTypeError(f"file path is not a regular file: {target}")
-
-    flags = os.O_RDONLY
-    # O_NONBLOCK prevents a raced FIFO/device replacement from blocking before
-    # the descriptor type check; it is inert for ordinary regular files.
-    for optional_flag in ("O_BINARY", "O_CLOEXEC", "O_NOINHERIT", "O_NONBLOCK"):
-        flags |= getattr(os, optional_flag, 0)
-    if reject_redirection:
-        flags |= getattr(os, "O_NOFOLLOW", 0)
-
-    descriptor = -1
-    try:
-        try:
-            descriptor = os.open(target, flags)
-        except FileNotFoundError as exc:
-            raise StableFileMissingError(f"file path is unavailable: {target}") from exc
-        except OSError as exc:
-            raise StableFileReadError(f"could not open file path {target}: {exc}") from exc
-
-        opened_before = os.fstat(descriptor)
-        if not stat.S_ISREG(opened_before.st_mode):
-            raise StableFileTypeError(f"opened path is not a regular file: {target}")
-
-        try:
-            final_path = _descriptor_final_path(descriptor)
-        except OSError as exc:
-            raise StableFileReadError(
-                f"could not verify opened descriptor path for {target}: {exc}"
-            ) from exc
-        if final_path is None:
-            raise StableFileVerificationUnavailableError(
-                "the platform cannot obtain the opened descriptor's final path: "
-                f"{target}"
-            )
-        if not _is_within(final_path, resolved_root):
-            raise StableFileBoundaryError(
-                f"opened descriptor resolves outside the trusted root: {target}"
-            )
-        if reject_redirection and _path_key(final_path) != _path_key(target):
-            raise StableFileRedirectionError(
-                f"opened descriptor resolves through redirection: {target}"
-            )
-
-        path_before = _path_metadata(target, reject_redirection=reject_redirection)
-        _assert_same_identity(opened_before, path_before, target=target)
-
-        digest = hashlib.sha256()
-        chunks: list[bytes] | None = [] if capture_bytes else None
-        total = 0
-        while True:
-            try:
-                chunk = os.read(descriptor, _READ_CHUNK_BYTES)
-            except OSError as exc:
-                raise StableFileReadError(f"could not read file path {target}: {exc}") from exc
-            if not chunk:
-                break
-            total += len(chunk)
-            digest.update(chunk)
-            if chunks is not None:
-                chunks.append(chunk)
-
-        opened_after = os.fstat(descriptor)
-        if _signature(opened_after) != _signature(opened_before):
-            raise StableFileChangedError(f"file changed while it was being read: {target}")
-        if total != opened_before.st_size:
-            raise StableFileChangedError(
-                f"file size changed while it was being read: {target}"
-            )
-
-        path_after = _path_metadata(target, reject_redirection=reject_redirection)
-        _assert_same_identity(opened_after, path_after, target=target)
-        if _signature(path_after) != _signature(path_before):
-            raise StableFileChangedError(
-                f"file pathname changed while it was being read: {target}"
-            )
-        try:
-            final_after = _descriptor_final_path(descriptor)
-        except OSError as exc:
-            raise StableFileReadError(
-                f"could not reverify opened descriptor path for {target}: {exc}"
-            ) from exc
-        if final_after is None:
-            raise StableFileVerificationUnavailableError(
-                "the platform cannot reverify the opened descriptor's final path: "
-                f"{target}"
-            )
-        if not _is_within(final_after, resolved_root):
-            raise StableFileBoundaryError(
-                f"opened descriptor moved outside the trusted root: {target}"
-            )
-        if _path_key(final_after) != _path_key(final_path):
-            raise StableFileChangedError(
-                f"opened descriptor path changed while reading: {target}"
-            )
-
-        payload = b"".join(chunks) if chunks is not None else None
-        return StableFileReadResult(
-            lexical_path=target,
-            final_path=final_path,
-            size_bytes=total,
-            content_sha256=digest.hexdigest(),
-            data=payload,
+    identity = _identity(metadata)
+    if identity is None:
+        raise StableFileVerificationUnavailableError(
+            f"the platform did not expose stable identity for trusted root: {root}"
         )
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-
-
+    return identity
 
 
 @contextmanager
-def lease_stable_regular_file(
-    trusted_root: str | Path,
-    path: str | Path,
-    *,
-    reject_redirection: bool,
-) -> Iterator[StableFileLease]:
-    """Open, hash, and retain one verified regular-file descriptor.
-
-    The caller may perform a related machine-state commit while the descriptor is
-    retained and then call :meth:`StableFileLease.revalidate` to close the
-    verification-to-commit gap. The lease never permits writes through the source
-    descriptor.
-    """
-
-    if not isinstance(reject_redirection, bool):
-        raise TypeError("reject_redirection must be a bool")
+def lease_stable_directory(trusted_root: str | Path) -> Iterator[StableDirectoryLease]:
+    """Pin one non-redirected trusted root across a complete operation."""
 
     root = _absolute_lexical(trusted_root)
-    target = _absolute_lexical(path)
-    if not _is_within(target, root):
+    initial_identity = _validated_root_identity(root)
+    lease: StableDirectoryLease | None = None
+    try:
+        if os.name == "nt":
+            handle = _open_windows_pinned_directory(root)
+            lease = StableDirectoryLease(
+                root=root,
+                identity=initial_identity,
+                windows_handle=handle,
+            )
+        else:
+            flags = os.O_RDONLY
+            for optional_flag in ("O_DIRECTORY", "O_CLOEXEC", "O_NOFOLLOW"):
+                flags |= getattr(os, optional_flag, 0)
+            try:
+                descriptor = os.open(root, flags)
+            except OSError as exc:
+                raise StableFileReadError(
+                    f"could not pin trusted root {root}: {exc}"
+                ) from exc
+            try:
+                opened_identity = _identity(os.fstat(descriptor))
+                if opened_identity is None:
+                    raise StableFileVerificationUnavailableError(
+                        f"the platform did not expose stable identity for trusted root: {root}"
+                    )
+                if opened_identity != initial_identity:
+                    raise StableFileChangedError(
+                        f"trusted root changed while it was being pinned: {root}"
+                    )
+                lease = StableDirectoryLease(
+                    root=root,
+                    identity=initial_identity,
+                    descriptor=descriptor,
+                )
+            except Exception:
+                os.close(descriptor)
+                raise
+        lease.revalidate()
+        yield lease
+    finally:
+        if lease is not None:
+            lease.close()
+
+
+def _relative_file_parts(root: Path, target: Path) -> tuple[str, ...]:
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:
         raise StableFileBoundaryError(
             f"file path is outside the trusted lexical root: {target}"
-        )
-    try:
-        root_metadata = os.lstat(root)
-        resolved_root = root.resolve(strict=True)
-    except OSError as exc:
-        raise StableFileReadError(f"trusted root is unavailable: {root}: {exc}") from exc
-    if _is_reparse_point(root_metadata) or _path_key(resolved_root) != _path_key(root):
-        raise StableFileRedirectionError(
-            f"trusted root must not be a symbolic link or reparse point: {root}"
-        )
-    if not stat.S_ISDIR(root_metadata.st_mode) or not resolved_root.is_dir():
-        raise StableFileTypeError(f"trusted root is not a directory: {root}")
+        ) from exc
+    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise StableFileBoundaryError(f"file path is not a valid root-relative path: {target}")
+    return tuple(relative.parts)
 
-    if reject_redirection:
-        _preflight_no_redirection(root, target)
-    else:
+
+def _open_posix_regular_from_lease(
+    lease: StableDirectoryLease,
+    target: Path,
+    *,
+    reject_redirection: bool,
+) -> int:
+    parts = _relative_file_parts(lease.root, target)
+    parent_descriptor = os.dup(lease.descriptor)
+    expected_parent = lease.root
+    try:
+        for part in parts[:-1]:
+            flags = os.O_RDONLY
+            for optional_flag in ("O_DIRECTORY", "O_CLOEXEC", "O_NONBLOCK"):
+                flags |= getattr(os, optional_flag, 0)
+            if reject_redirection:
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+            try:
+                child_descriptor = os.open(part, flags, dir_fd=parent_descriptor)
+            except FileNotFoundError as exc:
+                raise StableFileMissingError(
+                    f"file path is unavailable: {expected_parent / part}"
+                ) from exc
+            except OSError as exc:
+                if reject_redirection and exc.errno == getattr(errno, "ELOOP", None):
+                    raise StableFileRedirectionError(
+                        f"file path traverses a symbolic link: {expected_parent / part}"
+                    ) from exc
+                raise StableFileReadError(
+                    f"could not open file ancestor {expected_parent / part}: {exc}"
+                ) from exc
+            os.close(parent_descriptor)
+            parent_descriptor = child_descriptor
+            metadata = os.fstat(parent_descriptor)
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise StableFileTypeError(
+                    f"file ancestor is not a directory: {expected_parent / part}"
+                )
+            final_path = _descriptor_final_path(parent_descriptor)
+            if final_path is None:
+                raise StableFileVerificationUnavailableError(
+                    f"the platform cannot verify file ancestor: {expected_parent / part}"
+                )
+            expected_parent /= part
+            if not _is_within(final_path, lease.root):
+                raise StableFileBoundaryError(
+                    f"file ancestor resolves outside the trusted root: {expected_parent}"
+                )
+            if reject_redirection and _path_key(final_path) != _path_key(expected_parent):
+                raise StableFileRedirectionError(
+                    f"file ancestor resolves through redirection: {expected_parent}"
+                )
+
+        flags = os.O_RDONLY
+        for optional_flag in ("O_BINARY", "O_CLOEXEC", "O_NONBLOCK"):
+            flags |= getattr(os, optional_flag, 0)
+        if reject_redirection:
+            flags |= getattr(os, "O_NOFOLLOW", 0)
         try:
-            resolved_before = target.resolve(strict=True)
+            return os.open(parts[-1], flags, dir_fd=parent_descriptor)
         except FileNotFoundError as exc:
             raise StableFileMissingError(f"file path is unavailable: {target}") from exc
         except OSError as exc:
-            raise StableFileReadError(f"could not resolve file path {target}: {exc}") from exc
-        if not _is_within(resolved_before, resolved_root):
-            raise StableFileBoundaryError(
-                f"file path resolves outside the trusted root: {target}"
-            )
-        if not resolved_before.is_file():
-            raise StableFileTypeError(f"file path is not a regular file: {target}")
-
-    flags = os.O_RDONLY
-    # O_NONBLOCK prevents a raced FIFO/device replacement from blocking before
-    # the retained descriptor is proven to be a regular file.
-    for optional_flag in ("O_BINARY", "O_CLOEXEC", "O_NOINHERIT", "O_NONBLOCK"):
-        flags |= getattr(os, optional_flag, 0)
-    if reject_redirection:
-        flags |= getattr(os, "O_NOFOLLOW", 0)
-
-    descriptor = -1
-    lease: StableFileLease | None = None
-    try:
-        try:
-            descriptor = os.open(target, flags)
-        except FileNotFoundError as exc:
-            raise StableFileMissingError(f"file path is unavailable: {target}") from exc
-        except OSError as exc:
+            if reject_redirection and exc.errno == getattr(errno, "ELOOP", None):
+                raise StableFileRedirectionError(
+                    f"file path must not be a symbolic link: {target}"
+                ) from exc
             raise StableFileReadError(f"could not open file path {target}: {exc}") from exc
+    finally:
+        os.close(parent_descriptor)
 
-        opened_before = os.fstat(descriptor)
-        if not stat.S_ISREG(opened_before.st_mode):
+
+def _open_windows_regular_from_lease(
+    lease: StableDirectoryLease,
+    target: Path,
+    *,
+    reject_redirection: bool,
+) -> int:
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    generic_read = 0x80000000
+    file_read_attributes = 0x00000080
+    synchronize = 0x00100000
+    file_share_read = 0x00000001
+    open_existing = 3
+    file_attribute_normal = 0x00000080
+    file_flag_open_reparse_point = 0x00200000
+    invalid_handle_value = ctypes.c_void_p(-1).value
+
+    if reject_redirection:
+        _preflight_no_redirection(lease.root, target)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    create_file.restype = wintypes.HANDLE
+    flags = file_attribute_normal
+    if reject_redirection:
+        flags |= file_flag_open_reparse_point
+    handle = create_file(
+        str(target),
+        generic_read | file_read_attributes | synchronize,
+        file_share_read,
+        None,
+        open_existing,
+        flags,
+        None,
+    )
+    if handle == invalid_handle_value:
+        error = ctypes.get_last_error()
+        if error in {2, 3}:
+            raise StableFileMissingError(f"file path is unavailable: {target}")
+        raise StableFileReadError(
+            f"could not open stable file path {target}: {ctypes.WinError(error)}"
+        )
+    try:
+        return msvcrt.open_osfhandle(
+            int(handle),
+            os.O_RDONLY | getattr(os, "O_BINARY", 0),
+        )
+    except Exception:
+        kernel32.CloseHandle(handle)
+        raise
+
+
+def _open_regular_from_lease(
+    lease: StableDirectoryLease,
+    target: Path,
+    *,
+    reject_redirection: bool,
+) -> tuple[int, os.stat_result, os.stat_result, Path]:
+    lease.revalidate()
+    if os.name == "nt":
+        descriptor = _open_windows_regular_from_lease(
+            lease,
+            target,
+            reject_redirection=reject_redirection,
+        )
+    else:
+        descriptor = _open_posix_regular_from_lease(
+            lease,
+            target,
+            reject_redirection=reject_redirection,
+        )
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
             raise StableFileTypeError(f"opened path is not a regular file: {target}")
         final_path = _verified_descriptor_final_path(
             descriptor,
             target=target,
-            resolved_root=resolved_root,
+            resolved_root=lease.root,
             reject_redirection=reject_redirection,
         )
-        path_before = _path_metadata(target, reject_redirection=reject_redirection)
-        _assert_same_identity(opened_before, path_before, target=target)
+        path_metadata = _path_metadata(
+            target,
+            reject_redirection=reject_redirection,
+        )
+        _assert_same_identity(opened, path_metadata, target=target)
+        lease.revalidate()
+        return descriptor, opened, path_metadata, final_path
+    except Exception:
+        os.close(descriptor)
+        raise
 
-        digest = hashlib.sha256()
-        total = 0
-        while True:
-            try:
-                chunk = os.read(descriptor, _READ_CHUNK_BYTES)
-            except OSError as exc:
-                raise StableFileReadError(f"could not read file path {target}: {exc}") from exc
-            if not chunk:
-                break
-            total += len(chunk)
-            digest.update(chunk)
 
+def _read_open_descriptor(
+    descriptor: int,
+    *,
+    target: Path,
+    capture_bytes: bool,
+) -> tuple[int, str, bytes | None]:
+    digest = hashlib.sha256()
+    total = 0
+    chunks: list[bytes] | None = [] if capture_bytes else None
+    while True:
+        try:
+            chunk = os.read(descriptor, _READ_CHUNK_BYTES)
+        except OSError as exc:
+            raise StableFileReadError(f"could not read file path {target}: {exc}") from exc
+        if not chunk:
+            break
+        total += len(chunk)
+        digest.update(chunk)
+        if chunks is not None:
+            chunks.append(chunk)
+    return total, digest.hexdigest(), b"".join(chunks) if chunks is not None else None
+
+def _read_stable_regular_file_with_lease(
+    lease: StableDirectoryLease,
+    target: Path,
+    *,
+    reject_redirection: bool,
+    capture_bytes: bool,
+) -> StableFileReadResult:
+    descriptor = -1
+    try:
+        descriptor, opened_before, path_before, final_path = _open_regular_from_lease(
+            lease,
+            target,
+            reject_redirection=reject_redirection,
+        )
+        total, digest, data = _read_open_descriptor(
+            descriptor,
+            target=target,
+            capture_bytes=capture_bytes,
+        )
         opened_after = os.fstat(descriptor)
         if _signature(opened_after) != _signature(opened_before):
             raise StableFileChangedError(f"file changed while it was being read: {target}")
@@ -703,33 +929,144 @@ def lease_stable_regular_file(
         final_after = _verified_descriptor_final_path(
             descriptor,
             target=target,
-            resolved_root=resolved_root,
+            resolved_root=lease.root,
             reject_redirection=reject_redirection,
         )
         if _path_key(final_after) != _path_key(final_path):
             raise StableFileChangedError(
-                f"opened descriptor path changed while reading: {target}"
+                f"opened descriptor path changed while it was being read: {target}"
             )
-
-        lease = StableFileLease(
-            descriptor=descriptor,
+        lease.revalidate()
+        return StableFileReadResult(
             lexical_path=target,
             final_path=final_path,
-            resolved_root=resolved_root,
-            reject_redirection=reject_redirection,
-            descriptor_signature=_signature(opened_after),
-            path_signature=_signature(path_after),
             size_bytes=total,
-            content_sha256=digest.hexdigest(),
+            content_sha256=digest,
+            data=data,
         )
-        descriptor = -1
-        try:
-            yield lease
-        finally:
-            lease.close()
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+
+
+def read_stable_regular_file(
+    trusted_root: str | Path,
+    path: str | Path,
+    *,
+    reject_redirection: bool,
+    capture_bytes: bool = True,
+    root_lease: StableDirectoryLease | None = None,
+) -> StableFileReadResult:
+    """Read/hash one regular file through one pinned trusted-root identity."""
+
+    if not isinstance(reject_redirection, bool):
+        raise TypeError("reject_redirection must be a bool")
+    if not isinstance(capture_bytes, bool):
+        raise TypeError("capture_bytes must be a bool")
+    root = _absolute_lexical(trusted_root)
+    target = _absolute_lexical(path)
+    _relative_file_parts(root, target)
+
+    if root_lease is not None:
+        if not isinstance(root_lease, StableDirectoryLease):
+            raise TypeError("root_lease must be a StableDirectoryLease")
+        if _path_key(root_lease.root) != _path_key(root):
+            raise StableFileBoundaryError(
+                f"root lease does not match requested trusted root: {root}"
+            )
+        return _read_stable_regular_file_with_lease(
+            root_lease,
+            target,
+            reject_redirection=reject_redirection,
+            capture_bytes=capture_bytes,
+        )
+
+    with lease_stable_directory(root) as lease:
+        return _read_stable_regular_file_with_lease(
+            lease,
+            target,
+            reject_redirection=reject_redirection,
+            capture_bytes=capture_bytes,
+        )
+
+
+@contextmanager
+def lease_stable_regular_file(
+    trusted_root: str | Path,
+    path: str | Path,
+    *,
+    reject_redirection: bool,
+) -> Iterator[StableFileLease]:
+    """Hash and retain one immutable file plus its pinned trusted-root lease."""
+
+    if not isinstance(reject_redirection, bool):
+        raise TypeError("reject_redirection must be a bool")
+    root = _absolute_lexical(trusted_root)
+    target = _absolute_lexical(path)
+    _relative_file_parts(root, target)
+
+    descriptor = -1
+    stable_lease: StableFileLease | None = None
+    with lease_stable_directory(root) as root_lease:
+        try:
+            descriptor, opened_before, path_before, final_path = _open_regular_from_lease(
+                root_lease,
+                target,
+                reject_redirection=reject_redirection,
+            )
+            total, digest, _data = _read_open_descriptor(
+                descriptor,
+                target=target,
+                capture_bytes=False,
+            )
+            opened_after = os.fstat(descriptor)
+            if _signature(opened_after) != _signature(opened_before):
+                raise StableFileChangedError(
+                    f"file changed while it was being leased: {target}"
+                )
+            if total != opened_before.st_size:
+                raise StableFileChangedError(
+                    f"file size changed while it was being leased: {target}"
+                )
+            path_after = _path_metadata(
+                target,
+                reject_redirection=reject_redirection,
+            )
+            _assert_same_identity(opened_after, path_after, target=target)
+            if _signature(path_after) != _signature(path_before):
+                raise StableFileChangedError(
+                    f"file pathname changed while it was being leased: {target}"
+                )
+            final_after = _verified_descriptor_final_path(
+                descriptor,
+                target=target,
+                resolved_root=root_lease.root,
+                reject_redirection=reject_redirection,
+            )
+            if _path_key(final_after) != _path_key(final_path):
+                raise StableFileChangedError(
+                    f"opened descriptor path changed while it was being leased: {target}"
+                )
+            root_lease.revalidate()
+            stable_lease = StableFileLease(
+                descriptor=descriptor,
+                lexical_path=target,
+                final_path=final_path,
+                resolved_root=root_lease.root,
+                reject_redirection=reject_redirection,
+                descriptor_signature=_signature(opened_after),
+                path_signature=_signature(path_after),
+                size_bytes=total,
+                content_sha256=digest,
+                root_lease=root_lease,
+            )
+            descriptor = -1
+            yield stable_lease
+        finally:
+            if stable_lease is not None:
+                stable_lease.close()
+            if descriptor >= 0:
+                os.close(descriptor)
 
 
 def _write_all(descriptor: int, payload: bytes) -> None:
@@ -781,35 +1118,23 @@ def _assert_pinned_directory(
     return final_path
 
 
-def _write_atomic_posix(root: Path, target: Path, payload: bytes) -> None:
+def _write_atomic_posix(
+    lease: StableDirectoryLease,
+    target: Path,
+    payload: bytes,
+) -> str:
     required_dir_fd = (os.open, os.replace, os.unlink)
     if not all(function in os.supports_dir_fd for function in required_dir_fd):
         raise StableFileVerificationUnavailableError(
             "the platform cannot perform handle-relative atomic replacement"
         )
-    root_flags = os.O_RDONLY
-    for optional_flag in ("O_DIRECTORY", "O_CLOEXEC", "O_NOFOLLOW"):
-        root_flags |= getattr(os, optional_flag, 0)
-    root_descriptor = -1
+    root = lease.root
+    root_descriptor = lease.descriptor
     temporary_descriptor = -1
     temporary_name: str | None = None
+    replaced = False
     try:
-        try:
-            root_descriptor = os.open(root, root_flags)
-        except OSError as exc:
-            raise StableFileReadError(f"could not pin trusted root {root}: {exc}") from exc
-        root_metadata = os.fstat(root_descriptor)
-        root_identity = _identity(root_metadata)
-        if root_identity is None:
-            raise StableFileVerificationUnavailableError(
-                f"the platform did not expose stable identity for trusted root: {root}"
-            )
-        _assert_pinned_directory(
-            root_descriptor,
-            root=root,
-            opened_identity=root_identity,
-        )
-
+        lease.revalidate()
         temporary_name = f".stable-write.{uuid.uuid4().hex}.tmp"
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         for optional_flag in ("O_CLOEXEC", "O_NOFOLLOW"):
@@ -833,11 +1158,7 @@ def _write_atomic_posix(root: Path, target: Path, payload: bytes) -> None:
                 "the platform did not expose stable temporary-file identity"
             )
         _write_all(temporary_descriptor, payload)
-        _assert_pinned_directory(
-            root_descriptor,
-            root=root,
-            opened_identity=root_identity,
-        )
+        lease.revalidate()
         try:
             os.replace(
                 temporary_name,
@@ -850,41 +1171,40 @@ def _write_atomic_posix(root: Path, target: Path, payload: bytes) -> None:
                 f"could not atomically replace stable file {target}: {exc}"
             ) from exc
         temporary_name = None
+        replaced = True
 
-        opened_after = os.fstat(temporary_descriptor)
-        path_after = os.stat(
-            target.name,
-            dir_fd=root_descriptor,
-            follow_symlinks=False,
-        )
-        _assert_same_identity(opened_after, path_after, target=target)
-        if _signature(opened_after) != _signature(path_after):
-            raise StableFileChangedError(
-                f"atomic replacement target changed before verification: {target}"
+        try:
+            opened_after = os.fstat(temporary_descriptor)
+            path_after = os.stat(
+                target.name,
+                dir_fd=root_descriptor,
+                follow_symlinks=False,
             )
-        _assert_pinned_directory(
-            root_descriptor,
-            root=root,
-            opened_identity=root_identity,
-        )
+            _assert_same_identity(opened_after, path_after, target=target)
+            if _signature(opened_after) != _signature(path_after):
+                raise StableFileChangedError(
+                    f"atomic replacement target changed before verification: {target}"
+                )
+            lease.revalidate()
+        except Exception as exc:
+            raise StableFileCommitUnknownError(
+                f"atomic replacement may be visible but could not be verified: {target}: {exc}"
+            ) from exc
         try:
             os.fsync(root_descriptor)
-        except OSError as exc:
-            raise StableFileReadError(
-                f"could not flush trusted-root directory after atomic write: {exc}"
-            ) from exc
+        except OSError:
+            return "committed-durability-unknown"
+        return "committed"
     finally:
         if temporary_descriptor >= 0:
             os.close(temporary_descriptor)
-        if temporary_name is not None and root_descriptor >= 0:
+        if temporary_name is not None and not replaced:
             try:
                 os.unlink(temporary_name, dir_fd=root_descriptor)
             except FileNotFoundError:
                 pass
             except OSError:
                 pass
-        if root_descriptor >= 0:
-            os.close(root_descriptor)
 
 
 def _windows_handle_final_path(handle: int) -> Path:
@@ -919,7 +1239,6 @@ def _open_windows_pinned_directory(root: Path) -> int:
     import ctypes
     from ctypes import wintypes
 
-    delete_access = 0x00010000
     file_read_attributes = 0x00000080
     synchronize = 0x00100000
     file_share_read = 0x00000001
@@ -943,7 +1262,7 @@ def _open_windows_pinned_directory(root: Path) -> int:
     create_file.restype = wintypes.HANDLE
     handle = create_file(
         str(root),
-        delete_access | file_read_attributes | synchronize,
+        file_read_attributes | synchronize,
         file_share_read | file_share_write,
         None,
         open_existing,
@@ -987,7 +1306,7 @@ def _create_windows_temporary(root: Path) -> tuple[int, Path]:
     generic_write = 0x40000000
     delete_access = 0x00010000
     file_read_attributes = 0x00000080
-    share_all = 0x00000001 | 0x00000002 | 0x00000004
+    file_share_delete = 0x00000004
     create_new = 1
     file_attribute_normal = 0x00000080
     invalid_handle_value = ctypes.c_void_p(-1).value
@@ -1009,7 +1328,7 @@ def _create_windows_temporary(root: Path) -> tuple[int, Path]:
         handle = create_file(
             str(path),
             generic_write | delete_access | file_read_attributes,
-            share_all,
+            file_share_delete,
             None,
             create_new,
             file_attribute_normal,
@@ -1033,16 +1352,17 @@ def _create_windows_temporary(root: Path) -> tuple[int, Path]:
     raise StableFileReadError("could not allocate a unique atomic temporary filename")
 
 
-def _write_atomic_windows(root: Path, target: Path, payload: bytes) -> None:
-    import ctypes
-
-    root_handle = _open_windows_pinned_directory(root)
+def _write_atomic_windows(
+    lease: StableDirectoryLease,
+    target: Path,
+    payload: bytes,
+) -> str:
+    root = lease.root
     temporary_descriptor = -1
     temporary_path: Path | None = None
     replaced = False
     try:
-        if _path_key(_windows_handle_final_path(root_handle)) != _path_key(root):
-            raise StableFileChangedError(f"trusted root moved before atomic write: {root}")
+        lease.revalidate()
         temporary_descriptor, temporary_path = _create_windows_temporary(root)
         temporary_final = _descriptor_final_path(temporary_descriptor)
         if temporary_final is None:
@@ -1059,8 +1379,7 @@ def _write_atomic_windows(root: Path, target: Path, payload: bytes) -> None:
                 "Windows did not expose stable temporary-file identity"
             )
         _write_all(temporary_descriptor, payload)
-        if _path_key(_windows_handle_final_path(root_handle)) != _path_key(root):
-            raise StableFileChangedError(f"trusted root moved during atomic write: {root}")
+        lease.revalidate()
         try:
             os.replace(temporary_path, target)
         except OSError as exc:
@@ -1068,20 +1387,25 @@ def _write_atomic_windows(root: Path, target: Path, payload: bytes) -> None:
                 f"could not atomically replace stable file {target}: {exc}"
             ) from exc
         replaced = True
-        final_path = _descriptor_final_path(temporary_descriptor)
-        if final_path is None or _path_key(final_path) != _path_key(target):
-            raise StableFileChangedError(
-                f"atomic temporary descriptor did not become target {target}"
-            )
-        path_after = os.stat(target, follow_symlinks=False)
-        opened_after = os.fstat(temporary_descriptor)
-        _assert_same_identity(opened_after, path_after, target=target)
-        if _signature(opened_after) != _signature(path_after):
-            raise StableFileChangedError(
-                f"atomic replacement target changed before verification: {target}"
-            )
-        if _path_key(_windows_handle_final_path(root_handle)) != _path_key(root):
-            raise StableFileChangedError(f"trusted root moved after atomic write: {root}")
+        try:
+            final_path = _descriptor_final_path(temporary_descriptor)
+            if final_path is None or _path_key(final_path) != _path_key(target):
+                raise StableFileChangedError(
+                    f"atomic temporary descriptor did not become target {target}"
+                )
+            path_after = os.stat(target, follow_symlinks=False)
+            opened_after = os.fstat(temporary_descriptor)
+            _assert_same_identity(opened_after, path_after, target=target)
+            if _signature(opened_after) != _signature(path_after):
+                raise StableFileChangedError(
+                    f"atomic replacement target changed before verification: {target}"
+                )
+            lease.revalidate()
+        except Exception as exc:
+            raise StableFileCommitUnknownError(
+                f"atomic replacement may be visible but could not be verified: {target}: {exc}"
+            ) from exc
+        return "committed"
     finally:
         if temporary_descriptor >= 0:
             os.close(temporary_descriptor)
@@ -1090,21 +1414,40 @@ def _write_atomic_windows(root: Path, target: Path, payload: bytes) -> None:
                 temporary_path.unlink(missing_ok=True)
             except OSError:
                 pass
-        ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(root_handle)
+
+
+def _write_atomic_stable_file_with_lease(
+    lease: StableDirectoryLease,
+    target: Path,
+    payload: bytes,
+) -> StableFileWriteResult:
+    try:
+        observation = _read_stable_regular_file_with_lease(
+            lease,
+            target,
+            reject_redirection=True,
+            capture_bytes=True,
+        )
+    except StableFileMissingError:
+        observation = None
+    if observation is not None and observation.data == payload:
+        return StableFileWriteResult(wrote=False, commit_state="unchanged")
+
+    if os.name == "nt":
+        commit_state = _write_atomic_windows(lease, target, payload)
+    else:
+        commit_state = _write_atomic_posix(lease, target, payload)
+    return StableFileWriteResult(wrote=True, commit_state=commit_state)
 
 
 def write_atomic_stable_file(
     trusted_root: str | Path,
     path: str | Path,
     payload: bytes,
-) -> bool:
-    """Atomically replace one direct-child file without following a raced root.
-
-    The machine-state root is pinned before temporary creation and replacement.
-    POSIX uses directory-descriptor-relative operations; Windows holds a directory
-    handle with DELETE access and without delete sharing so the root and its
-    ancestor path cannot be replaced during the operation.
-    """
+    *,
+    root_lease: StableDirectoryLease | None = None,
+) -> StableFileWriteResult:
+    """Atomically replace one direct-child file with explicit commit semantics."""
 
     if not isinstance(payload, bytes):
         raise TypeError("payload must be bytes")
@@ -1114,20 +1457,221 @@ def write_atomic_stable_file(
         raise StableFileBoundaryError(
             f"atomic stable-file destination must be a direct child of {root}: {target}"
         )
-    try:
-        observation = read_stable_regular_file(
-            root,
-            target,
-            reject_redirection=True,
-            capture_bytes=True,
-        )
-    except StableFileMissingError:
-        observation = None
-    if observation is not None and observation.data == payload:
-        return False
+    if root_lease is not None:
+        if not isinstance(root_lease, StableDirectoryLease):
+            raise TypeError("root_lease must be a StableDirectoryLease")
+        if _path_key(root_lease.root) != _path_key(root):
+            raise StableFileBoundaryError(
+                f"root lease does not match atomic-write trusted root: {root}"
+            )
+        return _write_atomic_stable_file_with_lease(root_lease, target, payload)
+    with lease_stable_directory(root) as lease:
+        return _write_atomic_stable_file_with_lease(lease, target, payload)
 
+
+def _open_windows_lock_descriptor(target: Path) -> int:
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    generic_read = 0x80000000
+    generic_write = 0x40000000
+    file_read_attributes = 0x00000080
+    synchronize = 0x00100000
+    file_share_read = 0x00000001
+    file_share_write = 0x00000002
+    open_always = 4
+    file_attribute_normal = 0x00000080
+    file_flag_open_reparse_point = 0x00200000
+    invalid_handle_value = ctypes.c_void_p(-1).value
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(
+        str(target),
+        generic_read | generic_write | file_read_attributes | synchronize,
+        file_share_read | file_share_write,
+        None,
+        open_always,
+        file_attribute_normal | file_flag_open_reparse_point,
+        None,
+    )
+    if handle == invalid_handle_value:
+        raise StableFileReadError(
+            f"could not open stable lock file {target}: "
+            f"{ctypes.WinError(ctypes.get_last_error())}"
+        )
+    try:
+        return msvcrt.open_osfhandle(
+            int(handle),
+            os.O_RDWR | getattr(os, "O_BINARY", 0),
+        )
+    except Exception:
+        kernel32.CloseHandle(handle)
+        raise
+
+
+def _open_stable_lock_descriptor(
+    lease: StableDirectoryLease,
+    lock_file: Path,
+) -> int:
+    if lock_file.parent != lease.root or lock_file.name in {"", ".", ".."}:
+        raise StableFileBoundaryError(
+            f"stable lock file must be a direct child of {lease.root}: {lock_file}"
+        )
+    lease.revalidate()
     if os.name == "nt":
-        _write_atomic_windows(root, target, payload)
+        descriptor = _open_windows_lock_descriptor(lock_file)
     else:
-        _write_atomic_posix(root, target, payload)
-    return True
+        flags = os.O_RDWR | os.O_CREAT
+        for optional_flag in ("O_CLOEXEC", "O_NOFOLLOW"):
+            flags |= getattr(os, optional_flag, 0)
+        try:
+            descriptor = os.open(
+                lock_file.name,
+                flags,
+                0o600,
+                dir_fd=lease.descriptor,
+            )
+        except OSError as exc:
+            if exc.errno == getattr(errno, "ELOOP", None):
+                raise StableFileRedirectionError(
+                    f"stable lock file must not be a symbolic link: {lock_file}"
+                ) from exc
+            raise StableFileReadError(
+                f"could not open stable lock file {lock_file}: {exc}"
+            ) from exc
+    try:
+        opened = os.fstat(descriptor)
+        current = os.lstat(lock_file)
+        if _is_reparse_point(current):
+            raise StableFileRedirectionError(
+                f"stable lock file must not be a symbolic link or reparse point: {lock_file}"
+            )
+        if not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(current.st_mode):
+            raise StableFileTypeError(
+                f"stable lock file must be a regular file: {lock_file}"
+            )
+        _assert_same_identity(opened, current, target=lock_file)
+        final_path = _descriptor_final_path(descriptor)
+        if final_path is None:
+            raise StableFileVerificationUnavailableError(
+                f"the platform cannot verify stable lock file path: {lock_file}"
+            )
+        if _path_key(final_path) != _path_key(lock_file):
+            raise StableFileRedirectionError(
+                f"stable lock file resolves through redirection: {lock_file}"
+            )
+        lease.bind_lock(descriptor, lock_file)
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _try_platform_lock(descriptor: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_platform_lock(descriptor: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+
+
+def _lock_contention(exc: OSError) -> bool:
+    return exc.errno in {
+        errno.EACCES,
+        errno.EAGAIN,
+        getattr(errno, "EDEADLK", errno.EACCES),
+        getattr(errno, "EWOULDBLOCK", errno.EAGAIN),
+    } or getattr(exc, "winerror", None) in {33, 36}
+
+
+@contextmanager
+def exclusive_stable_file_lock(
+    trusted_root: str | Path,
+    lock_file: str | Path,
+    *,
+    timeout_seconds: float,
+    retry_seconds: float = 0.01,
+) -> Iterator[StableDirectoryLease]:
+    """Hold a persistent OS lock and its pinned trusted root for one transaction."""
+
+    for value, label in (
+        (timeout_seconds, "timeout_seconds"),
+        (retry_seconds, "retry_seconds"),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or value <= 0
+        ):
+            raise ValueError(f"{label} must be a positive finite number")
+    root = _absolute_lexical(trusted_root)
+    target = _absolute_lexical(lock_file)
+    descriptor = -1
+    acquired = False
+    with lease_stable_directory(root) as lease:
+        try:
+            descriptor = _open_stable_lock_descriptor(lease, target)
+            deadline = time.monotonic() + float(timeout_seconds)
+            while True:
+                try:
+                    _try_platform_lock(descriptor)
+                    acquired = True
+                    break
+                except OSError as exc:
+                    if not _lock_contention(exc):
+                        raise StableFileReadError(
+                            f"could not acquire stable lock {target}: {exc}"
+                        ) from exc
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise StableFileLockTimeoutError(
+                            f"timed out waiting for stable lock: {target}"
+                        ) from exc
+                    time.sleep(min(float(retry_seconds), remaining))
+            if os.fstat(descriptor).st_size < 1:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                if os.write(descriptor, b"\0") != 1:
+                    raise StableFileReadError(
+                        f"could not initialize stable lock file: {target}"
+                    )
+                os.fsync(descriptor)
+            lease.revalidate()
+            yield lease
+        finally:
+            if descriptor >= 0:
+                if acquired:
+                    try:
+                        _unlock_platform_lock(descriptor)
+                    except OSError:
+                        pass
+                lease.unbind_lock()
+                os.close(descriptor)

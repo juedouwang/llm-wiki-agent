@@ -551,39 +551,52 @@ class SourceRecoveryTests(unittest.TestCase):
         self.assertEqual(sources_file.read_bytes(), before_registry)
         self.assertEqual(self.current_source().current_path, self.source.current_path)
 
-    def test_relocation_restores_registry_if_candidate_changes_during_commit(self) -> None:
+    def test_relocation_restores_exact_registry_preimage_after_candidate_failure(self) -> None:
         moved = self.move_original("moved/commit-race.txt")
         sources_file = self.registration.layout.sources_file
-        before_registry = sources_file.read_bytes()
-        replacement = moved.with_name("candidate-replacement.txt")
-        attacker_bytes = b"candidate changed during registry commit\n"
-        real_write = source_registry_module._write_registry_atomic
-        attacked = False
+        canonical_rows = [
+            json.loads(line)
+            for line in sources_file.read_text(encoding="utf-8").splitlines()
+        ]
+        before_registry = (
+            "\n".join(
+                json.dumps(row, ensure_ascii=False, separators=(", ", ": "))
+                for row in canonical_rows
+            )
+            + "\n"
+        ).encode("utf-8")
+        sources_file.write_bytes(before_registry)
+        self.assertNotEqual(
+            before_registry,
+            load_source_registry(
+                self.workspace,
+                self.registration.project_id,
+            ).serialized_bytes(),
+        )
+        real_revalidate = stable_file_access_module.StableFileLease.revalidate
+        candidate_revalidations = 0
         assert self.source.current_content_hash is not None
         assert self.source.current_version is not None
 
-        def write_after_candidate_change(registry, *, trusted_root: Path):
-            nonlocal attacked
-            if not attacked:
-                attacked = True
-                replacement.write_bytes(attacker_bytes)
-                try:
-                    replacement.replace(moved)
-                except OSError:
-                    try:
-                        moved.write_bytes(attacker_bytes)
-                    except OSError as exc:
-                        self.skipTest(f"concurrent candidate mutation unavailable: {exc}")
-            return real_write(registry, trusted_root=trusted_root)
+        def fail_candidate_after_commit(lease):
+            nonlocal candidate_revalidations
+            if lease.lexical_path == moved.resolve():
+                candidate_revalidations += 1
+                if candidate_revalidations == 2:
+                    raise stable_file_access_module.StableFileChangedError(
+                        "forced candidate currentness failure"
+                    )
+            return real_revalidate(lease)
 
         with mock.patch.object(
-            source_registry_module,
-            "_write_registry_atomic",
-            side_effect=write_after_candidate_change,
+            stable_file_access_module.StableFileLease,
+            "revalidate",
+            side_effect=fail_candidate_after_commit,
+            autospec=True,
         ):
             with self.assertRaisesRegex(
                 SourceRegistryConflictError,
-                "previous source registry was restored",
+                "exact CAS rollback restored and verified",
             ):
                 record_source_relocation(
                     self.workspace,
@@ -595,10 +608,72 @@ class SourceRecoveryTests(unittest.TestCase):
                     expected_current_version=self.source.current_version,
                 )
 
-        self.assertTrue(attacked)
+        self.assertEqual(candidate_revalidations, 2)
         self.assertEqual(sources_file.read_bytes(), before_registry)
         self.assertEqual(self.current_source().current_path, self.source.current_path)
-        self.assertEqual(moved.read_bytes(), attacker_bytes)
+        self.assertEqual(moved.read_bytes(), self.source_bytes)
+
+    def test_relocation_cas_mismatch_refuses_to_overwrite_foreign_registry(self) -> None:
+        moved = self.move_original("moved/cas-mismatch.txt")
+        sources_file = self.registration.layout.sources_file
+        foreign_payload = b'{"foreign":"writer-owned-bytes"}\n'
+        real_write = source_registry_module._write_registry_atomic
+        real_revalidate = stable_file_access_module.StableFileLease.revalidate
+        candidate_revalidations = 0
+        assert self.source.current_content_hash is not None
+        assert self.source.current_version is not None
+
+        def write_then_interfere(
+            registry,
+            *,
+            trusted_root: Path,
+            root_lease,
+        ):
+            result = real_write(
+                registry,
+                trusted_root=trusted_root,
+                root_lease=root_lease,
+            )
+            sources_file.write_bytes(foreign_payload)
+            return result
+
+        def fail_candidate_after_commit(lease):
+            nonlocal candidate_revalidations
+            if lease.lexical_path == moved.resolve():
+                candidate_revalidations += 1
+                if candidate_revalidations == 2:
+                    raise stable_file_access_module.StableFileChangedError(
+                        "forced candidate currentness failure"
+                    )
+            return real_revalidate(lease)
+
+        with mock.patch.object(
+            source_registry_module,
+            "_write_registry_atomic",
+            side_effect=write_then_interfere,
+        ), mock.patch.object(
+            stable_file_access_module.StableFileLease,
+            "revalidate",
+            side_effect=fail_candidate_after_commit,
+            autospec=True,
+        ):
+            with self.assertRaisesRegex(
+                SourceRegistryConflictError,
+                "CAS rollback was refused",
+            ):
+                record_source_relocation(
+                    self.workspace,
+                    self.registration.project_id,
+                    source_id=self.source.source_id,
+                    recovered_path=moved.relative_to(self.project).as_posix(),
+                    expected_content_hash=self.source.current_content_hash,
+                    expected_current_path=self.source.current_path,
+                    expected_current_version=self.source.current_version,
+                )
+
+        self.assertEqual(candidate_revalidations, 2)
+        self.assertEqual(sources_file.read_bytes(), foreign_payload)
+        self.assertEqual(moved.read_bytes(), self.source_bytes)
 
     def test_concurrent_cli_recovery_has_one_writer_and_no_duplicate_history(self) -> None:
         moved = self.move_original("moved/concurrent.txt")

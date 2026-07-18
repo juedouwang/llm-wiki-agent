@@ -41,20 +41,64 @@ descriptor identity, final path, metadata signature, size, and a complete SHA-25
 read through the same descriptor. Source relocation uses this lease across the
 registry commit.
 
+On Windows, a stable regular-file descriptor shares read access only: concurrent
+writable opens, replacement, rename, and deletion are denied while the read or
+lease is active. The separately pinned trusted-root directory handle permits
+ordinary child writes but does not share delete access, so multiple transactions
+can pin the same root without allowing that root to be renamed or deleted under
+them.
+
+## Transaction-scoped root and lock
+
+`lease_stable_directory(...)` pins one non-redirected trusted-root identity.
+`exclusive_stable_file_lock(...)` opens that lease first, opens only a direct-child
+regular lock file through the pinned root, and holds an operating-system exclusive
+lock for the complete writer transaction. The lock file is persistent machine
+state: release unlocks and closes it but deliberately does not unlink it. File
+existence is therefore not interpreted as ownership.
+
+Source and Evidence writers reuse the **same** `StableDirectoryLease` for lock
+acquisition, under-lock registry loads, replacement, and any relocation rollback.
+A root identity substitution, lock-file redirection, or lock identity change fails
+closed instead of moving later transaction stages onto a different pathname
+object.
+
 ## Atomic machine-state replacement
 
 The same module provides `write_atomic_stable_file(...)` for the direct-child
 Source and Evidence registries. It first performs the non-redirected stable read
-above when a destination exists. It then pins the trusted machine-state directory,
-writes and flushes a unique temporary regular file, replaces only the direct-child
-name, verifies that the temporary descriptor became that destination, and flushes
-the directory where the platform supports the required primitive. POSIX uses
-directory-descriptor-relative operations. Windows holds a non-delete-shared
-directory handle and rechecks its final path around replacement. Unsupported
-platform guarantees fail closed.
+above when a destination exists. It then uses the caller's transaction root lease
+(or creates one for standalone use), writes and flushes a unique temporary regular
+file, replaces only the direct-child name, verifies that the temporary descriptor
+became that destination, and flushes the directory where the platform supports
+the required primitive. POSIX uses directory-descriptor-relative operations.
+Windows holds a non-delete-shared root handle, creates the temporary file without
+read/write sharing while retaining the delete sharing required for its own rename,
+and rechecks final paths around replacement. Unsupported platform guarantees fail
+closed.
 
-This primitive does not harden unrelated lock-token reads or every machine-state
-loader. Its scope is the Source/Evidence registry payloads named below.
+Atomic write outcomes are explicit:
+
+- `unchanged`: existing bytes already equal the requested payload;
+- `committed`: replacement and required verification completed;
+- `committed-durability-unknown`: replacement is verified as visible, but POSIX
+  directory flushing failed; and
+- `StableFileCommitUnknownError`: replacement occurred but post-replace identity
+  or root verification could not establish which bytes are now current.
+
+Failures before replacement remain ordinary no-commit exceptions. Registry
+writers translate the two uncertain post-replace outcomes into explicit domain
+commit-state errors rather than reporting success or retrying blindly.
+
+For Source relocation, rollback uses the exact registry bytes observed under the
+transaction lease, including a valid noncanonical serialization. It first performs
+an exact compare-and-swap check that current registry bytes still equal the
+attempted replacement. Foreign bytes are never overwritten. A successful rollback
+then re-reads and verifies byte-for-byte restoration of that original preimage;
+rollback visibility or durability uncertainty is reported explicitly.
+
+The primitive intentionally covers the Source/Evidence registry and lock payloads
+named below, not every machine-state loader in the repository.
 
 ## Consumers hardened in this unit
 
@@ -62,14 +106,14 @@ loader. Its scope is the Source/Evidence registry payloads named below.
   bytes. The `recover_relocation` write boundary accepts only a literal boolean.
 - `tools/source_recovery.py` hashes the registered lexical path and relocation
   candidates through the same primitive, including read-only inspection.
-- `tools/source_registry.py` loads and reloads `sources.jsonl` through a
-  non-redirected stable descriptor, uses the stable atomic writer for registry
-  replacement, and retains/re-hashes a relocation candidate immediately before
-  and after binding. If post-commit revalidation fails, it atomically restores the
-  previous registry and reports failure.
-- `tools/evidence_registry.py` loads `evidence.jsonl` through a non-redirected
-  stable descriptor, preserves the canonical lexical destination, and uses the
-  same stable atomic writer for replacement.
+- `tools/source_registry.py` acquires a persistent OS lock beneath one pinned
+  root lease, loads and reloads `sources.jsonl` through that lease, and uses it for
+  stable atomic replacement. Relocation retains/re-hashes its candidate around the
+  commit and uses exact-CAS rollback from the actual registry-byte preimage when
+  post-commit revalidation fails.
+- `tools/evidence_registry.py` acquires the same form of persistent root-bound
+  lock, loads `evidence.jsonl` through the transaction lease, preserves the
+  canonical lexical destination, and uses that lease for replacement.
 
 ## Security and product boundary
 

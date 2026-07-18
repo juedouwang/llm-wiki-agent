@@ -116,8 +116,12 @@ boolean write boundary, and a failed current path or content check therefore
 cannot invoke D-05's mutating recovery path. Source and relocation-candidate
 bytes are descriptor-bound and project-contained before their first read;
 Source and Evidence registry bytes are descriptor-bound beneath the machine-state
-root and must not traverse a symbolic link or reparse point. The shared hardening contract
-is documented in [`stable-file-access.md`](stable-file-access.md).
+root and must not traverse a symbolic link or reparse point. On Windows, stable
+Source reads deny concurrent writable opens, replacement, and deletion for the
+lifetime of the descriptor. Registry writers separately retain one root-bound OS
+lock/lease across load and commit, with explicit uncertain-commit states; none of
+that grants this validator write authority. The shared hardening contract is
+documented in [`stable-file-access.md`](stable-file-access.md).
 
 It may then call `inspect_source_relocation(...)`, which evaluates the same
 ordered deterministic candidate groups as D-05:

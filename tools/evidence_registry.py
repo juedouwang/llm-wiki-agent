@@ -9,11 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import re
-import time
-import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,12 +29,22 @@ if __package__:
         validate_project_id,
     )
     from .project_registry import load_registered_project
-    from .source_registry import SourceRecord, SourceRegistry, load_source_registry
+    from .source_registry import (
+        SourceRecord,
+        SourceRegistry,
+        _load_source_registry_file,
+        load_source_registry,
+    )
     from .stable_file_access import (
+        StableDirectoryLease,
         StableFileAccessError,
         StableFileBoundaryError,
+        StableFileCommitUnknownError,
+        StableFileLockTimeoutError,
         StableFileMissingError,
         StableFileRedirectionError,
+        StableFileWriteResult,
+        exclusive_stable_file_lock,
         read_stable_regular_file,
         write_atomic_stable_file,
     )
@@ -57,13 +64,19 @@ else:
     from source_registry import (  # type: ignore[no-redef]
         SourceRecord,
         SourceRegistry,
+        _load_source_registry_file,
         load_source_registry,
     )
     from stable_file_access import (  # type: ignore[no-redef]
+        StableDirectoryLease,
         StableFileAccessError,
         StableFileBoundaryError,
+        StableFileCommitUnknownError,
+        StableFileLockTimeoutError,
         StableFileMissingError,
         StableFileRedirectionError,
+        StableFileWriteResult,
+        exclusive_stable_file_lock,
         read_stable_regular_file,
         write_atomic_stable_file,
     )
@@ -126,6 +139,14 @@ class EvidenceMismatchError(EvidenceError):
 
 class EvidenceLockError(EvidenceError):
     """Raised when an Evidence writer cannot acquire or release its lock."""
+
+
+class EvidenceCommitStateError(EvidenceConflictError):
+    """Raised when an atomic Evidence replacement has a non-final commit state."""
+
+    def __init__(self, message: str, *, commit_state: str) -> None:
+        super().__init__(message)
+        self.commit_state = commit_state
 
 
 def _is_integer(value: object) -> bool:
@@ -569,6 +590,7 @@ def _load_evidence_file(
     project_id: str,
     source_registry: SourceRegistry,
     missing_ok: bool,
+    root_lease: StableDirectoryLease | None = None,
 ) -> EvidenceRegistry:
     evidence_file = Path(os.path.abspath(os.fspath(Path(path).expanduser())))
     try:
@@ -577,6 +599,7 @@ def _load_evidence_file(
             evidence_file,
             reject_redirection=True,
             capture_bytes=True,
+            root_lease=root_lease,
         )
     except StableFileMissingError as exc:
         if missing_ok:
@@ -690,71 +713,59 @@ def _source_version_for(
 
 @contextmanager
 def _exclusive_evidence_lock(
+    trusted_root: Path,
     lock_file: Path,
     *,
     timeout_seconds: float,
-) -> Iterator[None]:
-    if (
-        isinstance(timeout_seconds, bool)
-        or not isinstance(timeout_seconds, (int, float))
-        or not math.isfinite(float(timeout_seconds))
-        or timeout_seconds <= 0
-    ):
-        raise ValueError("lock_timeout_seconds must be a positive finite number")
-    token = f"{os.getpid()}:{uuid.uuid4().hex}\n".encode("ascii")
-    deadline = time.monotonic() + float(timeout_seconds)
-    descriptor: int | None = None
-    while descriptor is None:
-        try:
-            descriptor = os.open(
-                lock_file,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                0o600,
-            )
-        except (FileExistsError, PermissionError) as exc:
-            if time.monotonic() >= deadline:
-                raise EvidenceLockError(
-                    f"timed out waiting for Evidence registry lock: {lock_file}"
-                ) from exc
-            time.sleep(_LOCK_RETRY_SECONDS)
-        except OSError as exc:
-            raise EvidenceLockError(
-                f"could not create Evidence registry lock {lock_file}: {exc}"
-            ) from exc
+) -> Iterator[StableDirectoryLease]:
     try:
-        with os.fdopen(descriptor, "wb") as target:
-            descriptor = None
-            target.write(token)
-            target.flush()
-            os.fsync(target.fileno())
-        yield
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        try:
-            if lock_file.read_bytes() == token:
-                lock_file.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            raise EvidenceLockError(
-                f"could not release Evidence registry lock {lock_file}: {exc}"
-            ) from exc
+        with exclusive_stable_file_lock(
+            trusted_root,
+            lock_file,
+            timeout_seconds=timeout_seconds,
+            retry_seconds=_LOCK_RETRY_SECONDS,
+        ) as root_lease:
+            yield root_lease
+    except StableFileLockTimeoutError as exc:
+        raise EvidenceLockError(
+            f"timed out waiting for Evidence registry lock: {lock_file}"
+        ) from exc
+    except StableFileAccessError as exc:
+        raise EvidenceLockError(
+            f"could not acquire secure Evidence registry lock {lock_file}: {exc}"
+        ) from exc
 
 
 def _write_evidence_atomic(
     registry: EvidenceRegistry,
     *,
     trusted_root: Path,
-) -> bool:
+    root_lease: StableDirectoryLease,
+) -> StableFileWriteResult:
     path = registry.evidence_file
     payload = registry.serialized_bytes()
     try:
-        return write_atomic_stable_file(trusted_root, path, payload)
+        result = write_atomic_stable_file(
+            trusted_root,
+            path,
+            payload,
+            root_lease=root_lease,
+        )
+    except StableFileCommitUnknownError as exc:
+        raise EvidenceCommitStateError(
+            f"Evidence registry replacement commit state is unknown for {path}: {exc}",
+            commit_state="unknown",
+        ) from exc
     except StableFileAccessError as exc:
         raise EvidenceError(
             f"could not securely write Evidence registry {path}: {exc}"
         ) from exc
+    if result.commit_state == "committed-durability-unknown":
+        raise EvidenceCommitStateError(
+            f"Evidence registry replacement is visible but durability is unknown: {path}",
+            commit_state=result.commit_state,
+        )
+    return result
 
 
 def register_evidence(
@@ -795,13 +806,19 @@ def register_evidence(
         expected_excerpt_hash=expected_excerpt_hash,
     )
     evidence_file = registration.layout.evidence_file
-    evidence_file.parent.mkdir(parents=True, exist_ok=True)
     lock_file = evidence_file.with_name(f"{evidence_file.name}.lock")
     with _exclusive_evidence_lock(
+        registration.layout.machine_root,
         lock_file,
         timeout_seconds=lock_timeout_seconds,
-    ):
-        source_registry = load_source_registry(workspace_root, registration.project_id)
+    ) as root_lease:
+        source_registry = _load_source_registry_file(
+            registration.layout.sources_file,
+            trusted_root=registration.layout.machine_root,
+            project_id=registration.project_id,
+            missing_ok=False,
+            root_lease=root_lease,
+        )
         _bind_record(candidate, source_registry)
         registry = _load_evidence_file(
             evidence_file,
@@ -809,6 +826,7 @@ def register_evidence(
             project_id=registration.project_id,
             source_registry=source_registry,
             missing_ok=True,
+            root_lease=root_lease,
         )
         existing = registry.by_evidence_id.get(candidate.evidence_id)
         if existing is not None:
@@ -825,10 +843,12 @@ def register_evidence(
                     )
                 ),
             )
-            wrote_registry = _write_evidence_atomic(
+            write_result = _write_evidence_atomic(
                 updated,
                 trusted_root=registration.layout.machine_root,
+                root_lease=root_lease,
             )
+            wrote_registry = write_result.wrote
             registry = updated
             persisted = candidate
     return EvidenceRegistrationResult(

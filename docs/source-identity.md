@@ -70,7 +70,7 @@ Rows are sorted by normalized project-relative POSIX path. Every `source_id` and
 
 ## Concurrency and fail-closed behavior
 
-Writers serialize through the adjacent `sources.jsonl.lock` file. The registry is reloaded while holding the lock, so concurrent synchronizations cannot allocate multiple IDs for the same path. Ordinary loads and under-lock reloads read `sources.jsonl` through a stable, non-redirected descriptor beneath the project machine-state root. Existing-registry equality checks and atomic replacement use the same trusted-root boundary; redirected paths or changed file identity fail closed.
+Writers serialize through an operating-system exclusive lock on the persistent adjacent `sources.jsonl.lock` file. Lock-file existence is not ownership. One pinned machine-state-root lease is retained across lock acquisition, under-lock reload, equality comparison, atomic replacement, and any rollback, so concurrent synchronizations cannot allocate multiple IDs for the same path or redirect later stages to a substituted root. Ordinary loads and under-lock reloads read `sources.jsonl` through a stable, non-redirected descriptor. Redirected paths, changed root/lock/registry identity, post-replace uncertainty, or visible-but-not-fully-durable replacement fail closed with an explicit commit-state error rather than a false success.
 
 The following state is rejected without replacing the existing registry:
 

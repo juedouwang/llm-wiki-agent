@@ -13,7 +13,6 @@ import json
 import math
 import os
 import re
-import time
 import unicodedata
 import uuid
 from contextlib import contextmanager
@@ -31,9 +30,14 @@ if __package__:
     from .project_layout import CURRENT_SCHEMA_VERSION, LayoutError, schema_version_of
     from .project_registry import load_registered_project
     from .stable_file_access import (
+        StableDirectoryLease,
         StableFileAccessError,
+        StableFileCommitUnknownError,
         StableFileLease,
+        StableFileLockTimeoutError,
         StableFileMissingError,
+        StableFileWriteResult,
+        exclusive_stable_file_lock,
         lease_stable_regular_file,
         read_stable_regular_file,
         write_atomic_stable_file,
@@ -52,9 +56,14 @@ else:
     )
     from project_registry import load_registered_project  # type: ignore[no-redef]
     from stable_file_access import (  # type: ignore[no-redef]
+        StableDirectoryLease,
         StableFileAccessError,
+        StableFileCommitUnknownError,
         StableFileLease,
+        StableFileLockTimeoutError,
         StableFileMissingError,
+        StableFileWriteResult,
+        exclusive_stable_file_lock,
         lease_stable_regular_file,
         read_stable_regular_file,
         write_atomic_stable_file,
@@ -148,6 +157,14 @@ class SourceRegistryLockError(SourceRegistryError):
 
 class SourceRegistryConflictError(SourceRegistryError):
     """Raised when persisted source state cannot be reconciled safely."""
+
+
+class SourceRegistryCommitStateError(SourceRegistryConflictError):
+    """Raised when an atomic registry replacement has a non-final commit state."""
+
+    def __init__(self, message: str, *, commit_state: str) -> None:
+        super().__init__(message)
+        self.commit_state = commit_state
 
 
 def _is_integer(value: object) -> bool:
@@ -812,17 +829,19 @@ def _decode_registry_line(raw_line: str, *, path: Path, line_number: int) -> obj
         raise _registry_error(path, str(exc), line_number) from exc
 
 
-def _load_registry_lines(
+def _read_registry_payload(
     path: Path,
     *,
     trusted_root: Path,
-) -> list[object]:
+    root_lease: StableDirectoryLease | None = None,
+) -> bytes:
     try:
         observation = read_stable_regular_file(
             trusted_root,
             path,
             reject_redirection=True,
             capture_bytes=True,
+            root_lease=root_lease,
         )
     except StableFileMissingError:
         raise
@@ -833,8 +852,12 @@ def _load_registry_lines(
         ) from exc
     if observation.data is None:
         raise SourceRegistryError(f"source registry read returned no bytes: {path}")
+    return observation.data
+
+
+def _decode_registry_payload(path: Path, payload: bytes) -> list[object]:
     try:
-        text = observation.data.decode("utf-8")
+        text = payload.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise SourceRegistryError(f"source registry must be UTF-8: {path}") from exc
     raw_lines = text.splitlines()
@@ -1109,24 +1132,13 @@ def _load_v2_registry(
         raise _registry_error(path, str(exc)) from exc
 
 
-def _load_source_registry_file(
-    sources_file: Path,
+def _parse_source_registry_payload(
+    path: Path,
+    payload: bytes,
     *,
-    trusted_root: Path,
     project_id: str,
-    missing_ok: bool,
 ) -> SourceRegistry:
-    path = Path(os.path.abspath(os.fspath(Path(sources_file).expanduser())))
-    try:
-        rows = _load_registry_lines(path, trusted_root=trusted_root)
-    except StableFileMissingError as exc:
-        if missing_ok:
-            return SourceRegistry(
-                project_id=project_id,
-                sources_file=path,
-                records=(),
-            )
-        raise SourceRegistryError(f"source registry does not exist: {path}") from exc
+    rows = _decode_registry_payload(path, payload)
     if not isinstance(rows[0], dict):
         raise _registry_error(path, "summary row must contain an object", 1)
     registry_version = rows[0].get("registry_version")
@@ -1139,6 +1151,53 @@ def _load_source_registry_file(
         f"unsupported registry_version {registry_version!r}",
         1,
     )
+
+
+def _load_source_registry_file_with_payload(
+    sources_file: Path,
+    *,
+    trusted_root: Path,
+    project_id: str,
+    missing_ok: bool,
+    root_lease: StableDirectoryLease | None = None,
+) -> tuple[SourceRegistry, bytes | None]:
+    path = Path(os.path.abspath(os.fspath(Path(sources_file).expanduser())))
+    try:
+        payload = _read_registry_payload(
+            path,
+            trusted_root=trusted_root,
+            root_lease=root_lease,
+        )
+    except StableFileMissingError as exc:
+        if missing_ok:
+            return (
+                SourceRegistry(
+                    project_id=project_id,
+                    sources_file=path,
+                    records=(),
+                ),
+                None,
+            )
+        raise SourceRegistryError(f"source registry does not exist: {path}") from exc
+    return _parse_source_registry_payload(path, payload, project_id=project_id), payload
+
+
+def _load_source_registry_file(
+    sources_file: Path,
+    *,
+    trusted_root: Path,
+    project_id: str,
+    missing_ok: bool,
+    root_lease: StableDirectoryLease | None = None,
+) -> SourceRegistry:
+    registry, _payload = _load_source_registry_file_with_payload(
+        sources_file,
+        trusted_root=trusted_root,
+        project_id=project_id,
+        missing_ok=missing_ok,
+        root_lease=root_lease,
+    )
+    return registry
 
 
 def load_source_registry(
@@ -1190,84 +1249,72 @@ def _new_source_id(existing_ids: set[str]) -> str:
 
 @contextmanager
 def _exclusive_registry_lock(
+    trusted_root: Path,
     lock_file: Path,
     *,
     timeout_seconds: float,
-) -> Iterator[None]:
-    if (
-        isinstance(timeout_seconds, bool)
-        or not isinstance(timeout_seconds, (int, float))
-        or not math.isfinite(float(timeout_seconds))
-        or timeout_seconds <= 0
-    ):
-        raise ValueError("lock_timeout_seconds must be a positive finite number")
-    token = f"{os.getpid()}:{uuid.uuid4().hex}\n".encode("ascii")
-    deadline = time.monotonic() + float(timeout_seconds)
-    descriptor: int | None = None
-    while descriptor is None:
-        try:
-            descriptor = os.open(
-                lock_file,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                0o600,
-            )
-        except FileExistsError as exc:
-            if time.monotonic() >= deadline:
-                raise SourceRegistryLockError(
-                    f"timed out waiting for source registry lock: {lock_file}"
-                ) from exc
-            time.sleep(_LOCK_RETRY_SECONDS)
-        except PermissionError as exc:
-            # Windows may report access denied while the previous owner is
-            # deleting the just-released lock rather than FileExistsError.
-            if os.name == "nt" and time.monotonic() < deadline:
-                time.sleep(_LOCK_RETRY_SECONDS)
-                continue
-            if os.name == "nt":
-                raise SourceRegistryLockError(
-                    f"timed out waiting for source registry lock: {lock_file}"
-                ) from exc
-            raise SourceRegistryLockError(
-                f"could not create source registry lock {lock_file}: {exc}"
-            ) from exc
-        except OSError as exc:
-            raise SourceRegistryLockError(
-                f"could not create source registry lock {lock_file}: {exc}"
-            ) from exc
+) -> Iterator[StableDirectoryLease]:
     try:
-        with os.fdopen(descriptor, "wb") as target:
-            descriptor = None
-            target.write(token)
-            target.flush()
-            os.fsync(target.fileno())
-        yield
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        try:
-            if lock_file.read_bytes() == token:
-                lock_file.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            raise SourceRegistryLockError(
-                f"could not release source registry lock {lock_file}: {exc}"
-            ) from exc
+        with exclusive_stable_file_lock(
+            trusted_root,
+            lock_file,
+            timeout_seconds=timeout_seconds,
+            retry_seconds=_LOCK_RETRY_SECONDS,
+        ) as root_lease:
+            yield root_lease
+    except StableFileLockTimeoutError as exc:
+        raise SourceRegistryLockError(
+            f"timed out waiting for source registry lock: {lock_file}"
+        ) from exc
+    except StableFileAccessError as exc:
+        raise SourceRegistryLockError(
+            f"could not acquire secure source registry lock {lock_file}: {exc}"
+        ) from exc
+
+
+def _write_registry_payload(
+    path: Path,
+    payload: bytes,
+    *,
+    trusted_root: Path,
+    root_lease: StableDirectoryLease,
+) -> StableFileWriteResult:
+    try:
+        result = write_atomic_stable_file(
+            trusted_root,
+            path,
+            payload,
+            root_lease=root_lease,
+        )
+    except StableFileCommitUnknownError as exc:
+        raise SourceRegistryCommitStateError(
+            f"source registry replacement commit state is unknown for {path}: {exc}",
+            commit_state="unknown",
+        ) from exc
+    except StableFileAccessError as exc:
+        raise SourceRegistryError(
+            f"could not securely write source registry {path}: {exc}"
+        ) from exc
+    if result.commit_state == "committed-durability-unknown":
+        raise SourceRegistryCommitStateError(
+            f"source registry replacement is visible but durability is unknown: {path}",
+            commit_state=result.commit_state,
+        )
+    return result
 
 
 def _write_registry_atomic(
     registry: SourceRegistry,
     *,
     trusted_root: Path,
-) -> bool:
-    path = registry.sources_file
-    payload = registry.serialized_bytes()
-    try:
-        return write_atomic_stable_file(trusted_root, path, payload)
-    except StableFileAccessError as exc:
-        raise SourceRegistryError(
-            f"could not securely write source registry {path}: {exc}"
-        ) from exc
+    root_lease: StableDirectoryLease,
+) -> StableFileWriteResult:
+    return _write_registry_payload(
+        registry.sources_file,
+        registry.serialized_bytes(),
+        trusted_root=trusted_root,
+        root_lease=root_lease,
+    )
 
 
 @contextmanager
@@ -1327,18 +1374,19 @@ def record_source_relocation(
     )
     sources_file = registration.layout.sources_file
     lock_file = sources_file.with_name(f"{sources_file.name}.lock")
-    sources_file.parent.mkdir(parents=True, exist_ok=True)
-
     with _exclusive_registry_lock(
+        registration.layout.machine_root,
         lock_file,
         timeout_seconds=lock_timeout_seconds,
-    ):
-        registry = _load_source_registry_file(
+    ) as root_lease:
+        registry, preimage = _load_source_registry_file_with_payload(
             sources_file,
             trusted_root=registration.layout.machine_root,
             project_id=registration.project_id,
             missing_ok=False,
+            root_lease=root_lease,
         )
+        assert preimage is not None
         try:
             record = registry.by_source_id[normalized_id]
         except KeyError as exc:
@@ -1406,29 +1454,116 @@ def record_source_relocation(
                 sources_file=sources_file,
                 records=records,
             )
+            updated_payload = updated_registry.serialized_bytes()
             candidate_lease.revalidate()
-            wrote_registry = _write_registry_atomic(
-                updated_registry,
-                trusted_root=registration.layout.machine_root,
-            )
+            pending_commit_state: str | None = None
+            try:
+                write_result = _write_registry_atomic(
+                    updated_registry,
+                    trusted_root=registration.layout.machine_root,
+                    root_lease=root_lease,
+                )
+                wrote_registry = write_result.wrote
+            except SourceRegistryCommitStateError as commit_exc:
+                try:
+                    current_payload = _read_registry_payload(
+                        sources_file,
+                        trusted_root=registration.layout.machine_root,
+                        root_lease=root_lease,
+                    )
+                except SourceRegistryError as read_exc:
+                    raise SourceRegistryCommitStateError(
+                        "source relocation replacement commit state could not be "
+                        f"reconciled by an exact registry read: {read_exc}",
+                        commit_state="unknown",
+                    ) from read_exc
+                if current_payload == preimage:
+                    raise SourceRegistryCommitStateError(
+                        "source relocation replacement did not persist",
+                        commit_state="not-committed",
+                    ) from commit_exc
+                if current_payload != updated_payload:
+                    raise SourceRegistryCommitStateError(
+                        "source relocation replacement left unknown registry bytes; "
+                        "no rollback was attempted",
+                        commit_state="unknown",
+                    ) from commit_exc
+                wrote_registry = True
+                pending_commit_state = commit_exc.commit_state
+
             try:
                 candidate_lease.revalidate()
             except StableFileAccessError as exc:
-                try:
-                    _write_registry_atomic(
-                        registry,
-                        trusted_root=registration.layout.machine_root,
-                    )
-                except SourceRegistryError as rollback_exc:
+                current_payload = _read_registry_payload(
+                    sources_file,
+                    trusted_root=registration.layout.machine_root,
+                    root_lease=root_lease,
+                )
+                if current_payload != updated_payload:
                     raise SourceRegistryConflictError(
-                        "recovered source changed while the relocation binding was "
-                        "being committed, and the previous source registry could not "
-                        f"be restored: {rollback_exc}"
+                        "recovered source changed after relocation commit, but exact "
+                        "CAS rollback was refused because the registry no longer equals "
+                        "this transaction's updated payload"
+                    ) from exc
+                try:
+                    _write_registry_payload(
+                        sources_file,
+                        preimage,
+                        trusted_root=registration.layout.machine_root,
+                        root_lease=root_lease,
+                    )
+                except SourceRegistryCommitStateError as rollback_exc:
+                    try:
+                        restored_payload = _read_registry_payload(
+                            sources_file,
+                            trusted_root=registration.layout.machine_root,
+                            root_lease=root_lease,
+                        )
+                    except SourceRegistryError as read_exc:
+                        raise SourceRegistryCommitStateError(
+                            "relocation rollback commit state is unknown and the "
+                            f"registry could not be re-read: {read_exc}",
+                            commit_state="unknown",
+                        ) from read_exc
+                    if restored_payload == preimage:
+                        raise SourceRegistryCommitStateError(
+                            "recovered source changed during relocation; the previous "
+                            "registry is visible again but rollback durability is unknown",
+                            commit_state=rollback_exc.commit_state,
+                        ) from rollback_exc
+                    if restored_payload == updated_payload:
+                        raise SourceRegistryCommitStateError(
+                            "recovered source changed during relocation and rollback did "
+                            "not persist",
+                            commit_state="not-committed",
+                        ) from rollback_exc
+                    raise SourceRegistryCommitStateError(
+                        "recovered source changed during relocation and rollback left "
+                        "unknown registry bytes",
+                        commit_state="unknown",
                     ) from rollback_exc
+                restored_payload = _read_registry_payload(
+                    sources_file,
+                    trusted_root=registration.layout.machine_root,
+                    root_lease=root_lease,
+                )
+                if restored_payload != preimage:
+                    raise SourceRegistryConflictError(
+                        "recovered source changed during relocation and exact rollback "
+                        "verification failed"
+                    ) from exc
                 raise SourceRegistryConflictError(
                     "recovered source changed while the relocation binding was being "
-                    "committed; the previous source registry was restored"
+                    "committed; exact CAS rollback restored and verified the previous "
+                    "source registry"
                 ) from exc
+
+            if pending_commit_state is not None:
+                raise SourceRegistryCommitStateError(
+                    "source relocation registry is visible and the candidate remains "
+                    "current, but replacement durability is not fully confirmed",
+                    commit_state=pending_commit_state,
+                )
 
     return SourceRegistryRelocationResult(
         project_id=registration.project_id,
@@ -1485,17 +1620,17 @@ def sync_source_registry(
     observations = _manifest_observations(manifest)
     sources_file = registration.layout.sources_file
     lock_file = sources_file.with_name(f"{sources_file.name}.lock")
-    sources_file.parent.mkdir(parents=True, exist_ok=True)
-
     with _exclusive_registry_lock(
+        registration.layout.machine_root,
         lock_file,
         timeout_seconds=lock_timeout_seconds,
-    ):
+    ) as root_lease:
         registry = _load_source_registry_file(
             sources_file,
             trusted_root=registration.layout.machine_root,
             project_id=registration.project_id,
             missing_ok=True,
+            root_lease=root_lease,
         )
         if registry.max_scan_generation > manifest.scan_generation:
             raise SourceRegistryConflictError(
@@ -1542,10 +1677,12 @@ def sync_source_registry(
                 sorted(records_by_id.values(), key=lambda item: item.source_id)
             ),
         )
-        wrote_registry = _write_registry_atomic(
+        write_result = _write_registry_atomic(
             updated_registry,
             trusted_root=registration.layout.machine_root,
+            root_lease=root_lease,
         )
+        wrote_registry = write_result.wrote
 
     return SourceRegistrySyncResult(
         project_id=registration.project_id,

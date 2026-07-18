@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,10 +15,13 @@ from tools.stable_file_access import (
     StableFileAccessError,
     StableFileBoundaryError,
     StableFileChangedError,
+    StableFileCommitUnknownError,
+    StableFileLockTimeoutError,
     StableFileMissingError,
     StableFileRedirectionError,
     StableFileTypeError,
     StableFileVerificationUnavailableError,
+    exclusive_stable_file_lock,
     lease_stable_regular_file,
     read_stable_regular_file,
     write_atomic_stable_file,
@@ -349,6 +354,162 @@ class StableFileAccessTests(unittest.TestCase):
             self.assertIsNone(error)
             self.assertTrue(wrote)
             self.assertEqual(target.read_bytes(), b"new registry\n")
+
+    def test_atomic_write_pins_root_against_ordinary_directory_replacement(self) -> None:
+        target = self.source
+        displaced = self.root / "trusted-displaced-ordinary"
+        replacement_payload = b"replacement-root sentinel\n"
+        new_payload = b"new registry bytes\n"
+        real_write_all = stable_file_access_module._write_all
+        attack_attempted = False
+        attack_succeeded = False
+
+        def write_while_replacing_root(descriptor: int, payload: bytes) -> None:
+            nonlocal attack_attempted, attack_succeeded
+            if not attack_attempted:
+                attack_attempted = True
+                try:
+                    self.trusted.rename(displaced)
+                except OSError:
+                    pass
+                else:
+                    self.trusted.mkdir()
+                    (self.trusted / target.name).write_bytes(replacement_payload)
+                    attack_succeeded = True
+            real_write_all(descriptor, payload)
+
+        error: StableFileAccessError | None = None
+        result = None
+        replacement_observed: bytes | None = None
+        try:
+            with patch(
+                "tools.stable_file_access._write_all",
+                side_effect=write_while_replacing_root,
+            ):
+                try:
+                    result = write_atomic_stable_file(
+                        self.trusted,
+                        target,
+                        new_payload,
+                    )
+                except StableFileAccessError as exc:
+                    error = exc
+            if attack_succeeded:
+                replacement_observed = (self.trusted / target.name).read_bytes()
+        finally:
+            if attack_succeeded:
+                shutil.rmtree(self.trusted)
+                displaced.rename(self.trusted)
+
+        self.assertTrue(attack_attempted)
+        if attack_succeeded:
+            self.assertIsNotNone(error)
+            self.assertEqual(replacement_observed, replacement_payload)
+            self.assertEqual(target.read_bytes(), self.payload)
+        else:
+            self.assertIsNone(error)
+            self.assertIsNotNone(result)
+            self.assertTrue(result)
+            self.assertEqual(target.read_bytes(), new_payload)
+
+    def test_post_replace_verification_failure_is_explicitly_commit_unknown(self) -> None:
+        replacement = b"replacement became visible\n"
+        real_assert_same_identity = stable_file_access_module._assert_same_identity
+
+        def fail_after_replacement(opened, current, *, target: Path) -> None:
+            if target == self.source and self.source.read_bytes() == replacement:
+                raise StableFileChangedError("forced post-replace verification failure")
+            real_assert_same_identity(opened, current, target=target)
+
+        with patch.object(
+            stable_file_access_module,
+            "_assert_same_identity",
+            side_effect=fail_after_replacement,
+        ):
+            with self.assertRaises(StableFileCommitUnknownError):
+                write_atomic_stable_file(self.trusted, self.source, replacement)
+
+        self.assertEqual(self.source.read_bytes(), replacement)
+
+    def test_persistent_lock_serializes_holders_and_remains_on_disk(self) -> None:
+        lock_file = self.trusted / "registry.lock"
+        ready = threading.Event()
+        release = threading.Event()
+        holder_error: list[BaseException] = []
+
+        def hold_lock() -> None:
+            try:
+                with exclusive_stable_file_lock(
+                    self.trusted,
+                    lock_file,
+                    timeout_seconds=1.0,
+                ):
+                    ready.set()
+                    release.wait(timeout=5.0)
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                holder_error.append(exc)
+                ready.set()
+
+        holder = threading.Thread(target=hold_lock, daemon=True)
+        holder.start()
+        self.assertTrue(ready.wait(timeout=2.0), "lock holder did not start")
+        try:
+            self.assertEqual(holder_error, [])
+            with self.assertRaises(StableFileLockTimeoutError):
+                with exclusive_stable_file_lock(
+                    self.trusted,
+                    lock_file,
+                    timeout_seconds=0.02,
+                    retry_seconds=0.005,
+                ):
+                    self.fail("contended lock must not be yielded")
+        finally:
+            release.set()
+            holder.join(timeout=2.0)
+        self.assertFalse(holder.is_alive())
+        self.assertEqual(holder_error, [])
+        with exclusive_stable_file_lock(
+            self.trusted,
+            lock_file,
+            timeout_seconds=1.0,
+        ):
+            self.assertTrue(lock_file.is_file())
+        self.assertTrue(lock_file.is_file())
+
+    @unittest.skipUnless(os.name == "nt", "Windows share-mode contract")
+    def test_windows_atomic_temporary_denies_concurrent_writable_open(self) -> None:
+        descriptor, temporary_path = stable_file_access_module._create_windows_temporary(
+            self.trusted
+        )
+        try:
+            with self.assertRaises(OSError):
+                with temporary_path.open("r+b"):
+                    pass
+        finally:
+            os.close(descriptor)
+            temporary_path.unlink(missing_ok=True)
+
+    @unittest.skipUnless(os.name == "nt", "Windows share-mode contract")
+    def test_windows_stable_lease_denies_write_replace_and_delete(self) -> None:
+        replacement = self.trusted / "replacement.txt"
+        replacement.write_bytes(b"replacement\n")
+
+        with lease_stable_regular_file(
+            self.trusted,
+            self.source,
+            reject_redirection=True,
+        ) as lease:
+            with self.assertRaises(OSError):
+                with self.source.open("r+b"):
+                    pass
+            with self.assertRaises(OSError):
+                os.replace(replacement, self.source)
+            with self.assertRaises(OSError):
+                self.source.unlink()
+            lease.revalidate()
+
+        self.assertEqual(self.source.read_bytes(), self.payload)
+        self.assertEqual(replacement.read_bytes(), b"replacement\n")
 
     def test_real_symlink_escape_is_rejected_when_available(self) -> None:
         outside = self.root / "outside.txt"

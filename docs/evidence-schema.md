@@ -144,7 +144,7 @@ Example Evidence row:
 
 The loader rejects malformed UTF-8 or JSON, duplicate JSON keys, non-finite values, missing/legacy/future Schema versions, unknown fields, unsupported artifact versions, invalid IDs or hashes, noncanonical row order, duplicate IDs, count mismatches, unknown sources, unrecorded source versions, and source-version hash mismatches. It also opens `evidence.jsonl` through a stable descriptor beneath the registered project machine-state root, rejects every symbolic-link/reparse-point component, verifies the descriptor target before reading, and fails closed if the path or file identity changes during the read.
 
-Writers use an adjacent exclusive lock, reload both source and Evidence state under the lock, and atomically replace `evidence.jsonl` from the same directory. Concurrent identical registrations produce one record. Source-project paths and bytes are never modified.
+Writers use an operating-system exclusive lock on the persistent adjacent `evidence.jsonl.lock`. One pinned machine-state-root lease spans lock acquisition, under-lock Source/Evidence reloads, and atomic replacement of the direct-child `evidence.jsonl`; lock-file existence is not treated as ownership. Concurrent identical registrations produce one record. Root, lock, or registry redirection fails closed. Post-replace visibility uncertainty and visible-but-not-fully-durable replacement are exposed as explicit Evidence commit-state errors rather than false success. Source-project paths and bytes are never modified.
 
 ## Explicit non-goals
 

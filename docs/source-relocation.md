@@ -116,14 +116,22 @@ fails the same project-boundary and exact-hash checks used by other groups.
 
 ## Registry transaction and concurrency
 
-`record_source_relocation(...)` owns the only persistence path. Under the
-existing `sources.jsonl.lock`, it reloads current state and verifies the expected
-source ID, current path/version/hash, final candidate boundary, regular-file
-status, stable bytes, and SHA-256. It retains that candidate descriptor across the
-registry replacement, re-hashes it immediately before and after the commit, and
-atomically restores the previous registry if post-commit identity/path/hash
-verification fails. A changed candidate therefore never produces a successful
-relocation binding.
+`record_source_relocation(...)` owns the only persistence path. It pins the
+project machine-state root, acquires an operating-system exclusive lock on the
+persistent `sources.jsonl.lock`, and reuses that same root lease for reload,
+replacement, and rollback. It verifies the expected source ID, current
+path/version/hash, final candidate boundary, regular-file status, stable bytes,
+and SHA-256. The candidate descriptor is retained across replacement and re-hashed
+immediately before and after the commit.
+
+If post-commit candidate verification fails, rollback is exact compare-and-swap:
+the registry must still equal the attempted replacement before Core may restore
+the **actual bytes read** as the pre-commit registry preimage. Foreign concurrent
+bytes are never overwritten, and an accepted rollback is re-read and verified
+byte-for-byte. A changed candidate therefore never produces a successful
+relocation binding. Post-replace visibility uncertainty and visible-but-not-fully-
+durable replacement or rollback states surface as explicit commit-state errors;
+they are not collapsed into an ordinary no-write failure.
 
 Relocation preserves:
 

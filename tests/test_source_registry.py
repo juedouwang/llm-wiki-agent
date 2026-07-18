@@ -6,12 +6,17 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from tools import source_registry as source_registry_module
 from tools import stable_file_access as stable_file_access_module
+from tools.stable_file_access import (
+    StableFileCommitUnknownError,
+    exclusive_stable_file_lock,
+)
 from tools.project_inventory import inventory_project
 from tools.project_registry import register_project
 from tools.source_registry import (
@@ -20,6 +25,7 @@ from tools.source_registry import (
     SOURCE_REGISTRY_SCHEMA_VERSION,
     SOURCE_REGISTRY_VERSION,
     SOURCE_VERSION_HASH_ALGORITHM,
+    SourceRegistryCommitStateError,
     SourceRegistryError,
     SourceRegistryLockError,
     load_source_registry,
@@ -323,10 +329,10 @@ class SourceRegistryTests(unittest.TestCase):
         self.assertEqual(len(registry.records), self.inventory.record_counts["file"])
         self.assertEqual(len(registry.by_path), len(registry.records))
         self.assertEqual(len(registry.by_source_id), len(registry.records))
-        self.assertFalse(
+        self.assertTrue(
             self.registration.layout.sources_file.with_name(
                 "sources.jsonl.lock"
-            ).exists()
+            ).is_file()
         )
         self.assertEqual(before_source, self.source_snapshot())
 
@@ -612,9 +618,6 @@ class SourceRegistryTests(unittest.TestCase):
                 machine_root.unlink()
             if displaced.exists():
                 displaced.rename(machine_root)
-            self.registration.layout.sources_file.with_name(
-                "sources.jsonl.lock"
-            ).unlink(missing_ok=True)
 
         self.assertTrue(attack_attempted)
         self.assertEqual(outside_registry.read_bytes(), registry_sentinel)
@@ -644,17 +647,78 @@ class SourceRegistryTests(unittest.TestCase):
         lock_file = self.registration.layout.sources_file.with_name(
             "sources.jsonl.lock"
         )
-        lock_payload = b"another-writer\n"
-        lock_file.write_bytes(lock_payload)
+        ready = threading.Event()
+        release = threading.Event()
+        holder_error: list[BaseException] = []
 
-        with self.assertRaises(SourceRegistryLockError):
-            sync_source_registry(
+        def hold_lock() -> None:
+            try:
+                with exclusive_stable_file_lock(
+                    self.registration.layout.machine_root,
+                    lock_file,
+                    timeout_seconds=1.0,
+                ):
+                    ready.set()
+                    release.wait(timeout=5.0)
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                holder_error.append(exc)
+                ready.set()
+
+        holder = threading.Thread(target=hold_lock, daemon=True)
+        holder.start()
+        self.assertTrue(ready.wait(timeout=2.0), "lock holder did not start")
+        try:
+            self.assertEqual(holder_error, [])
+            with self.assertRaises(SourceRegistryLockError):
+                sync_source_registry(
+                    self.workspace,
+                    self.registration.project_id,
+                    lock_timeout_seconds=0.02,
+                )
+        finally:
+            release.set()
+            holder.join(timeout=2.0)
+        self.assertFalse(holder.is_alive())
+        self.assertEqual(holder_error, [])
+        self.assertEqual(self.registration.layout.sources_file.read_bytes(), registry_before)
+        self.assertTrue(lock_file.is_file())
+
+    def test_post_replace_unknown_is_reported_with_explicit_commit_state(self) -> None:
+        sync_source_registry(self.workspace, self.registration.project_id)
+        (self.project / "added.txt").write_text(
+            "added after first registry commit\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        inventory_project(self.workspace, self.registration.project_id)
+        real_write = source_registry_module.write_atomic_stable_file
+
+        def commit_then_report_unknown(*args, **kwargs):
+            result = real_write(*args, **kwargs)
+            self.assertTrue(result.wrote)
+            raise StableFileCommitUnknownError("forced post-replace uncertainty")
+
+        with patch.object(
+            source_registry_module,
+            "write_atomic_stable_file",
+            side_effect=commit_then_report_unknown,
+        ):
+            with self.assertRaises(SourceRegistryCommitStateError) as raised:
+                sync_source_registry(self.workspace, self.registration.project_id)
+
+        self.assertEqual(raised.exception.commit_state, "unknown")
+        self.assertIn(
+            "added.txt",
+            load_source_registry(
                 self.workspace,
                 self.registration.project_id,
-                lock_timeout_seconds=0.02,
-            )
-        self.assertEqual(self.registration.layout.sources_file.read_bytes(), registry_before)
-        self.assertEqual(lock_file.read_bytes(), lock_payload)
+            ).current_by_path,
+        )
+        self.assertTrue(
+            self.registration.layout.sources_file.with_name(
+                "sources.jsonl.lock"
+            ).is_file()
+        )
 
     def test_source_sync_cli_json_is_parseable(self) -> None:
         completed = subprocess.run(

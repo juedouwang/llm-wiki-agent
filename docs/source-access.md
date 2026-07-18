@@ -47,11 +47,13 @@ registry, and resolve the recovered path. Ambiguous recovery fails explicitly.
 `open_source` opens the lexical project path once, verifies the opened
 descriptor's final target remains inside the registered project **before reading
 any bytes**, hashes and reads through that same descriptor, and rejects path or
-file-identity changes during the read. It refuses to extract a locator unless
-the stable bytes still match the source registry's current content hash. A read
-or content mismatch may trigger one D-05 recovery attempt and one retry. Optional
-expected content and excerpt hashes still require the requested current identity
-and exact excerpt; recovery does not weaken them.
+file-identity changes during the read. On Windows that descriptor shares read
+access only, preventing concurrent writable opens, replacement, and deletion for
+its lifetime. It refuses to extract a locator unless the stable bytes still match
+the source registry's current content hash. A read or content mismatch may trigger
+one D-05 recovery attempt and one retry. Optional expected content and excerpt
+hashes still require the requested current identity and exact excerpt; recovery
+does not weaken them.
 
 `recover_relocation` defaults to `True` for compatibility with D-05. It is a
 write-authorization boundary and therefore accepts only a literal boolean;
@@ -166,7 +168,9 @@ and Office formats outside C-06 are not opened by D-04.
 
 - Source projects are read-only. D-04/D-05 write no source bytes, metadata, or
   timestamps. D-05 may atomically update only the local source registry after a
-  unique verified relocation.
+  unique verified relocation. That transaction retains one pinned machine-state
+  root and persistent OS lock across registry load, commit, and exact-CAS rollback;
+  uncertain post-replace states are reported rather than guessed.
 - All source content remains local. There are no LLM, MCP, Hook, Web, network,
   or external-provider calls.
 - Machine records remain under `.llmwiki/projects/<project_id>/`; D-04 does not

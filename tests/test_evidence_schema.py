@@ -21,6 +21,7 @@ from tools.evidence_registry import (
     EVIDENCE_SCHEMA_VERSION,
     EVIDENCE_VERSION,
     EXCERPT_TEXT_ENCODING,
+    EvidenceCommitStateError,
     EvidenceConflictError,
     EvidenceError,
     EvidenceMismatchError,
@@ -601,7 +602,6 @@ class EvidenceSchemaTests(unittest.TestCase):
                 machine_root.unlink()
             if displaced.exists():
                 displaced.rename(machine_root)
-            evidence_file.with_name("evidence.jsonl.lock").unlink(missing_ok=True)
 
         self.assertTrue(attack_attempted)
         self.assertEqual(outside_registry.read_bytes(), registry_sentinel)
@@ -623,6 +623,36 @@ class EvidenceSchemaTests(unittest.TestCase):
                 ),
                 2,
             )
+
+    def test_post_replace_unknown_is_reported_with_explicit_commit_state(self) -> None:
+        real_write = evidence_registry_module.write_atomic_stable_file
+
+        def commit_then_report_unknown(*args, **kwargs):
+            result = real_write(*args, **kwargs)
+            self.assertTrue(result.wrote)
+            raise stable_file_access_module.StableFileCommitUnknownError(
+                "forced post-replace uncertainty"
+            )
+
+        with mock.patch.object(
+            evidence_registry_module,
+            "write_atomic_stable_file",
+            side_effect=commit_then_report_unknown,
+        ):
+            with self.assertRaises(EvidenceCommitStateError) as raised:
+                self.register()
+
+        self.assertEqual(raised.exception.commit_state, "unknown")
+        registry = load_evidence_registry(
+            self.workspace,
+            self.registration.project_id,
+        )
+        self.assertEqual(len(registry.records), 1)
+        self.assertTrue(
+            self.registration.layout.evidence_file.with_name(
+                "evidence.jsonl.lock"
+            ).is_file()
+        )
 
     def test_missing_registry_and_invalid_excerpt_types_fail_closed(self) -> None:
         with self.assertRaises(EvidenceError):
