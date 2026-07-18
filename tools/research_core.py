@@ -14,10 +14,15 @@ import hashlib
 from pathlib import Path, PurePosixPath
 import re
 import unicodedata
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 # Support both ``import tools.research_core`` and direct sibling imports.
 if __package__:
+    from .controlled_markdown import ControlledMarkdownUpdatePlan
+    from .controlled_markdown_persistence import (
+        ControlledMarkdownWriteAuthorization,
+        TrustedHostSessionContext,
+    )
     from .coverage_report import (
         COVERAGE_REPORT_KIND,
         COVERAGE_REPORT_SCHEMA_VERSION,
@@ -72,6 +77,7 @@ if __package__:
         RunObservation,
         generate_experiment_chains,
     )
+    from .knowledge_renderer import KnowledgeRenderingResult
     from .project_map import ProjectMapResult, generate_project_map
     from .project_orchestrator import (
         ProjectRunOrchestrator,
@@ -187,6 +193,11 @@ else:
         open_evidence,
         open_source,
     )
+    # E-07 imports are intentionally lazy in sibling-script mode.
+    ControlledMarkdownUpdatePlan = Any
+    ControlledMarkdownWriteAuthorization = Any
+    TrustedHostSessionContext = Any
+    KnowledgeRenderingResult = Any
 
 
 def _sha256_file(path: Path) -> str:
@@ -961,6 +972,59 @@ class ResearchCoreService:
             project_id=project_id,
             observations=observations,
         )
+
+    def knowledge_render(
+        self,
+        project_id: str,
+        *,
+        rendered_at: object | None = None,
+        plan_date: object | None = None,
+        rendering_data: Mapping[str, Any] | None = None,
+        host_data: Mapping[str, Any] | None = None,
+        machine_artifacts: Mapping[str, Mapping[str, Any] | None] | None = None,
+        persist: bool = True,
+        host_context: TrustedHostSessionContext | None = None,
+        decision_id_prefix: str | None = None,
+        decision_id: str | None = None,
+        authorized_at: object | None = None,
+        authorization_factory: Callable[
+            [ControlledMarkdownUpdatePlan], ControlledMarkdownWriteAuthorization
+        ]
+        | None = None,
+    ) -> KnowledgeRenderingResult:
+        """Render the complete E-07 Knowledge Schema v2 package.
+
+        Persistence remains bound to F-05A planning and F-05B host authorization;
+        the facade adds no alternate Markdown write path.
+        """
+
+        if __package__:
+            from .knowledge_renderer import render_project_knowledge
+        else:
+            import sys
+
+            repo_root = str(Path(__file__).resolve().parent.parent)
+            if repo_root not in sys.path:
+                sys.path.insert(0, repo_root)
+            from tools.knowledge_renderer import render_project_knowledge
+
+        return render_project_knowledge(
+            self.workspace_root,
+            project_id,
+            rendered_at=rendered_at,
+            plan_date=plan_date,
+            rendering_data=rendering_data,
+            host_data=host_data,
+            machine_artifacts=machine_artifacts,
+            persist=persist,
+            host_context=host_context,
+            decision_id_prefix=decision_id_prefix,
+            decision_id=decision_id,
+            authorized_at=authorized_at,
+            authorization_factory=authorization_factory,
+        )
+
+    render_knowledge = knowledge_render
 
     def coverage_view(self, project_id: str) -> HostCoverageResult:
         """Generate coverage and return its path-free host representation."""
