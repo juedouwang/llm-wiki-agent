@@ -51,6 +51,12 @@ if __package__:
         HierarchicalUnderstandingResult,
         generate_hierarchical_understanding,
     )
+    from .execution_flow import (
+        ExecutionFlowResult,
+        FlowEdgeObservation,
+        FlowNodeObservation,
+        generate_execution_flow,
+    )
     from .project_map import ProjectMapResult, generate_project_map
     from .project_orchestrator import (
         ProjectRunOrchestrator,
@@ -111,6 +117,12 @@ else:
         ChunkObservation,
         HierarchicalUnderstandingResult,
         generate_hierarchical_understanding,
+    )
+    from execution_flow import (  # type: ignore[no-redef]
+        ExecutionFlowResult,
+        FlowEdgeObservation,
+        FlowNodeObservation,
+        generate_execution_flow,
     )
     from project_map import (  # type: ignore[no-redef]
         ProjectMapResult,
@@ -866,6 +878,20 @@ class ResearchCoreService:
         """Generate bounded E-03 chunk/file/module/project understanding."""
 
         return generate_hierarchical_understanding(
+            workspace_root=self.workspace_root,
+            project_id=project_id,
+            observations=observations,
+        )
+
+    def execution_flow(
+        self,
+        project_id: str,
+        *,
+        observations: Iterable[FlowNodeObservation | FlowEdgeObservation | dict[str, Any]] = (),
+    ) -> ExecutionFlowResult:
+        """Generate the bounded E-04 execution-flow machine artifact."""
+
+        return generate_execution_flow(
             workspace_root=self.workspace_root,
             project_id=project_id,
             observations=observations,

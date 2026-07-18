@@ -50,7 +50,7 @@ New research-project features must keep machine state and human-readable knowled
 wiki/projects/<project_id>/       # curated Markdown knowledge for people and agents
 ```
 
-The machine-state tree uses `project.yaml`, `manifest.jsonl`, `sources.jsonl`, `extracted/`, `indexes/` (including B-07 `reading-priority.json`, E-02 `project-map.json`, and E-03 `hierarchical-understanding.json`), and `runs/`. The canonical curated directory tree uses `papers/`, `methods/`, `datasets/`, `experiments/`, `results/`, `claims/`, `plans/` (including `plans/daily/`), `decisions/`, and `sources/`. Registration and layout initialization create only this empty directory skeleton; later tasks own Markdown singleton and collection pages.
+The machine-state tree uses `project.yaml`, `manifest.jsonl`, `sources.jsonl`, `extracted/`, `indexes/` (including B-07 `reading-priority.json`, E-02 `project-map.json`, E-03 `hierarchical-understanding.json`, and E-04 `execution-flow.json`), and `runs/`. The canonical curated directory tree uses `papers/`, `methods/`, `datasets/`, `experiments/`, `results/`, `claims/`, `plans/` (including `plans/daily/`), `decisions/`, and `sources/`. Registration and layout initialization create only this empty directory skeleton; later tasks own Markdown singleton and collection pages.
 
 Rules:
 1. New structured machine records, including `project.yaml` and JSON/JSONL files, must carry `schema_version`.

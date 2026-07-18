@@ -409,6 +409,12 @@ class ProjectLayout:
         return self.indexes_dir / "hierarchical-understanding.json"
 
     @property
+    def execution_flow_file(self) -> Path:
+        """E-04 deterministic execution-flow machine artifact."""
+
+        return self.indexes_dir / "execution-flow.json"
+
+    @property
     def machine_state_lock_file(self) -> Path:
         """Stable advisory lock shared by per-project machine-state mutations."""
 
