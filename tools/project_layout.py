@@ -409,6 +409,12 @@ class ProjectLayout:
         return self.indexes_dir / "hierarchical-understanding.json"
 
     @property
+    def research_linkage_file(self) -> Path:
+        """E-05 paper/method/dataset/implementation linkage artifact."""
+
+        return self.indexes_dir / "research-linkage.json"
+
+    @property
     def execution_flow_file(self) -> Path:
         """E-04 deterministic execution-flow machine artifact."""
 

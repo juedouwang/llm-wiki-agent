@@ -50,7 +50,7 @@ New research-project features must keep machine state and human-readable knowled
 wiki/projects/<project_id>/       # curated Markdown knowledge for people and agents
 ```
 
-The machine-state tree uses `project.yaml`, `manifest.jsonl`, `sources.jsonl`, `extracted/`, `indexes/` (including B-07 `reading-priority.json`, E-02 `project-map.json`, E-03 `hierarchical-understanding.json`, and E-04 `execution-flow.json`), and `runs/`. The canonical curated directory tree uses `papers/`, `methods/`, `datasets/`, `experiments/`, `results/`, `claims/`, `plans/` (including `plans/daily/`), `decisions/`, and `sources/`. Registration and layout initialization create only this empty directory skeleton; later tasks own Markdown singleton and collection pages.
+The machine-state tree uses `project.yaml`, `manifest.jsonl`, `sources.jsonl`, `extracted/`, `indexes/` (including B-07 `reading-priority.json`, E-02 `project-map.json`, E-03 `hierarchical-understanding.json`, E-04 `execution-flow.json`, and E-05 `research-linkage.json`), and `runs/`. The canonical curated directory tree uses `papers/`, `methods/`, `datasets/`, `experiments/`, `results/`, `claims/`, `plans/` (including `plans/daily/`), `decisions/`, and `sources/`. Registration and layout initialization create only this empty directory skeleton; later tasks own Markdown singleton and collection pages.
 
 Rules:
 1. New structured machine records, including `project.yaml` and JSON/JSONL files, must carry `schema_version`.
@@ -101,6 +101,21 @@ LLM. With no observations it records an explicit Manifest-metadata-only fallback
 Consumers must use `load_current_hierarchical_understanding(...)` before acting
 on the machine artifact. E-03 writes no curated Markdown and adds no CLI, MCP,
 Hook, or Web operation. See `docs/hierarchical-understanding.md`.
+
+Generate bounded E-05 research linkage with
+`ResearchCoreService.research_linkage(project_id, observations=...)`. The host
+explicitly supplies paper, method, innovation, dataset, implementation, claim,
+experiment, and result entities plus directed research relations. Core keeps
+implementation, paper-claim, inference, and metadata provenance classes
+separate, rejects host inference labelled as observed, validates duplicate-free
+Evidence IDs and current Manifest path bindings, and reports unresolved
+paper/method/relation gaps. Without semantic observations it emits a
+Manifest-metadata-only candidate inventory and never invents semantic links.
+Consumers must use `load_current_research_linkage(...)` before acting on the
+artifact. E-05 writes only Schema v1
+`.llmwiki/projects/<project_id>/indexes/research-linkage.json`, does not open
+registered source bytes, call an LLM, write curated Markdown, extract research
+binaries, or send anything externally. See `docs/research-linkage.md`.
 
 Prioritize a current B-06 Manifest with:
 

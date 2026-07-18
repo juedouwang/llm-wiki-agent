@@ -57,6 +57,12 @@ if __package__:
         FlowNodeObservation,
         generate_execution_flow,
     )
+    from .research_linkage import (
+        ResearchEntityObservation,
+        ResearchLinkageResult,
+        ResearchRelationObservation,
+        generate_research_linkage,
+    )
     from .project_map import ProjectMapResult, generate_project_map
     from .project_orchestrator import (
         ProjectRunOrchestrator,
@@ -123,6 +129,12 @@ else:
         FlowEdgeObservation,
         FlowNodeObservation,
         generate_execution_flow,
+    )
+    from research_linkage import (  # type: ignore[no-redef]
+        ResearchEntityObservation,
+        ResearchLinkageResult,
+        ResearchRelationObservation,
+        generate_research_linkage,
     )
     from project_map import (  # type: ignore[no-redef]
         ProjectMapResult,
@@ -892,6 +904,20 @@ class ResearchCoreService:
         """Generate the bounded E-04 execution-flow machine artifact."""
 
         return generate_execution_flow(
+            workspace_root=self.workspace_root,
+            project_id=project_id,
+            observations=observations,
+        )
+
+    def research_linkage(
+        self,
+        project_id: str,
+        *,
+        observations: Iterable[ResearchEntityObservation | ResearchRelationObservation | dict[str, Any]] = (),
+    ) -> ResearchLinkageResult:
+        """Generate the bounded E-05 research-provenance linkage artifact."""
+
+        return generate_research_linkage(
             workspace_root=self.workspace_root,
             project_id=project_id,
             observations=observations,
