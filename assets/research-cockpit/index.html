@@ -136,6 +136,48 @@
           </div>
         </section>
 
+        <section id="editing-section" class="panel editing-panel" aria-labelledby="editing-heading" hidden>
+          <div class="section-heading compact">
+            <div>
+              <p class="section-kicker">F-05 controlled Markdown</p>
+              <h2 id="editing-heading">Controlled edits</h2>
+            </div>
+            <span class="status-chip status-draft">DRAFT ONLY</span>
+          </div>
+          <p class="editing-boundary">
+            Edit only the protected user region of one fixed page. Generated Markdown,
+            frontmatter, markers, and every other page remain protected.
+          </p>
+          <div class="editing-grid">
+            <div>
+              <p class="search-label">Fixed targets</p>
+              <div id="edit-target-list" class="edit-target-list" role="list"></div>
+            </div>
+            <form id="edit-form" class="edit-form">
+              <div class="edit-form-heading">
+                <div>
+                  <p id="edit-target-path" class="section-kicker">Choose a target</p>
+                  <h3 id="edit-target-title">Protected user region</h3>
+                </div>
+                <span id="edit-target-status" class="status-chip status-draft">DRAFT</span>
+              </div>
+              <label class="edit-label" for="edit-content">User-maintained Markdown</label>
+              <textarea id="edit-content" class="edit-textarea" rows="12" spellcheck="true" disabled></textarea>
+              <div class="edit-meta">
+                <span id="edit-revision">No revision loaded</span>
+                <span id="edit-updated-at">Updated time unavailable</span>
+              </div>
+              <div id="edit-message" class="edit-message" role="status" aria-live="polite">
+                Select a fixed target to load its exact current revision.
+              </div>
+              <div class="edit-actions">
+                <button id="reload-edit" class="secondary-button" type="button" disabled>Reload target</button>
+                <button id="save-edit" class="primary-button" type="submit" disabled>Save controlled edit</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
         <section class="two-column" aria-label="Runs and content viewer">
           <div class="panel">
             <div class="section-heading compact">

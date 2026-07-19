@@ -1,38 +1,64 @@
 #!/usr/bin/env python3
-"""Loopback-only, read-only product research cockpit.
+"""Loopback-only product research cockpit with optional controlled editing.
 
 This module is deliberately separate from ``tools.development_dashboard``. The
 latter supervises repository development; this module exposes bounded views of
 registered research projects, machine evidence, and curated Knowledge Schema
-pages. It never scans or opens the registered source project and has no
-mutation route.
+pages. J-04 may explicitly enable four fixed mixed-page user-region edits, each
+routed through F-05A/F-05B. It never scans, opens, or writes the registered
+source project and never exposes arbitrary filesystem mutation.
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import ipaddress
 import json
 import os
 import re
+import secrets
 import socket
 import stat
 import sys
 import unicodedata
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
 if __package__:
+    from .controlled_markdown import (
+        ControlledMarkdownError,
+        parse_mixed_markdown_body,
+        plan_controlled_markdown_update,
+    )
+    from .controlled_markdown_persistence import (
+        ControlledMarkdownAuthorizationError,
+        ControlledMarkdownCommitAuditUnknownError,
+        ControlledMarkdownCommitUnknownError,
+        ControlledMarkdownPersistenceError,
+        ControlledMarkdownWriteConflictError,
+        ControlledMarkdownWriteFailedError,
+        ControlledMarkdownWriteRejectedError,
+        TrustedHostSessionContext,
+        bind_controlled_markdown_authorization,
+        persist_controlled_markdown_update,
+    )
     from .coverage_report import build_coverage_report
     from .evidence_registry import EvidenceRegistry, load_evidence_registry
     from .file_classification import classification_from_dict
     from .file_state import file_state_from_dict
-    from .knowledge_artifacts import artifact_contract_for_path, parse_knowledge_page
-    from .knowledge_renderer import PRODUCT_ARTIFACT_SPECS
+    from .knowledge_artifacts import (
+        KNOWLEDGE_SCHEMA_VERSION,
+        artifact_contract_for_path,
+        parse_knowledge_page,
+        serialize_knowledge_frontmatter,
+    )
+    from .knowledge_renderer import MIXED_REGION_IDS, PRODUCT_ARTIFACT_SPECS
     from .project_inventory import (
         PROJECT_MANIFEST_VERSION,
         ProjectManifest,
@@ -56,15 +82,37 @@ else:  # pragma: no cover - direct script execution
     # Keep direct ``python tools/research_cockpit.py`` invocation compatible
     # with sibling modules that import through the repository package.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from tools.controlled_markdown import (  # type: ignore[no-redef]
+        ControlledMarkdownError,
+        parse_mixed_markdown_body,
+        plan_controlled_markdown_update,
+    )
+    from tools.controlled_markdown_persistence import (  # type: ignore[no-redef]
+        ControlledMarkdownAuthorizationError,
+        ControlledMarkdownCommitAuditUnknownError,
+        ControlledMarkdownCommitUnknownError,
+        ControlledMarkdownPersistenceError,
+        ControlledMarkdownWriteConflictError,
+        ControlledMarkdownWriteFailedError,
+        ControlledMarkdownWriteRejectedError,
+        TrustedHostSessionContext,
+        bind_controlled_markdown_authorization,
+        persist_controlled_markdown_update,
+    )
     from tools.coverage_report import build_coverage_report  # type: ignore[no-redef]
     from tools.evidence_registry import EvidenceRegistry, load_evidence_registry  # type: ignore[no-redef]
     from tools.file_classification import classification_from_dict  # type: ignore[no-redef]
     from tools.file_state import file_state_from_dict  # type: ignore[no-redef]
     from tools.knowledge_artifacts import (
+        KNOWLEDGE_SCHEMA_VERSION,
         artifact_contract_for_path,
         parse_knowledge_page,
+        serialize_knowledge_frontmatter,
     )  # type: ignore[no-redef]
-    from tools.knowledge_renderer import PRODUCT_ARTIFACT_SPECS  # type: ignore[no-redef]
+    from tools.knowledge_renderer import (
+        MIXED_REGION_IDS,
+        PRODUCT_ARTIFACT_SPECS,
+    )  # type: ignore[no-redef]
     from tools.project_inventory import (
         PROJECT_MANIFEST_VERSION,
         ProjectManifest,
@@ -106,6 +154,10 @@ MAX_QUERY_CHARS = 4_096
 MAX_QUERY_FIELDS = 8
 MAX_QUERY_KEY_CHARS = 64
 MAX_QUERY_VALUE_CHARS = 2_048
+MAX_EDIT_REQUEST_BYTES = 512 * 1024
+MAX_EDIT_CONTENT_BYTES = 384 * 1024
+EDIT_TOKEN_HEADER = "X-LLMWiki-Edit-Token"
+EDIT_SESSION_PATH = "/api/edit-session"
 
 _STATUS_LABELS = {
     "draft": "DRAFT",
@@ -115,6 +167,41 @@ _STATUS_LABELS = {
     "rejected": "REJECTED",
 }
 _DATE_PLAN_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.md$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+@dataclass(frozen=True)
+class ControlledEditTarget:
+    """One fixed J-04 Web target bound to one mixed-page user region."""
+
+    key: str
+    label: str
+    path: str
+    region_id: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "path": self.path,
+            "region_id": self.region_id,
+        }
+
+
+CONTROLLED_EDIT_TARGETS: tuple[ControlledEditTarget, ...] = (
+    ControlledEditTarget("goal", "Goal", "goals.md", "user-goals"),
+    ControlledEditTarget("backlog", "Task backlog", "plans/backlog.md", "user-backlog"),
+    ControlledEditTarget(
+        "project_status", "Project status", "status.md", "user-status"
+    ),
+    ControlledEditTarget(
+        "user_confirmed_conclusions",
+        "User-confirmed conclusions",
+        "claims/index.md",
+        "user-confirmed-claims",
+    ),
+)
+_EDIT_TARGETS_BY_KEY = {target.key: target for target in CONTROLLED_EDIT_TARGETS}
 
 
 class ResearchCockpitError(RuntimeError):
@@ -131,6 +218,62 @@ class CockpitPathError(ResearchCockpitError):
 
 class CockpitAssetError(ResearchCockpitError):
     """A fixed local asset is missing or unsafe."""
+
+
+class CockpitEditingError(ResearchCockpitError):
+    """Body-free bounded error for the optional controlled-edit surface."""
+
+    reason_code = "controlled-edit-rejected"
+    http_status = 409
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "llmwiki-research-cockpit-edit-rejection",
+            "error": "controlled_edit_rejected",
+            "reason_code": self.reason_code,
+        }
+
+
+class CockpitEditingUnavailable(CockpitEditingError):
+    reason_code = "editing-unavailable"
+    http_status = 405
+
+
+class CockpitEditTargetUnavailable(CockpitEditingError):
+    reason_code = "edit-target-unavailable"
+    http_status = 409
+
+
+class CockpitEditRequestError(CockpitEditingError):
+    reason_code = "invalid-edit-request"
+    http_status = 400
+
+
+class CockpitEditConflict(CockpitEditingError):
+    reason_code = "revision-conflict"
+    http_status = 409
+
+    def __init__(
+        self,
+        *,
+        expected_current_sha256: str | None,
+        observed_current_sha256: str | None,
+    ) -> None:
+        super().__init__("controlled edit revision conflict")
+        self.expected_current_sha256 = expected_current_sha256
+        self.observed_current_sha256 = observed_current_sha256
+
+    def as_dict(self) -> dict[str, Any]:
+        payload = super().as_dict()
+        payload.update(
+            {
+                "expected_current_sha256": self.expected_current_sha256,
+                "observed_current_sha256": self.observed_current_sha256,
+                "page_commit_state": "not-committed",
+            }
+        )
+        return payload
 
 
 @dataclass(frozen=True)
@@ -383,17 +526,256 @@ def _read_knowledge(layout: ProjectLayout, relative_path: str) -> bytes:
     return _read_bounded(layout.knowledge_root, target, maximum=MAX_PAGE_BYTES)
 
 
+def _next_utc_timestamp(current: str) -> str:
+    """Return a whole-second UTC timestamp strictly after ``current``."""
+
+    normalized = current[:-1] + "+00:00" if current.endswith("Z") else current
+    try:
+        current_value = dt.datetime.fromisoformat(normalized)
+    except ValueError as exc:  # The strict page parser should make this unreachable.
+        raise CockpitEditTargetUnavailable("invalid current updated_at") from exc
+    if current_value.tzinfo is None:
+        raise CockpitEditTargetUnavailable("invalid current updated_at")
+    current_value = current_value.astimezone(dt.timezone.utc)
+    candidate = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+    if candidate <= current_value:
+        candidate = current_value + dt.timedelta(seconds=1)
+    return candidate.isoformat().replace("+00:00", "Z")
+
+
+def _edit_target(value: str) -> ControlledEditTarget:
+    if type(value) is not str or len(value) > 128:
+        raise CockpitEditRequestError("invalid controlled edit target")
+    target = _EDIT_TARGETS_BY_KEY.get(value)
+    if target is None:
+        raise KeyError(value)
+    expected = MIXED_REGION_IDS.get(target.path)
+    if expected != (target.region_id,):
+        raise ResearchCockpitError("controlled edit mapping is inconsistent")
+    return target
+
+
+def _validate_edit_content(
+    value: object,
+    *,
+    roots: Sequence[tuple[Path, str]],
+) -> str:
+    if type(value) is not str:
+        raise CockpitEditRequestError("controlled edit content must be a string")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeError as exc:
+        raise CockpitEditRequestError("controlled edit content is not UTF-8") from exc
+    if len(encoded) > MAX_EDIT_CONTENT_BYTES:
+        raise CockpitEditRequestError("controlled edit content exceeds its limit")
+    if "\x00" in value or "llmwiki:user-region:" in value:
+        raise CockpitEditRequestError("controlled edit content is structurally invalid")
+    if value and not value.endswith("\n"):
+        raise CockpitEditRequestError(
+            "controlled edit content must end with LF so the protected marker remains delimited"
+        )
+    if any(_contains_root(value, root) for root, _label in roots):
+        raise CockpitEditRequestError("controlled edit content contains a local root")
+    return value
+
+
+def _persistence_error_payload(
+    exc: ControlledMarkdownPersistenceError,
+) -> dict[str, Any]:
+    """Project only body-free F-05B state into the Web error contract."""
+
+    source = exc.as_dict()
+    payload: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": "llmwiki-research-cockpit-edit-rejection",
+        "error": "controlled_edit_rejected",
+        "reason_code": source.get(
+            "reason_code", "controlled-markdown-persistence-error"
+        ),
+    }
+    for key in (
+        "transaction_id",
+        "page_commit_state",
+        "audit_commit_state",
+        "expected_current_sha256",
+        "observed_current_sha256",
+        "observed_after_sha256",
+    ):
+        if key in source:
+            payload[key] = source[key]
+    return payload
+
+
+class _DuplicateJsonKeyError(ValueError):
+    """Raised when an edit request contains a duplicate JSON object key."""
+
+
+def _strict_json_object(value: bytes) -> dict[str, Any]:
+    """Decode the bounded edit request without permissive JSON extensions."""
+
+    try:
+        text = value.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise CockpitEditRequestError("edit request is not strict UTF-8 JSON") from exc
+
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                raise _DuplicateJsonKeyError(key)
+            result[key] = item
+        return result
+
+    def reject_constant(_value: str) -> Any:
+        raise ValueError("non-finite JSON number")
+
+    try:
+        decoded = json.loads(
+            text,
+            object_pairs_hook=reject_duplicates,
+            parse_constant=reject_constant,
+        )
+    except (
+        _DuplicateJsonKeyError,
+        UnicodeDecodeError,
+        ValueError,
+        TypeError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise CockpitEditRequestError("edit request is not strict JSON") from exc
+    if type(decoded) is not dict:
+        raise CockpitEditRequestError("edit request must be a JSON object")
+    expected = {"schema_version", "expected_current_sha256", "content"}
+    if set(decoded) != expected:
+        raise CockpitEditRequestError("edit request fields are invalid")
+    if (
+        type(decoded["schema_version"]) is not int
+        or decoded["schema_version"] != SCHEMA_VERSION
+    ):
+        raise CockpitEditRequestError("edit request schema version is invalid")
+    if (
+        type(decoded["expected_current_sha256"]) is not str
+        or _SHA256_RE.fullmatch(decoded["expected_current_sha256"]) is None
+    ):
+        raise CockpitEditRequestError("edit request revision is invalid")
+    if type(decoded["content"]) is not str:
+        raise CockpitEditRequestError("edit request content is invalid")
+    return decoded
+
+
+def _json_content_type_allowed(value: str | None) -> bool:
+    if value is None:
+        return False
+    parts = [part.strip() for part in value.split(";")]
+    if not parts or parts[0].casefold() != "application/json":
+        return False
+    parameters = parts[1:]
+    if not parameters:
+        return True
+    if len(parameters) != 1 or not parameters[0]:
+        return False
+    if "=" not in parameters[0]:
+        return False
+    name, parameter_value = (part.strip() for part in parameters[0].split("=", 1))
+    return name.casefold() == "charset" and parameter_value.casefold() == "utf-8"
+
+
+def _parse_host_header(value: str | None) -> tuple[str, int | None] | None:
+    if value is None or not request_host_allowed(value):
+        return None
+    try:
+        parsed = urlsplit(f"//{value.strip()}")
+        hostname = parsed.hostname
+        port = parsed.port
+    except (TypeError, ValueError):
+        return None
+    if not hostname:
+        return None
+    return hostname, port
+
+
+def _host_matches_server_port(value: str | None, server_port: int) -> bool:
+    parsed = _parse_host_header(value)
+    if parsed is None:
+        return False
+    _hostname, port = parsed
+    return (port if port is not None else 80) == server_port
+
+
+def _origin_matches_host(
+    origin: str | None, host: str | None, *, server_port: int
+) -> bool:
+    if origin is None or host is None:
+        return False
+    if not _host_matches_server_port(host, server_port):
+        return False
+    # The browser-facing server is HTTP-only and the Origin must match the exact
+    # loopback Host authority used for this request.  No CORS/wildcard origin is
+    # accepted.
+    return origin == f"http://{host.strip()}"
+
+
+class _HttpEditRequestError(Exception):
+    """Private bounded framing/header error for the JSON edit route."""
+
+    def __init__(self, status: int, reason_code: str) -> None:
+        super().__init__(reason_code)
+        self.status = status
+        self.reason_code = reason_code
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "llmwiki-research-cockpit-edit-rejection",
+            "error": "controlled_edit_rejected",
+            "reason_code": self.reason_code,
+        }
+
+
+def _persistence_http_status(exc: ControlledMarkdownPersistenceError) -> int:
+    if isinstance(exc, ControlledMarkdownAuthorizationError):
+        return 403
+    if isinstance(exc, ControlledMarkdownWriteConflictError):
+        return 409
+    if isinstance(
+        exc,
+        (
+            ControlledMarkdownCommitUnknownError,
+            ControlledMarkdownCommitAuditUnknownError,
+            ControlledMarkdownWriteFailedError,
+        ),
+    ):
+        return 503
+    if isinstance(exc, ControlledMarkdownWriteRejectedError):
+        return 409
+    return 503
+
+
 class ResearchCockpit:
     """Build deterministic read-only views from machine and curated state."""
 
-    def __init__(self, workspace_root: str | Path) -> None:
+    def __init__(
+        self,
+        workspace_root: str | Path,
+        *,
+        edit_context: TrustedHostSessionContext | None = None,
+    ) -> None:
         try:
             root = Path(workspace_root).expanduser().resolve(strict=True)
         except (FileNotFoundError, OSError) as exc:
             raise ResearchCockpitError("workspace root is unavailable") from exc
         if not root.is_dir():
             raise ResearchCockpitError("workspace root is not a directory")
+        if (
+            edit_context is not None
+            and type(edit_context) is not TrustedHostSessionContext
+        ):
+            raise ResearchCockpitError(
+                "edit_context must be an exact TrustedHostSessionContext"
+            )
         self.workspace_root = root
+        self.edit_context = edit_context
+        self.editing_enabled = edit_context is not None
 
     def _list_project_ids(self) -> list[str]:
         projects_root = self.workspace_root / ".llmwiki" / "projects"
@@ -442,6 +824,203 @@ class ResearchCockpit:
             raise CockpitProjectUnavailable(
                 "registered project is unavailable"
             ) from exc
+
+    def _require_editing(self) -> TrustedHostSessionContext:
+        if not self.editing_enabled or self.edit_context is None:
+            raise CockpitEditingUnavailable("controlled editing is not enabled")
+        return self.edit_context
+
+    def edit_session(self) -> dict[str, Any]:
+        """Return the fixed target catalog without exposing host attribution."""
+
+        self._require_editing()
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "llmwiki-research-cockpit-edit-session",
+            "editing": True,
+            "mode": "controlled-markdown-user-region",
+            "arbitrary_paths": False,
+            "targets": [target.as_dict() for target in CONTROLLED_EDIT_TARGETS],
+            "query": _capabilities(editing=True)["query"],
+            "c07": "deferred/not_started",
+        }
+
+    def _editable_page(
+        self,
+        project_id: str,
+        target_key: str,
+    ) -> tuple[
+        ProjectRegistrationResult,
+        ControlledEditTarget,
+        bytes,
+        Any,
+        Any,
+        str,
+    ]:
+        self._require_editing()
+        target = _edit_target(target_key)
+        registration = self._load_registration(project_id)
+        try:
+            current = _read_knowledge(registration.layout, target.path)
+            page = parse_knowledge_page(current, path=target.path)
+            if page.frontmatter.schema_version != KNOWLEDGE_SCHEMA_VERSION:
+                raise CockpitEditTargetUnavailable(
+                    "legacy Knowledge pages are read-only"
+                )
+            if page.frontmatter.project_id != registration.project_id:
+                raise CockpitEditTargetUnavailable(
+                    "Knowledge page project binding is invalid"
+                )
+            if page.frontmatter.ownership != "mixed":
+                raise CockpitEditTargetUnavailable(
+                    "controlled Web targets require mixed ownership"
+                )
+            if page.frontmatter.status != "draft":
+                raise CockpitEditTargetUnavailable(
+                    "controlled Web edits are limited to draft pages"
+                )
+            parsed = parse_mixed_markdown_body(page.body)
+            expected_regions = MIXED_REGION_IDS.get(target.path)
+            if parsed.region_ids != expected_regions or expected_regions != (
+                target.region_id,
+            ):
+                raise CockpitEditTargetUnavailable(
+                    "controlled Web target regions are invalid"
+                )
+            region = parsed.regions[0]
+            _validate_edit_content(
+                region.content,
+                roots=_project_roots(registration),
+            )
+        except CockpitEditingError:
+            raise
+        except (
+            ControlledMarkdownError,
+            ResearchCockpitError,
+            OSError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise CockpitEditTargetUnavailable(
+                "controlled Web target is unavailable"
+            ) from exc
+        current_sha256 = hashlib.sha256(current).hexdigest()
+        return registration, target, current, page, parsed, current_sha256
+
+    def project_edit_snapshot(self, project_id: str, target_key: str) -> dict[str, Any]:
+        """Return one exact protected user region and its full-page revision hash."""
+
+        registration, target, _current, page, parsed, current_sha256 = (
+            self._editable_page(project_id, target_key)
+        )
+        region = parsed.regions[0]
+        payload = {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "llmwiki-research-cockpit-edit-target",
+            "project_id": registration.project_id,
+            "target": target.as_dict(),
+            "title": page.frontmatter.title,
+            "status": "DRAFT",
+            "status_code": "draft",
+            "ownership": "mixed",
+            "updated_at": page.frontmatter.updated_at,
+            "current_sha256": current_sha256,
+            "content_sha256": region.content_sha256,
+            "content": region.content,
+            "write_mode": "user-edit",
+            "arbitrary_paths": False,
+        }
+        return self._finalize(payload, registration)
+
+    def project_edit(
+        self,
+        project_id: str,
+        target_key: str,
+        *,
+        expected_current_sha256: object,
+        content: object,
+    ) -> dict[str, Any]:
+        """Persist one fixed target through an independently recomputed F-05 plan."""
+
+        host_context = self._require_editing()
+        if (
+            type(expected_current_sha256) is not str
+            or _SHA256_RE.fullmatch(expected_current_sha256) is None
+        ):
+            raise CockpitEditRequestError(
+                "expected_current_sha256 must be a lowercase SHA-256"
+            )
+        (
+            registration,
+            target,
+            current,
+            page,
+            parsed,
+            observed_current_sha256,
+        ) = self._editable_page(project_id, target_key)
+        if expected_current_sha256 != observed_current_sha256:
+            raise CockpitEditConflict(
+                expected_current_sha256=expected_current_sha256,
+                observed_current_sha256=observed_current_sha256,
+            )
+        normalized_content = _validate_edit_content(
+            content,
+            roots=_project_roots(registration),
+        )
+        proposed_frontmatter = replace(
+            page.frontmatter,
+            updated_at=_next_utc_timestamp(page.frontmatter.updated_at),
+        )
+        proposed_body = parsed.render({target.region_id: normalized_content})
+        proposed = (
+            serialize_knowledge_frontmatter(
+                proposed_frontmatter,
+                path=target.path,
+            )
+            + proposed_body
+        ).encode("utf-8")
+        try:
+            plan = plan_controlled_markdown_update(
+                path=target.path,
+                current=current,
+                proposed=proposed,
+                intent="user-edit",
+                expected_current_sha256=expected_current_sha256,
+            )
+            authorization = bind_controlled_markdown_authorization(
+                plan,
+                host_context=host_context,
+                decision_id=f"web-edit-{uuid.uuid4().hex}",
+                authorized_at=_utc_now(),
+            )
+            result = persist_controlled_markdown_update(
+                self.workspace_root,
+                registration.project_id,
+                path=target.path,
+                proposed=proposed,
+                intent="user-edit",
+                expected_current_sha256=expected_current_sha256,
+                authorization=authorization,
+            )
+        except ControlledMarkdownPersistenceError:
+            raise
+        except (ControlledMarkdownError, OSError, TypeError, ValueError) as exc:
+            raise CockpitEditTargetUnavailable(
+                "controlled Markdown planning rejected the edit"
+            ) from exc
+        payload = {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "llmwiki-research-cockpit-edit-result",
+            "outcome": "committed",
+            "project_id": registration.project_id,
+            "target": target.as_dict(),
+            "current_sha256": result.output_sha256,
+            "updated_at": proposed_frontmatter.updated_at,
+            "write": result.as_dict(),
+            "body_returned": False,
+            "source_project_modified": False,
+        }
+        return self._finalize(payload, registration)
 
     def _load_context(self, registration: ProjectRegistrationResult) -> _ProjectContext:
         layout = registration.layout
@@ -1152,7 +1731,7 @@ class ResearchCockpit:
             "planning": self._planning(context),
             "runs": self._runs(context),
             "gaps": [gap.as_dict() for gap in context.gaps],
-            "capabilities": _capabilities(editing=False),
+            "capabilities": _capabilities(editing=self.editing_enabled),
         }
 
     def project_snapshot(self, project_id: str) -> dict[str, Any]:
@@ -1420,7 +1999,7 @@ class ResearchCockpit:
             "generated_at": _utc_now(),
             "projects": projects,
             "count": len(projects),
-            "capabilities": _capabilities(editing=False),
+            "capabilities": _capabilities(editing=self.editing_enabled),
         }
 
     def snapshot(self, project_id: str | None = None) -> dict[str, Any]:
@@ -1448,7 +2027,7 @@ class ResearchCockpit:
             "projects": [self._project_card(registration)],
             "project_count": 1,
             "selected_project": detail,
-            "capabilities": _capabilities(editing=False),
+            "capabilities": _capabilities(editing=self.editing_enabled),
         }
         return self._finalize(payload, registration)
 
@@ -1460,9 +2039,9 @@ class ResearchCockpit:
             "status": "ok",
             "generated_at": _utc_now(),
             "project_count": len(projects),
-            "read_only": True,
+            "read_only": not self.editing_enabled,
             "loopback_only": True,
-            "capabilities": _capabilities(editing=False),
+            "capabilities": _capabilities(editing=self.editing_enabled),
         }
 
     @staticmethod
@@ -1705,6 +2284,9 @@ def make_handler(
         )
         for route, (name, content_type) in asset_specs.items()
     }
+    # This token is created once per HTTP server/handler class, never accepted
+    # from the request body, and never persisted into project state or audit.
+    edit_token = secrets.token_urlsafe(32) if cockpit.editing_enabled else None
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "LLMWikiResearchCockpit"
@@ -1744,15 +2326,24 @@ def make_handler(
                 head=head,
             )
 
+        def _header_values(self, name: str) -> tuple[str, ...]:
+            return tuple(self.headers.get_all(name, []))
+
         def allowed(self) -> bool:
-            if request_host_allowed(self.headers.get("Host")):
+            host_values = self._header_values("Host")
+            port = int(self.server.server_address[1])
+            if (
+                len(host_values) == 1
+                and request_host_allowed(host_values[0])
+                and _host_matches_server_port(host_values[0], port)
+            ):
                 return True
             self.send_json(
                 421,
                 {
                     "schema_version": SCHEMA_VERSION,
                     "error": "misdirected_request",
-                    "message": "Only loopback Host headers are accepted.",
+                    "message": "Only the current loopback Host is accepted.",
                 },
             )
             return False
@@ -1798,21 +2389,96 @@ def make_handler(
                 raise CockpitPathError(f"invalid query parameter: {key}")
             return value
 
+        def _request_target(self) -> tuple[Any, str]:
+            if len(self.path) > MAX_REQUEST_TARGET_CHARS:
+                raise CockpitPathError("request target is too long")
+            parsed = urlsplit(self.path)
+            if (
+                parsed.scheme
+                or parsed.netloc
+                or parsed.fragment
+                or not parsed.path.startswith("/")
+            ):
+                raise CockpitPathError("invalid request target")
+            return parsed, _validate_request_path(parsed.path)
+
+        def _fetch_site_allowed(self) -> bool:
+            values = self._header_values("Sec-Fetch-Site")
+            return not values or (len(values) == 1 and values[0] == "same-origin")
+
+        def _edit_request_authorized(self) -> bool:
+            if edit_token is None or not self._fetch_site_allowed():
+                return False
+            host_values = self._header_values("Host")
+            origin_values = self._header_values("Origin")
+            token_values = self._header_values(EDIT_TOKEN_HEADER)
+            if (
+                len(host_values) != 1
+                or len(origin_values) != 1
+                or len(token_values) != 1
+            ):
+                return False
+            if not _origin_matches_host(
+                origin_values[0],
+                host_values[0],
+                server_port=int(self.server.server_address[1]),
+            ):
+                return False
+            try:
+                return secrets.compare_digest(token_values[0], edit_token)
+            except (TypeError, ValueError):
+                return False
+
+        def _read_edit_body(self) -> bytes:
+            if self._header_values("Transfer-Encoding"):
+                self.close_connection = True
+                raise _HttpEditRequestError(400, "transfer-encoding-forbidden")
+            lengths = self._header_values("Content-Length")
+            if not lengths:
+                self.close_connection = True
+                raise _HttpEditRequestError(411, "content-length-required")
+            if (
+                len(lengths) != 1
+                or len(lengths[0]) > 20
+                or re.fullmatch(r"[0-9]+", lengths[0]) is None
+            ):
+                self.close_connection = True
+                raise _HttpEditRequestError(400, "content-length-invalid")
+            length = int(lengths[0], 10)
+            if length > MAX_EDIT_REQUEST_BYTES:
+                self.close_connection = True
+                raise _HttpEditRequestError(413, "edit-request-too-large")
+            content_types = self._header_values("Content-Type")
+            if len(content_types) != 1 or not _json_content_type_allowed(
+                content_types[0]
+            ):
+                self.close_connection = True
+                raise _HttpEditRequestError(415, "content-type-invalid")
+            body = self.rfile.read(length)
+            if len(body) != length:
+                self.close_connection = True
+                raise _HttpEditRequestError(400, "edit-request-truncated")
+            return body
+
+        def _not_found(self, *, head: bool = False) -> None:
+            self.send_json(
+                404,
+                {"schema_version": SCHEMA_VERSION, "error": "not_found"},
+                head=head,
+            )
+
+        def _invalid_request(self, *, head: bool = False) -> None:
+            self.send_json(
+                400,
+                {"schema_version": SCHEMA_VERSION, "error": "invalid_request"},
+                head=head,
+            )
+
         def serve(self, *, head: bool = False) -> None:
             if not self.allowed():
                 return
             try:
-                if len(self.path) > MAX_REQUEST_TARGET_CHARS:
-                    raise CockpitPathError("request target is too long")
-                parsed = urlsplit(self.path)
-                if (
-                    parsed.scheme
-                    or parsed.netloc
-                    or parsed.fragment
-                    or not parsed.path.startswith("/")
-                ):
-                    raise CockpitPathError("invalid request target")
-                path = _validate_request_path(parsed.path)
+                parsed, path = self._request_target()
                 if path in routes:
                     self._query(parsed, allowed=frozenset())
                     body, content_type = routes[path]
@@ -1821,6 +2487,27 @@ def make_handler(
                 if path in {"/api/health", "/api/status"}:
                     self._query(parsed, allowed=frozenset())
                     self.send_json(200, cockpit.health(), head=head)
+                    return
+                if path == EDIT_SESSION_PATH:
+                    self._query(parsed, allowed=frozenset())
+                    if not cockpit.editing_enabled or edit_token is None:
+                        self._not_found(head=head)
+                        return
+                    if not self._fetch_site_allowed():
+                        self.send_json(
+                            403,
+                            {
+                                "schema_version": SCHEMA_VERSION,
+                                "error": "forbidden",
+                                "reason_code": "same-origin-required",
+                            },
+                            head=head,
+                        )
+                        return
+                    session = dict(cockpit.edit_session())
+                    session["edit_token"] = edit_token
+                    session["token_header"] = EDIT_TOKEN_HEADER
+                    self.send_json(200, session, head=head)
                     return
                 if path == "/api/projects":
                     self._query(parsed, allowed=frozenset())
@@ -1840,19 +2527,11 @@ def make_handler(
                     or segments[1] != "projects"
                 ):
                     self._query(parsed, allowed=frozenset())
-                    self.send_json(
-                        404,
-                        {"schema_version": SCHEMA_VERSION, "error": "not_found"},
-                        head=head,
-                    )
+                    self._not_found(head=head)
                     return
                 if len(segments) < 3 or not segments[2]:
                     self._query(parsed, allowed=frozenset())
-                    self.send_json(
-                        404,
-                        {"schema_version": SCHEMA_VERSION, "error": "not_found"},
-                        head=head,
-                    )
+                    self._not_found(head=head)
                     return
                 project_id = self._decode_segment(segments[2])
                 if len(segments) == 3:
@@ -1900,6 +2579,21 @@ def make_handler(
                         head=head,
                     )
                     return
+                if resource == "edits" and len(segments) == 5:
+                    self._query(parsed, allowed=frozenset())
+                    if not cockpit.editing_enabled or not self._fetch_site_allowed():
+                        self._not_found(head=head)
+                        return
+                    target_key = self._decode_segment(segments[4])
+                    if target_key not in _EDIT_TARGETS_BY_KEY:
+                        self._not_found(head=head)
+                        return
+                    self.send_json(
+                        200,
+                        cockpit.project_edit_snapshot(project_id, target_key),
+                        head=head,
+                    )
+                    return
                 if resource in {"evidence", "sources"} and len(segments) == 5:
                     self._query(parsed, allowed=frozenset())
                     identifier = self._decode_segment(segments[4])
@@ -1910,27 +2604,13 @@ def make_handler(
                     self.send_json(200, payload, head=head)
                     return
                 self._query(parsed, allowed=frozenset())
-                self.send_json(
-                    404,
-                    {"schema_version": SCHEMA_VERSION, "error": "not_found"},
-                    head=head,
-                )
-            except CockpitPathError as exc:
-                self.send_json(
-                    400,
-                    {
-                        "schema_version": SCHEMA_VERSION,
-                        "error": "invalid_request",
-                        "reason": str(exc),
-                    },
-                    head=head,
-                )
+                self._not_found(head=head)
+            except CockpitEditingError as exc:
+                self.send_json(exc.http_status, exc.as_dict(), head=head)
+            except CockpitPathError:
+                self._invalid_request(head=head)
             except (CockpitProjectUnavailable, KeyError):
-                self.send_json(
-                    404,
-                    {"schema_version": SCHEMA_VERSION, "error": "not_found"},
-                    head=head,
-                )
+                self._not_found(head=head)
             except CockpitAssetError:
                 self.send_json(
                     500,
@@ -1944,11 +2624,7 @@ def make_handler(
                     head=head,
                 )
             except (OSError, ValueError, TypeError):
-                self.send_json(
-                    400,
-                    {"schema_version": SCHEMA_VERSION, "error": "invalid_request"},
-                    head=head,
-                )
+                self._invalid_request(head=head)
 
         def do_GET(self) -> None:
             self.serve()
@@ -1956,27 +2632,100 @@ def make_handler(
         def do_HEAD(self) -> None:
             self.serve(head=True)
 
-        def reject(self) -> None:
-            if self.allowed():
-                self.send_json(
-                    405,
-                    {
-                        "schema_version": SCHEMA_VERSION,
-                        "error": "read_only",
-                        "message": "The research cockpit is read-only.",
-                    },
+        def do_POST(self) -> None:
+            if not self.allowed():
+                return
+            if not cockpit.editing_enabled:
+                self.reject(already_allowed=True)
+                return
+            try:
+                parsed, path = self._request_target()
+                segments = path.split("/")[1:]
+                if not (
+                    len(segments) == 5
+                    and segments[0] == "api"
+                    and segments[1] == "projects"
+                    and segments[3] == "edits"
+                ):
+                    if (
+                        len(segments) >= 4
+                        and segments[0] == "api"
+                        and segments[1] == "projects"
+                        and segments[3] == "edits"
+                    ):
+                        self._not_found()
+                    else:
+                        self.reject(already_allowed=True)
+                    return
+                self._query(parsed, allowed=frozenset())
+                project_id = self._decode_segment(segments[2])
+                target_key = self._decode_segment(segments[4])
+                if target_key not in _EDIT_TARGETS_BY_KEY:
+                    self._not_found()
+                    return
+                if not self._edit_request_authorized():
+                    self.send_json(
+                        403,
+                        {
+                            "schema_version": SCHEMA_VERSION,
+                            "error": "forbidden",
+                            "reason_code": "edit-authorization-required",
+                        },
+                    )
+                    return
+                request = _strict_json_object(self._read_edit_body())
+                result = cockpit.project_edit(
+                    project_id,
+                    target_key,
+                    expected_current_sha256=request["expected_current_sha256"],
+                    content=request["content"],
                 )
+                self.send_json(200, result)
+            except _HttpEditRequestError as exc:
+                self.send_json(exc.status, exc.as_dict())
+            except CockpitEditingError as exc:
+                self.send_json(exc.http_status, exc.as_dict())
+            except ControlledMarkdownPersistenceError as exc:
+                self.send_json(
+                    _persistence_http_status(exc), _persistence_error_payload(exc)
+                )
+            except CockpitPathError:
+                self._invalid_request()
+            except (CockpitProjectUnavailable, KeyError):
+                self._not_found()
+            except ResearchCockpitError:
+                self.send_json(
+                    503,
+                    {"schema_version": SCHEMA_VERSION, "error": "data_unavailable"},
+                )
+            except (OSError, ValueError, TypeError):
+                self._invalid_request()
+
+        def reject(self, *, already_allowed: bool = False) -> None:
+            if not already_allowed and not self.allowed():
+                return
+            read_only = not cockpit.editing_enabled
+            self.send_json(
+                405,
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "error": "read_only" if read_only else "method_not_allowed",
+                    "message": (
+                        "The research cockpit is read-only."
+                        if read_only
+                        else "Only the fixed controlled-edit POST route may mutate state."
+                    ),
+                },
+            )
 
         def __getattr__(self, name: str) -> Any:
             # ``BaseHTTPRequestHandler`` normally emits 501 for an unknown
-            # method. Every non-GET/HEAD method is a mutation attempt from the
-            # cockpit's perspective, so resolve any ``do_*`` lookup to the
-            # same bounded read-only rejection instead.
+            # method. Resolve every non-GET/HEAD/POST method to the same bounded
+            # no-mutation rejection instead.
             if name.startswith("do_"):
                 return self.reject
             raise AttributeError(name)
 
-        do_POST = reject
         do_PUT = reject
         do_PATCH = reject
         do_DELETE = reject
@@ -2018,7 +2767,9 @@ def create_server(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Local read-only research cockpit")
+    parser = argparse.ArgumentParser(
+        description="Local research cockpit with optional controlled editing"
+    )
     parser.add_argument("--workspace-root", type=Path, default=Path.cwd())
     subs = parser.add_subparsers(dest="command", required=True)
     serve = subs.add_parser("serve", help="serve the cockpit on loopback")
@@ -2026,6 +2777,16 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=DEFAULT_PORT)
     serve.add_argument("--asset-root", type=Path, default=DEFAULT_ASSET_ROOT)
     serve.add_argument("--open", action="store_true", dest="open_browser")
+    serve.add_argument(
+        "--enable-editing",
+        action="store_true",
+        help="enable the four fixed F-05 controlled Markdown edit targets",
+    )
+    serve.add_argument(
+        "--actor-id",
+        default="local-user",
+        help="bounded trusted local actor identifier for body-free audit attribution",
+    )
     snapshot = subs.add_parser("snapshot", help="print a cockpit snapshot")
     snapshot.add_argument("--project-id")
     snapshot.add_argument("--pretty", action="store_true")
@@ -2037,7 +2798,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        cockpit = ResearchCockpit(args.workspace_root)
+        edit_context = None
+        if args.command == "serve" and args.enable_editing:
+            edit_context = TrustedHostSessionContext(
+                host_id="research-cockpit",
+                actor_type="user",
+                actor_id=args.actor_id,
+                session_id=f"web-session-{secrets.token_hex(16)}",
+            )
+        cockpit = ResearchCockpit(args.workspace_root, edit_context=edit_context)
         if args.command == "snapshot":
             payload = cockpit.snapshot(args.project_id)
             print(
@@ -2064,7 +2833,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         display = f"[{host}]" if ":" in str(host) else host
         url = f"http://{display}:{bound_port}/"
         print(f"Research cockpit: {url}")
-        print("Read-only; loopback requests only. Press Ctrl+C to stop.")
+        if cockpit.editing_enabled:
+            print(
+                "Controlled editing enabled for four fixed mixed-page user regions; "
+                "loopback requests only. Press Ctrl+C to stop."
+            )
+        else:
+            print("Read-only; loopback requests only. Press Ctrl+C to stop.")
         if args.open_browser:
             import webbrowser
 
@@ -2076,7 +2851,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         finally:
             server.server_close()
         return 0
-    except ResearchCockpitError as exc:
+    except (ResearchCockpitError, ControlledMarkdownAuthorizationError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

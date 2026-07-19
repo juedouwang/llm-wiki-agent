@@ -5,6 +5,10 @@ const state = {
   selectedProjectId: null,
   detail: null,
   filter: "",
+  editSession: null,
+  editTargetKey: null,
+  editSnapshot: null,
+  editSaving: false,
 };
 
 const ids = [
@@ -13,6 +17,9 @@ const ids = [
   "artifact-grid", "gaps-list", "coverage-totals", "coverage-panel", "files-table",
   "claim-count", "claims-list", "planning-panel", "run-count", "runs-list",
   "viewer-title", "evidence-viewer", "markdown-viewer", "refresh-button", "close-viewer",
+  "mode-badge", "editing-section", "edit-target-list", "edit-form", "edit-target-path",
+  "edit-target-title", "edit-target-status", "edit-content", "edit-revision",
+  "edit-updated-at", "edit-message", "reload-edit", "save-edit",
 ];
 const ui = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
 
@@ -61,19 +68,48 @@ function formatBytes(value) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GiB`;
 }
 
-async function getJson(path) {
+class ApiError extends Error {
+  constructor(status, payload) {
+    const code = payload && payload.error ? payload.error : `HTTP ${status}`;
+    super(code);
+    this.name = "ApiError";
+    this.status = status;
+    this.payload = payload || {};
+  }
+}
+
+async function requestJson(path, options) {
   const response = await fetch(path, {
-    method: "GET",
     credentials: "same-origin",
-    headers: { Accept: "application/json" },
     cache: "no-store",
+    ...options,
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const code = payload.error || `HTTP ${response.status}`;
-    throw new Error(code);
-  }
+  if (!response.ok) throw new ApiError(response.status, payload);
   return payload;
+}
+
+async function getJson(path) {
+  return requestJson(path, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+}
+
+async function postEdit(path, payload) {
+  if (!state.editSession || !state.editSession.edit_token) {
+    throw new ApiError(403, { error: "forbidden", reason_code: "edit-session-unavailable" });
+  }
+  const tokenHeader = state.editSession.token_header || "X-LLMWiki-Edit-Token";
+  return requestJson(path, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json; charset=utf-8",
+      [tokenHeader]: state.editSession.edit_token,
+    },
+    body: JSON.stringify(payload),
+  });
 }
 
 function setBanner(message, error = false) {
@@ -325,6 +361,176 @@ function renderRuns(detail) {
   });
 }
 
+function editingEnabled() {
+  return Boolean(state.editSession && state.editSession.editing);
+}
+
+function setEditMessage(message, error = false) {
+  ui["edit-message"].textContent = message;
+  ui["edit-message"].classList.toggle("error-state", error);
+}
+
+function editErrorMessage(error) {
+  const payload = error && error.payload ? error.payload : {};
+  const reason = payload.reason_code || error.message || "controlled-edit-rejected";
+  if (reason === "revision-conflict") {
+    return "Revision conflict: the page changed elsewhere and nothing was overwritten. Your unsaved draft remains in the editor; copy or reconcile it before reloading the target.";
+  }
+  if (reason === "edit-authorization-required" || reason === "authorization-rejected") {
+    return "The edit authorization was rejected. Reload this local cockpit session before trying again.";
+  }
+  if (reason === "commit-unknown" || payload.page_commit_state === "unknown") {
+    return "Commit outcome is unknown. Do not retry blindly; reload the target and inspect the audit state.";
+  }
+  if (reason === "commit-audit-state-unknown" || payload.audit_commit_state === "unknown") {
+    return "The Markdown commit may have completed but its audit state is unknown. Reload before deciding what to do.";
+  }
+  if (reason === "edit-target-unavailable") {
+    return "This fixed target is not a current mixed Schema v2 DRAFT page, so it remains read-only.";
+  }
+  return `Controlled edit rejected: ${reason}.`;
+}
+
+function renderEditTargets() {
+  if (!ui["editing-section"]) return;
+  const enabled = editingEnabled();
+  ui["editing-section"].hidden = !enabled;
+  clear(ui["edit-target-list"]);
+  if (!enabled) return;
+  const targets = Array.isArray(state.editSession.targets) ? state.editSession.targets : [];
+  if (!targets.length) {
+    ui["edit-target-list"].appendChild(emptyState("No fixed edit targets are available.", true));
+    return;
+  }
+  targets.forEach((target) => {
+    const button = element("button", "edit-target-button");
+    button.type = "button";
+    button.setAttribute("role", "listitem");
+    button.disabled = !state.selectedProjectId;
+    if (target.key === state.editTargetKey) button.classList.add("active");
+    appendText(button, "strong", "", target.label || target.key);
+    appendText(button, "span", "", `${target.path} · ${target.region_id}`);
+    button.addEventListener("click", () => loadEditTarget(target.key));
+    ui["edit-target-list"].appendChild(button);
+  });
+}
+
+function renderEditSnapshot(snapshot) {
+  if (!snapshot) {
+    ui["edit-target-path"].textContent = "Choose a target";
+    ui["edit-target-title"].textContent = "Protected user region";
+    ui["edit-target-status"].textContent = "DRAFT";
+    ui["edit-content"].value = "";
+    ui["edit-content"].disabled = true;
+    ui["edit-revision"].textContent = "No revision loaded";
+    ui["edit-updated-at"].textContent = "Updated time unavailable";
+    ui["reload-edit"].disabled = true;
+    ui["save-edit"].disabled = true;
+    return;
+  }
+  ui["edit-target-path"].textContent = snapshot.target.path;
+  ui["edit-target-title"].textContent = snapshot.target.label || snapshot.title;
+  ui["edit-target-status"].textContent = snapshot.status || "DRAFT";
+  ui["edit-target-status"].className = "status-chip status-draft";
+  ui["edit-content"].value = snapshot.content || "";
+  ui["edit-content"].disabled = false;
+  ui["edit-revision"].textContent = `Revision ${snapshot.current_sha256}`;
+  ui["edit-updated-at"].textContent = `Updated ${snapshot.updated_at || "unknown"}`;
+  ui["reload-edit"].disabled = false;
+  ui["save-edit"].disabled = false;
+}
+
+async function loadEditTarget(targetKey, options = {}) {
+  if (!editingEnabled() || !state.selectedProjectId) return;
+  const target = (state.editSession.targets || []).find((item) => item.key === targetKey);
+  if (!target) return;
+  state.editTargetKey = targetKey;
+  state.editSnapshot = null;
+  renderEditTargets();
+  renderEditSnapshot(null);
+  setEditMessage("Loading the exact current page revision…");
+  try {
+    const snapshot = await getJson(
+      `/api/projects/${encodeURIComponent(state.selectedProjectId)}/edits/${encodeURIComponent(targetKey)}`,
+    );
+    state.editSnapshot = snapshot;
+    renderEditSnapshot(snapshot);
+    setEditMessage(
+      options.announce === false
+        ? "Target refreshed. Generated structure and markers remain protected."
+        : "Ready. Only the displayed user region can be changed.",
+    );
+  } catch (error) {
+    renderEditSnapshot(null);
+    setEditMessage(editErrorMessage(error), true);
+  }
+}
+
+async function saveEdit(event) {
+  event.preventDefault();
+  if (!state.editSnapshot || state.editSaving || !state.selectedProjectId) return;
+  state.editSaving = true;
+  ui["save-edit"].disabled = true;
+  ui["reload-edit"].disabled = true;
+  setEditMessage("Planning and committing through the controlled Markdown boundary…");
+  let content = ui["edit-content"].value;
+  if (content && !content.endsWith("\n")) {
+    content += "\n";
+    ui["edit-content"].value = content;
+  }
+  const targetKey = state.editTargetKey;
+  const target = state.editSnapshot.target;
+  let preserveDraft = false;
+  try {
+    const result = await postEdit(
+      `/api/projects/${encodeURIComponent(state.selectedProjectId)}/edits/${encodeURIComponent(targetKey)}`,
+      {
+        schema_version: 1,
+        expected_current_sha256: state.editSnapshot.current_sha256,
+        content,
+      },
+    );
+    setEditMessage("Saved. Reloading the target, project snapshot, and viewer…");
+    await loadEditTarget(targetKey, { announce: false });
+    await loadSnapshot();
+    await loadKnowledge(target.path);
+    setEditMessage("Saved through F-05 controlled Markdown. The source project was not modified.");
+    if (result.outcome !== "committed") {
+      setEditMessage(`Unexpected edit outcome: ${result.outcome || "unknown"}.`, true);
+    }
+  } catch (error) {
+    preserveDraft = error instanceof ApiError && error.status === 409;
+    setEditMessage(editErrorMessage(error), true);
+    if (preserveDraft) {
+      // Keep the user's draft visible. Reload is an explicit destructive action
+      // after a CAS conflict, so an unsaved draft is never silently replaced.
+      ui["save-edit"].disabled = true;
+      ui["reload-edit"].disabled = !state.editSnapshot;
+    }
+  } finally {
+    state.editSaving = false;
+    ui["reload-edit"].disabled = !state.editSnapshot;
+    ui["save-edit"].disabled = !state.editSnapshot || preserveDraft;
+  }
+}
+
+async function loadEditSession() {
+  try {
+    state.editSession = await getJson("/api/edit-session");
+    ui["mode-badge"].textContent = "CONTROLLED EDITS · J-04";
+    ui["mode-badge"].classList.add("editing-mode");
+    setBanner("Controlled editing is enabled only for four fixed mixed-page user regions.");
+  } catch (error) {
+    state.editSession = null;
+    ui["mode-badge"].textContent = "READ ONLY · J-03";
+    ui["mode-badge"].classList.remove("editing-mode");
+    if (error instanceof ApiError && error.status !== 404) {
+      setBanner("Editing session unavailable; continuing in read-only mode.", true);
+    }
+  }
+  renderEditTargets();
+}
+
 function renderDetail(detail) {
   state.detail = detail;
   const project = detail.project || {};
@@ -341,6 +547,7 @@ function renderDetail(detail) {
   renderClaims(detail);
   renderPlanning(detail);
   renderRuns(detail);
+  renderEditTargets();
   renderProjects();
 }
 
@@ -402,6 +609,10 @@ async function selectProject(projectId) {
   try {
     const detail = await getJson(`/api/projects/${encodeURIComponent(projectId)}`);
     renderDetail(detail);
+    if (editingEnabled()) {
+      const targetKey = state.editTargetKey || state.editSession.targets[0]?.key;
+      if (targetKey) await loadEditTarget(targetKey);
+    }
     setBanner("Loopback-only view. Source files were not reopened; Evidence currentness is registry-level unless separately verified.");
   } catch (error) {
     state.detail = null;
@@ -437,5 +648,12 @@ ui["close-viewer"].addEventListener("click", () => {
   clear(ui["evidence-viewer"]);
   ui["markdown-viewer"].textContent = "Select a knowledge artifact or Claim trace.";
 });
+ui["edit-form"].addEventListener("submit", saveEdit);
+ui["reload-edit"].addEventListener("click", () => {
+  if (state.editTargetKey) loadEditTarget(state.editTargetKey);
+});
 
-loadSnapshot();
+(async function bootstrap() {
+  await loadEditSession();
+  await loadSnapshot();
+}());
