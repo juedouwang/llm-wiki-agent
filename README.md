@@ -196,6 +196,16 @@ independent `prioritize` operation. The pipeline is local-only and source-read-
 only; it does not claim Verified Query, mature planning, or C-07 scientific-
 binary metadata extraction.
 
+The J-01 checkpoint `checkpoint/j-01-r3-end-to-end` independently repeats the
+complete authorized R3-minus-C-07 fixture chain from clean temporary workspaces:
+understand, exact Source/Evidence/Locator reopening, explicit unavailable Query,
+H-07 reconciliation, non-executable I-04 DRAFT planning, and F-05 controlled
+rendering. It verifies all 15 canonical pages plus the unified index and daily
+plan, refreshes only a well-formed project-state made stale by the new Manifest
+generation, and keeps the source tree byte/metadata unchanged. This closes the
+R3-minus-C-07 preview only: Query remains unavailable until G-04, C-07 remains
+`deferred/not_started`, and R4 has not started.
+
 The completed J-03/J-04 product research cockpit is a separate
 registered-project surface. It remains read-only by default:
 

@@ -102,3 +102,30 @@ remains read-only, Query remains exactly unavailable until G-04, and C-07 remain
 `deferred/not_started`. Focused J-03/J-04 validation on 2026-07-19 produced
 **30 passed, 3 skipped**; dependent validation produced **161 passed, 2
 skipped**; full regression produced **824 passed, 31 skipped**.
+
+## J-01 R3-minus-C-07 end-to-end coverage
+
+`test_j01_r3_end_to_end.py` runs the fixed research fixture twice in independent
+clean temporary workspaces through project understanding, Source registry and
+Evidence registration, exact Locator/source reopening, the MCP Query unavailable
+contract, H-07 full-scan reconciliation, I-04 planning, and persisted E-07/F-05
+rendering. It verifies all fifteen canonical Knowledge paths, the unified index,
+the dated daily plan, strict Knowledge Schema v2 parsing, canonical body-free
+prepared/committed audit pairs, current Source/Evidence/hash/excerpt bindings,
+and path-independent deterministic outcomes.
+
+The test also covers the narrow reconcile-to-plan integration repair: a
+well-formed I-03 state whose registration or Manifest binding is stale may be
+rebuilt, while malformed/future state and Goal/task-revision drift still fail
+closed. The resulting Goal, plan, and tasks remain DRAFT and every task remains
+non-executable. A model/checkpoint binary canary remains classification-only and
+limited; no semantic extraction or canary leakage is permitted. LLM, network,
+URL, and browser calls are guarded, and source hashes, sizes, mtimes, modes, and
+directory metadata must remain unchanged. Query stays exactly
+`capability-unavailable` with `available_after=G-04`; C-07 stays
+`deferred/not_started`; no R4 behavior is covered or implemented.
+
+Validation recorded on 2026-07-19: focused J-01/planning/state tests produced
+**19 passed**; dependent suites produced **339 passed, 12 skipped**; final full
+regression produced **826 passed, 31 skipped**. Ruff, `py_compile`, and
+`git diff --check` passed.

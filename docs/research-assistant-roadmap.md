@@ -1,7 +1,7 @@
 # 科研助手改造路线图（P-05 / P-08 对齐版）
 
 - 状态：**后续开发的执行计划**
-- 更新日期：2026-07-18
+- 更新日期：2026-07-19
 - 基线分支：`research-assistant`
 - 产品约定：[`research-assistant-product-contract.md`](research-assistant-product-contract.md)
 - 任务原则：每个编号尽量对应一个独立任务分支、一个原子提交和一个检查点标签。
@@ -50,7 +50,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | D-04 source locate/open | complete | `917475c` | `checkpoint/d-04-source-open` |
 | D-05 source relocation recovery | complete | `a49c6a8` | `checkpoint/d-05-source-relocation` |
 | D-06 source and Evidence health | complete | `9b38353` | `checkpoint/d-06-source-health` |
-| J-01 R1 basic-chain acceptance | complete (R1 slice) | `73070f1` | `checkpoint/j-01-r1-e2e` |
+| J-01 fixed-fixture end-to-end acceptance | complete for R1 and R3-minus-C-07 (2026-07-19 validation) | `73070f1`, `9e2eba2` | `checkpoint/j-01-r1-e2e`, `checkpoint/j-01-r3-end-to-end` |
 | J-03 local read-only product research cockpit | complete (2026-07-19 validation; development-supervision dashboard remains separate) | `15ae906` | `checkpoint/j-03-product-cockpit` |
 | J-04 fixed-target controlled Web editing | complete (2026-07-19 validation; default cockpit remains read-only) | `cf5cfcd` | `checkpoint/j-04-controlled-web-editing` |
 | G-01 Research Core service facade | complete | `baa9625` | `checkpoint/g-01-core-service` |
@@ -237,10 +237,10 @@ B-01 → B-02 → B-03 → B-04 → B-05 → B-06 → B-08
 - 可以用 `source_id` 重开当前原文。
 
 R1 was accepted on 2026-07-16 by the automated chain documented in
-[`r1-basic-chain-acceptance.md`](r1-basic-chain-acceptance.md). This closes only
-the deterministic R1 regression slice of J-01. The full 15-artifact J-01
-expansion covering `understand -> locate -> query -> reconcile -> plan -> render`
-remains scheduled for R3.
+[`r1-basic-chain-acceptance.md`](r1-basic-chain-acceptance.md). That deterministic
+slice remains covered. On 2026-07-19, J-01 also completed the authorized
+R3-minus-C-07 expansion covering `understand -> locate -> query(unavailable) ->
+reconcile -> plan -> render`; C-07 and R4 behavior remain outside that acceptance.
 
 ### R2：Core 与 Codex 的最小原生垂直切片
 
@@ -276,7 +276,7 @@ B-07（已完成）
 → E-02 → E-03 → E-04 → E-05 → E-06 → E-07 → E-08（完整）
 → I-01 → I-02 → I-03 → I-04
 → J-03 → J-04 (complete)
-→ J-01（15 类产物 E2E）
+→ J-01（15 类产物 E2E） (R3-minus-C-07 complete)
 ```
 
 验收门槛：
@@ -286,6 +286,11 @@ B-07（已完成）
 - 可编辑目标、任务、状态和用户确认结论；
 - 缺失资料明确显示，不能用空白页伪装成功；
 - 未提供目标时第 14/15 项标为 `DRAFT`。
+
+As of 2026-07-19, the deliberately bounded **R3-minus-C-07** preview is accepted
+at `checkpoint/j-01-r3-end-to-end`. This does not complete or implement C-07;
+`llmwiki_query` remains the exact unavailable contract until G-04, and R4 has
+not started.
 
 ### R4：可信查询与增量知识维护
 
@@ -368,13 +373,12 @@ git tag checkpoint/b-01-project-register
 6. 若任务必须拆成多个 commit，提交信息都带同一任务 ID，并在完成报告列出顺序；
 7. 不修改用户个人知识库中的历史规划文件；仓库内本文作为后续实现的执行基线。
 
-## 6. Next executable task
+## 6. Authorized stop boundary
 
-The next executable and final authorized R3-minus-C-07 unit is **J-01**:
-extend the fixed synthetic research fixture into a repeatable
-`understand -> locate -> query(unavailable) -> reconcile -> plan -> render`
-acceptance chain. J-04 is complete. **C-07 remains `deferred/not_started`, and
-this run must stop after J-01 without entering R4.**
+The final authorized R3-minus-C-07 unit, **J-01**, is complete at implementation
+commit `9e2eba2` and `checkpoint/j-01-r3-end-to-end`. No further unit is
+authorized in this run. **C-07 remains `deferred/not_started`, Query remains the
+exact `capability-unavailable` contract until G-04, and R4 has not started.**
 
 R1 and the G-01 Core facade remain accepted at their checkpoints. G-07 is
 complete at `checkpoint/g-07-mcp-server`; its stdio transport, seven-tool catalog,
@@ -992,3 +996,31 @@ research-binary read, Claim verification, task execution, Query, or R4 behavior
 was introduced. Query remains exactly `capability-unavailable` with
 `available_after=G-04`; C-07 remains `deferred/not_started`. See
 [`research-cockpit.md`](research-cockpit.md).
+
+J-01 R3-minus-C-07 acceptance is complete at implementation commit `9e2eba2`
+and checkpoint `checkpoint/j-01-r3-end-to-end`. A standalone fixed-fixture test
+runs two independent clean temporary workspaces through `project_understand ->
+source registry/Evidence/Locator binding -> source open -> MCP
+query(unavailable) -> H-07 full-scan reconciliation -> I-04 DRAFT planning ->
+E-07/F-05 controlled rendering`. Each run validates all fifteen canonical
+Knowledge paths, the unified index and dated daily plan, strict Knowledge Schema
+v2 parsing, canonical body-free prepared/committed F-05B audit pairs, current
+Source/Evidence/hash/excerpt fidelity, and byte-identical path-independent
+structured outcomes.
+
+The integration defect exposed by that chain is fixed narrowly: after H-07
+advances the Manifest generation, I-04 may rebuild only a well-formed I-03 state
+whose registration/Manifest binding is stale. Malformed, legacy/future,
+unknown-field, or Goal/task-revision drift still fails closed, so this refresh is
+not a general stale-propagation claim. The reconciled plan remains DRAFT and all
+automatically proposed tasks remain non-executable.
+
+The acceptance uses a binary canary classified only as a limited
+`model_checkpoint`/`model_artifact`; it confirms no semantic extraction or
+canary leakage. It also guards LLM, network, URL, and browser access and verifies
+that source hashes, sizes, mtimes, modes, and directory metadata remain
+unchanged. Focused validation produced **19 passed**; dependent validation
+produced **339 passed, 12 skipped**; final full regression produced **826 passed,
+31 skipped**. Ruff, `py_compile`, and `git diff --check` passed. MCP Query remains
+exactly `capability-unavailable` with `available_after=G-04`; C-07 remains
+`deferred/not_started`; no R4 behavior was introduced.
