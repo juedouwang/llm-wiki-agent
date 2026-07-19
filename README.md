@@ -196,8 +196,8 @@ independent `prioritize` operation. The pipeline is local-only and source-read-
 only; it does not claim Verified Query, mature planning, or C-07 scientific-
 binary metadata extraction.
 
-The completed J-03 product research cockpit is a separate registered-project
-surface:
+The completed J-03/J-04 product research cockpit is a separate
+registered-project surface. It remains read-only by default:
 
 ```bash
 python -B tools/research_cockpit.py --workspace-root . serve
@@ -205,8 +205,19 @@ python -B tools/research_cockpit.py --workspace-root . serve
 
 Open `http://127.0.0.1:8765/` to browse projects, all 15 Knowledge entries,
 coverage and file state, Claim/Evidence/Source/Locator traces, Goal/task/plan
-state, and run history. It is loopback-only and read-only; controlled editing is
-a J-04 concern, and Query remains explicitly unavailable until G-04.
+state, and run history. A trusted local session may opt into only the four fixed
+J-04 mixed-user-region targets with:
+
+```bash
+python -B tools/research_cockpit.py --workspace-root . serve --enable-editing --actor-id local-user
+```
+
+Those saves cover Goal, backlog, project status, and user-confirmed conclusions
+only. They use full-page SHA-256 compare-and-swap plus F-05A/F-05B controlled
+writes and body-free audit; there is no arbitrary path editor. The cockpit stays
+loopback-only, Query remains exactly unavailable until G-04, and C-07 remains
+`deferred/not_started`. See
+[`docs/research-cockpit.md`](docs/research-cockpit.md).
 
 Repository engineering progress is supervised independently with:
 

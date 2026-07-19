@@ -85,3 +85,20 @@ restrictive security headers; traversal/query rejection; and redirected-path
 fail-closed behavior where the host permits symbolic-link creation. Focused
 validation on 2026-07-19 produced **15 passed, 3 skipped**; the skipped cases
 require Windows symbolic-link privilege.
+
+## J-04 controlled-research-cockpit-editing coverage
+
+`test_research_cockpit_editing.py` verifies the exact four target/path/region
+mappings and absence of arbitrary edit paths; strict Knowledge Schema v2,
+canonical identity, mixed ownership, draft status, and renderer-marker gates;
+full-page SHA-256 revisions; stale and racing CAS behavior; F-05A/F-05B
+persistence; body-free audit and commit-unknown errors; frontmatter, generated
+skeleton, markers, and unrelated-page preservation; mixed user-byte survival
+after E-07 regeneration; source hash/mtime/mode immutability; bounded content and
+local-root rejection; random token, Origin, Fetch-Site, Host/port, request
+framing, strict JSON, and fixed-route enforcement; plus the static UI contract,
+conflict-draft retention, and successful refetch order. The default J-03 mode
+remains read-only, Query remains exactly unavailable until G-04, and C-07 remains
+`deferred/not_started`. Focused J-03/J-04 validation on 2026-07-19 produced
+**30 passed, 3 skipped**; dependent validation produced **161 passed, 2
+skipped**; full regression produced **824 passed, 31 skipped**.

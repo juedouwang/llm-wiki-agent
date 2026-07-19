@@ -215,6 +215,27 @@ The minimal MCP stdio adapter is `python -m tools.research_mcp --workspace-root 
 
 Existing top-level `wiki/` workflows and the current `raw-md` output layout remain compatible during migration. See `docs/project-storage-layout.md`.
 
+## Local Research Cockpit (J-03/J-04)
+
+`python -B tools/research_cockpit.py --workspace-root <workspace> serve` is the
+loopback-only registered-project product cockpit and remains read-only by
+default. `serve --enable-editing` may expose only the four fixed mappings
+`goal -> goals.md#user-goals`, `backlog -> plans/backlog.md#user-backlog`,
+`project_status -> status.md#user-status`, and
+`user_confirmed_conclusions -> claims/index.md#user-confirmed-claims`. Do not add
+an arbitrary path, filename, region, frontmatter, or whole-page editor.
+
+Every editable page must already be a strict current Knowledge Schema v2,
+canonical-path-bound, `ownership: mixed`, `status: draft` page with the exact
+renderer-owned mixed skeleton. Saves use the full-page SHA-256 revision,
+server-generated trusted host/session decision binding, F-05A recomputation, and
+F-05B exact CAS/body-free audit. Conflicts must be visible and must not overwrite
+or discard the browser draft. The source project stays unchanged; no edit may
+claim scientific verification or authorize task execution. Query must remain
+exactly `capability-unavailable` with `available_after=G-04`, C-07 remains
+`deferred/not_started`, and J-04 adds no R4 behavior. See
+`docs/research-cockpit.md`.
+
 ## Codex Research Adapter (J-05)
 
 The reference Codex package is `plugins/llmwiki-research/`. Installed copies

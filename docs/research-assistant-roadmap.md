@@ -52,6 +52,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | D-06 source and Evidence health | complete | `9b38353` | `checkpoint/d-06-source-health` |
 | J-01 R1 basic-chain acceptance | complete (R1 slice) | `73070f1` | `checkpoint/j-01-r1-e2e` |
 | J-03 local read-only product research cockpit | complete (2026-07-19 validation; development-supervision dashboard remains separate) | `15ae906` | `checkpoint/j-03-product-cockpit` |
+| J-04 fixed-target controlled Web editing | complete (2026-07-19 validation; default cockpit remains read-only) | `cf5cfcd` | `checkpoint/j-04-controlled-web-editing` |
 | G-01 Research Core service facade | complete | `baa9625` | `checkpoint/g-01-core-service` |
 | G-07 minimal MCP server | complete | `7b0eef9` | `checkpoint/g-07-mcp-server` |
 | G-08 budget-bounded Host Context Pack | complete | `3721fb5` | `checkpoint/g-08-host-context-pack` |
@@ -274,7 +275,7 @@ B-07（已完成）
 → F-01（complete：F-01A Schema/path + F-01B canonical layout）→ F-02（complete：F-02A structural + F-02B read-only currentness + F-02C stable-object hardening）→ F-03（complete：F-03A explicit entities/relations/backlinks）→ F-04 → F-05
 → E-02 → E-03 → E-04 → E-05 → E-06 → E-07 → E-08（完整）
 → I-01 → I-02 → I-03 → I-04
-→ J-03 → J-04
+→ J-03 → J-04 (complete)
 → J-01（15 类产物 E2E）
 ```
 
@@ -369,11 +370,11 @@ git tag checkpoint/b-01-project-register
 
 ## 6. Next executable task
 
-The next executable R3 unit is **J-04**: add narrowly mapped controlled Web
-editing to the completed loopback-only J-03 product research cockpit by reusing
-the F-05A/F-05B controlled Markdown boundary. Continue in dependency order
-`J-04 -> J-01`. **C-07 remains `deferred/not_started` and is not part of this
-run.**
+The next executable and final authorized R3-minus-C-07 unit is **J-01**:
+extend the fixed synthetic research fixture into a repeatable
+`understand -> locate -> query(unavailable) -> reconcile -> plan -> render`
+acceptance chain. J-04 is complete. **C-07 remains `deferred/not_started`, and
+this run must stop after J-01 without entering R4.**
 
 R1 and the G-01 Core facade remain accepted at their checkpoints. G-07 is
 complete at `checkpoint/g-07-mcp-server`; its stdio transport, seven-tool catalog,
@@ -959,11 +960,35 @@ entries, Manifest/coverage and file-state details, Claim -> Evidence -> Source
 -> Locator traces, Goal/task/plan state, and bounded run usage/cost/error data.
 Strict Knowledge Schema v2/path validation, regular-file and redirection checks,
 absolute-path redaction, restrictive browser headers, and request/Host/method
-bounds preserve the local read-only surface. `llmwiki_query` remains
-`capability-unavailable` with `available_after=G-04`, and Web editing remains
-unavailable until J-04. Focused validation produced 15 passed, 3 skipped;
+bounds preserve the local read-only surface. At the J-03 checkpoint,
+`llmwiki_query` remained `capability-unavailable` with `available_after=G-04`,
+and Web editing was deliberately deferred to J-04. Focused validation produced
+15 passed, 3 skipped;
 dependent validation produced 234 passed, 12 skipped. Ruff check/format,
 `py_compile`, UTF-8/LF checks, and `git diff --check` passed. No source-project
 content or research binary was read or changed, no LLM/external send occurred,
 and C-07 remains `deferred/not_started`. See
+[`research-cockpit.md`](research-cockpit.md).
+
+J-04 is complete at implementation commit `cf5cfcd` and checkpoint
+`checkpoint/j-04-controlled-web-editing`. The J-03 cockpit remains read-only by
+default; `serve --enable-editing` creates a trusted local session for exactly
+four renderer-bound mixed user regions: Goal, backlog, project status, and
+user-confirmed conclusions. There is no arbitrary path or frontmatter editor.
+Each save validates the strict current Knowledge Schema v2 page and fixed mixed
+skeleton, uses the full-page SHA-256 as an optimistic revision, advances only
+`updated_at`, independently recomputes the F-05A plan, and persists through
+F-05B exact CAS plus its body-free audit ledger. Stale/racing writes return 409
+without overwrite, commit/audit-unknown states return body-free 503, browser
+conflicts retain the unsaved draft, and E-07 regeneration preserves the edited
+mixed user bytes.
+
+Focused J-03/J-04 validation produced **30 passed, 3 skipped**; dependent F-05,
+renderer, Core, understanding, Goal/task/state/planning validation produced
+**161 passed, 2 skipped**; full regression produced **824 passed, 31 skipped**.
+Ruff check/format, `py_compile`, UTF-8/LF checks, and `git diff --check` passed.
+The source project remained unchanged, and no LLM, external send, source reopen,
+research-binary read, Claim verification, task execution, Query, or R4 behavior
+was introduced. Query remains exactly `capability-unavailable` with
+`available_after=G-04`; C-07 remains `deferred/not_started`. See
 [`research-cockpit.md`](research-cockpit.md).
