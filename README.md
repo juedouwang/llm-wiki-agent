@@ -48,6 +48,29 @@ opencode    # reads AGENTS.md
 gemini      # reads GEMINI.md
 ```
 
+### Self-contained Codex Plugin release (Windows x86-64)
+
+The J-05B release packages the accepted R3-minus-C-07 Research Core workflows as
+`llmwiki-research` Plugin `0.2.0`. A release installation does not require this
+repository checkout, a system Python, or `LLMWIKI_CORE_ROOT`.
+
+Build the deterministic package on Windows x86-64 with Python 3.13:
+
+```powershell
+python -B tools/build_codex_plugin_release.py --output-dir dist --json
+```
+
+After extracting `llmwiki-research-0.2.0-windows-x86_64.zip`, install directly:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+The optional workspace defaults to `%LOCALAPPDATA%\LLMWiki\workspace`.
+Upgrade/reinstall, rollback, uninstall, archive verification, and exact capability
+boundaries are documented in
+[`docs/codex-plugin-installation.md`](docs/codex-plugin-installation.md).
+
 ## Usage
 
 All agents understand natural language and shorthand triggers:
@@ -166,7 +189,8 @@ The `research-assistant` branch is evolving this repository into a local-first, 
 - [Deterministic one-action project understanding](docs/project-understand.md)
 - [Conservative H-07 project reconciliation](docs/project-reconciliation.md)
 - [Minimal MCP stdio server](docs/research-mcp-server.md)
-- [Codex reference adapter package](docs/codex-reference-adapter.md)
+- [Codex reference adapter and J-05B release](docs/codex-reference-adapter.md)
+- [Codex Plugin installation guide](docs/codex-plugin-installation.md)
 - [B-02 explainable scan-policy contract](docs/scan-policy.md)
 - [J-03 product research cockpit](docs/research-cockpit.md)
 - [J-03A development supervision dashboard](docs/development-dashboard.md)
@@ -239,13 +263,15 @@ The development dashboard shows Roadmap, Git, checkpoint, and validation-ledger
 state. It does not scan registered research projects and is not the product
 cockpit.
 
-The J-05 Codex reference package lives at `plugins/llmwiki-research/`. It
-contains a validated Plugin manifest, Skill, MCP configuration, portable Core
-launchers, and one optional fail-open Hook. Configure `LLMWIKI_CORE_ROOT` and
-`LLMWIKI_WORKSPACE_ROOT` for an installed copy, use the MCP tools for current
-Core operations, and finish relevant work with explicit `llmwiki_reconcile`.
-Hooks submit untrusted path hints only; `llmwiki_query` and `llmwiki_plan` remain
-explicitly unavailable until their later roadmap slices.
+The J-05B Codex release source lives at `plugins/llmwiki-research/`. Plugin
+`0.2.0` bundles a private Python runtime, allowlisted current Core, Skill, MCP,
+CLI/cockpit launchers, and one optional fail-open Hook. The installed release
+needs neither a repository checkout nor `LLMWIKI_CORE_ROOT`;
+`LLMWIKI_WORKSPACE_ROOT` is optional and defaults to the safe per-user data
+directory. Hooks submit untrusted path hints only, so finish relevant work with
+explicit `llmwiki_reconcile`. I-04 DRAFT initial planning is available, but
+`llmwiki_query` remains exactly unavailable until G-04 and C-07 remains
+deferred/not_started.
 
 Registered projects also accept host-neutral file-change signals through the
 append-only H-04 event ledger. `event submit` records an idempotent event under
@@ -292,8 +318,9 @@ otherwise content-restricted files. The default `local-only` external-send mode
 still permits explicit local host access to ordinary policy-authorized files.
 Reconciliation uses the same full-scan H-07 fallback even without Hook hints.
 The current MCP catalog does not expose B-07 prioritization; that operation is
-local Core/CLI-only. Query and planning retain honest `capability-unavailable`
-contracts until their corresponding roadmap slices are implemented.
+local Core/CLI-only. I-04 initial planning now returns strict non-executable DRAFT
+machine state. Query remains the exact `capability-unavailable` contract with
+`available_after=G-04`.
 
 ## What You Get
 

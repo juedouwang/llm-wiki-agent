@@ -129,3 +129,45 @@ Validation recorded on 2026-07-19: focused J-01/planning/state tests produced
 **19 passed**; dependent suites produced **339 passed, 12 skipped**; final full
 regression produced **826 passed, 31 skipped**. Ruff, `py_compile`, and
 `git diff --check` passed.
+
+## J-05B installable-Codex-Plugin-release coverage
+
+`test_codex_plugin_release.py` validates the deterministic Windows x86-64
+release builder, locked runtime/dependency hashes, bundled Core allowlist,
+complete `FILELIST.txt`/`SHA256SUMS`, archive sidecar, safe managed installer,
+reinstall, rollback, uninstall, and marker-validated package purge. The fast
+path also checks source-template bootstrap behavior without downloading or
+installing the full runtime.
+
+Set `LLMWIKI_RUN_RELEASE_TESTS=1` for the real clean-profile acceptance. That
+path creates independent Codex home, `LOCALAPPDATA`, home, temp, PowerShell
+module-cache, workspace, and source-fixture directories; removes
+`LLMWIKI_CORE_ROOT`/`LLMWIKI_WORKSPACE_ROOT`; poisons `PYTHONPATH` and
+`PYTHONHOME`; installs through the real Codex CLI; moves both the release and
+installed Plugin trees; and performs a real MCP initialization and tool-call
+sequence.
+
+The acceptance verifies Codex Plugin/Skill/MCP discovery; all seven input/output
+JSON Schemas; project context, Host Context Pack, coverage, source-open,
+reconcile, current I-04 plan, exact Query unavailable behavior, and the complete
+bundled `understand` R3-minus-C-07 pipeline. It deletes Hooks before one explicit
+reconciliation, checks source bytes/hash/mtime/mode and curated knowledge remain
+unchanged, confirms the binary canary is not semantically extracted or leaked,
+and rejects/error-redacts unsafe unmanaged install roots.
+
+Final J-05B validation on 2026-07-19 produced **8 passed, 1 skipped** for
+the focused source-template suite, **149 passed, 5 skipped** for related
+Core/adapter dependencies, and **827 passed, 32 skipped** for the complete
+repository. The enabled clean-profile release suite produced **2 passed** with
+Codex CLI `0.144.2`; it also discovered `llmwiki-research:llmwiki-research`
+through `codex debug prompt-input`, rather than inferring Skill availability from
+files alone. Changed-file and bundled-Core Ruff checks, Ruff format checks,
+isolated `py_compile`, and `git diff --check` passed.
+
+OpenAI's current Plugin documentation permits `.mcp.json` to be a direct server
+map (the shipped shape) or to use an `mcp_servers` wrapper. The locally bundled
+`plugin-creator` validator still requires the historical camel-case
+`mcpServers` wrapper, so it reports a known version-skew failure. The release
+gate instead uses the repository schema contract plus the real Codex
+clean-profile install, discovery, MCP startup, and tool-call acceptance; the
+independent Skill validator passes.

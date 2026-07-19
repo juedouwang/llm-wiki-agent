@@ -69,6 +69,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | H-04 host-neutral event ledger | complete | `5c2a888` | `checkpoint/h-04-host-event-ledger` |
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
 | J-05 Codex reference adapter package | complete after validation on 2026-07-16 | `62ccbdc` | `checkpoint/j-05-codex-plugin` |
+| J-05B installable Codex Plugin release | complete after validation on 2026-07-19 | `3c2bb29` | `checkpoint/j-05b-installable-codex-plugin-release` |
 | I-01 strict Goal/Milestone Schema | complete after validation on 2026-07-18 | `ddd5261` | `checkpoint/i-01-goal-schema` |
 | I-02 strict internal task protocol | complete after validation on 2026-07-18 | `76a81e3` | `checkpoint/i-02-task-protocol` |
 | I-03 deterministic project-state snapshot | complete after validation on 2026-07-19 | `5988961` | `checkpoint/i-03-project-state` |
@@ -262,7 +263,7 @@ G-01 → G-07 → G-08
 
 这是架构防偏门槛：如果这一阶段仍需要两个聊天窗口手工交接，应暂停后续开发修正设计。
 
-As of 2026-07-16, R2 is complete. J-05 packages the validated Core boundary as a Codex Plugin with a Skill, MCP configuration, portable launchers, and one optional fail-open Hook. Codex can identify registered projects, call the current host-safe Core operations, and explicitly reconcile after work. Hook signals remain optional untrusted H-04 hints, so disabled, missing, malformed, unavailable, or untrusted Hooks do not weaken the H-07 full-scan correctness path. R2 still does not claim adaptive extraction, H-05 selective refresh, curated-knowledge refresh, Verified Query, planning, or Web behavior.
+As of 2026-07-16, R2 is complete. J-05 packages the validated Core boundary as a Codex Plugin with a Skill, MCP configuration, portable launchers, and one optional fail-open Hook. Codex can identify registered projects, call the current host-safe Core operations, and explicitly reconcile after work. Hook signals remain optional untrusted H-04 hints, so disabled, missing, malformed, unavailable, or untrusted Hooks do not weaken the H-07 full-scan correctness path. I-04 later activated only strict non-executable DRAFT planning. J-05B is the separate release-quality unit that makes this accepted boundary self-contained and installable without a checkout; it does not retroactively add Verified Query, H-05, mature planning, task execution, C-07, or R4 behavior.
 
 ### R3：一键完整项目理解与本地网站
 
@@ -375,10 +376,13 @@ git tag checkpoint/b-01-project-register
 
 ## 6. Authorized stop boundary
 
-The final authorized R3-minus-C-07 unit, **J-01**, is complete at implementation
-commit `9e2eba2` and `checkpoint/j-01-r3-end-to-end`. No further unit is
-authorized in this run. **C-07 remains `deferred/not_started`, Query remains the
-exact `capability-unavailable` contract until G-04, and R4 has not started.**
+The J-01 R3-minus-C-07 capability baseline remains complete at implementation
+commit `9e2eba2` and `checkpoint/j-01-r3-end-to-end`. The only subsequently
+authorized unit in this run is **J-05B**, which packages that accepted boundary as
+a self-contained installable Codex Plugin release. It may change packaging,
+launchers, installation, release metadata, and clean-environment acceptance only.
+**C-07 remains `deferred/not_started`, Query remains the exact
+`capability-unavailable` contract until G-04, and R4 has not started.**
 
 R1 and the G-01 Core facade remain accepted at their checkpoints. G-07 is
 complete at `checkpoint/g-07-mcp-server`; its stdio transport, seven-tool catalog,
@@ -439,14 +443,20 @@ does not claim H-05 selective extraction, selective knowledge refresh, or any
 later knowledge/rendering stage.
 
 J-05 is complete after validation on 2026-07-16 and is designated by
-`checkpoint/j-05-codex-plugin`. The package at `plugins/llmwiki-research/`
-contains the validated manifest, Skill, MCP configuration, portable Core/CLI
-launchers, and optional fail-open Hook. At the J-05 checkpoint both query and plan
-were unavailable; the same adapter now exposes I-04 DRAFT planning while query
-remains unavailable. Clean-profile installation, seven-tool MCP startup, current
-Core calls, registered-root Hook normalization, and no-Hook reconciliation
-fallback are covered by `tests/test_codex_plugin.py`. See
-[`codex-reference-adapter.md`](codex-reference-adapter.md).
+`checkpoint/j-05-codex-plugin`. The source adapter at
+`plugins/llmwiki-research/` contains the validated manifest, Skill, MCP
+configuration, portable Core/CLI launchers, and optional fail-open Hook. At the
+J-05 checkpoint both query and plan were unavailable; the same transport now
+exposes I-04 DRAFT planning while query remains unavailable.
+
+J-05B is the bounded installable-release follow-up. It adds a private locked
+Windows runtime, allowlisted bundled Core, Plugin-relative MCP/Hook/CLI/cockpit
+launchers, safe workspace default, deterministic release builder, complete file
+and SHA-256 inventories, guarded install/reinstall/rollback/uninstall scripts,
+and a real clean-profile Codex/MCP acceptance that cannot import from the source
+checkout. It does not extend the scientific capability surface. See
+[`codex-reference-adapter.md`](codex-reference-adapter.md) and
+[`codex-plugin-installation.md`](codex-plugin-installation.md).
 
 B-07 implementation landed on **2026-07-17** in `248b231`. The completed
 implementation and validation state is designated by
@@ -1024,3 +1034,38 @@ produced **339 passed, 12 skipped**; final full regression produced **826 passed
 31 skipped**. Ruff, `py_compile`, and `git diff --check` passed. MCP Query remains
 exactly `capability-unavailable` with `available_after=G-04`; C-07 remains
 `deferred/not_started`; no R4 behavior was introduced.
+
+### J-05B installable Codex Plugin release (2026-07-19)
+
+J-05B is authorized solely to distribute the accepted R3-minus-C-07 boundary as
+Plugin `0.2.0` for Windows x86-64. The package includes a valid Codex manifest,
+Skill, `.mcp.json`, optional Hook, private CPython 3.13.9 runtime, exact-hash
+dependencies, allowlisted Core, CLI/MCP/cockpit launchers, deterministic release
+metadata, internal file/checksum inventories, and guarded lifecycle scripts.
+
+Acceptance requires an independent Codex home/profile with no checkout reference,
+no `LLMWIKI_CORE_ROOT`, no configured workspace, poisoned ambient Python paths,
+and Hooks removed for the explicit reconciliation case. It must prove Plugin and
+Skill discovery, MCP handshake and all seven schemas, project context, Host
+Context Pack, coverage, source-open, reconcile, I-04 plan, exact unavailable
+Query, the complete bundled `understand` pipeline, package relocation, error
+redaction, source immutability, rollback, uninstall, and package purge.
+
+Implementation commit `3c2bb29` is preserved by annotated checkpoint
+`checkpoint/j-05b-installable-codex-plugin-release`. Focused validation produced
+**8 passed, 1 skipped**; related Core/adapter validation produced **149 passed, 5
+skipped**; final full regression produced **827 passed, 32 skipped**; and the
+enabled clean-profile release acceptance produced **2 passed** with Codex CLI
+`0.144.2`. The clean run discovered the installed Skill through Codex itself,
+started and exercised MCP, removed Hooks for explicit reconciliation, relocated
+the package, and verified the source and capability boundaries. Changed-file and
+bundled-Core Ruff checks, Ruff format checks, isolated `py_compile`, and
+`git diff --check` passed. The final archive SHA-256 is kept in its generated
+sidecar and the release report so rebuilding the archive does not require editing
+source documentation.
+
+Query remains `capability-unavailable` with `available_after=G-04`; C-07 remains
+`deferred/not_started`; no H-05, mature planning, task execution, binary semantic
+extraction, source mutation, unauthorized external send, or R4 behavior is in
+scope. This checkpoint is the installable R3-minus-C-07 adapter release, not a
+claim that the complete research-assistant product has shipped.

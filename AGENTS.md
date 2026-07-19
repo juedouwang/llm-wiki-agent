@@ -236,11 +236,16 @@ exactly `capability-unavailable` with `available_after=G-04`, C-07 remains
 `deferred/not_started`, and J-04 adds no R4 behavior. See
 `docs/research-cockpit.md`.
 
-## Codex Research Adapter (J-05)
+## Codex Research Adapter and Installable Release (J-05/J-05B)
 
-The reference Codex package is `plugins/llmwiki-research/`. Installed copies
-locate this checkout through `LLMWIKI_CORE_ROOT` and write project state under
-`LLMWIKI_WORKSPACE_ROOT` (defaulting to the validated Core root). Use the
+The reference Codex package is `plugins/llmwiki-research/`. J-05B release copies
+bundle the allowlisted current Core, a private locked Python runtime, Skill, MCP,
+CLI/cockpit launchers, and optional Hook, so installed users do not need the
+repository checkout or `LLMWIKI_CORE_ROOT`. `LLMWIKI_WORKSPACE_ROOT` remains
+optional and must be absolute when set; the Windows release default is the safe
+per-user `%LOCALAPPDATA%\LLMWiki\workspace`, separate from both Plugin runtime
+and registered source projects. `LLMWIKI_CORE_ROOT` is a source-development
+fallback only, and a valid bundled Core always takes precedence. Use the
 host-safe MCP operations for project context, Host Context Pack, coverage,
 policy-authorized source-open, and explicit `llmwiki_reconcile`.
 
@@ -252,9 +257,11 @@ reconciliation available when Hooks are disabled, unavailable, malformed, or
 untrusted. `llmwiki_plan` now delegates to the I-04 initial-planning slice and
 returns only non-executable DRAFT machine state. `llmwiki_query` continues to
 return `capability-unavailable` with `available_after=G-04`; do not claim Verified
-Query or mature I-05 planning from J-05.
+Query or mature I-05 planning from J-05/J-05B. The release does not add C-07,
+H-05, task execution, scientific-binary semantic extraction, source-project
+writes, unauthorized external sends, or any R4 behavior.
 
-See `docs/codex-reference-adapter.md`.
+See `docs/codex-reference-adapter.md` and `docs/codex-plugin-installation.md`.
 
 ---
 

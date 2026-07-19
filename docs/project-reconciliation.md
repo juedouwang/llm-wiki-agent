@@ -348,10 +348,11 @@ Validation must cover at least:
 - absence of selective extraction, knowledge refresh, LLM, network, and Web
   behavior.
 
-J-05 now wires this validated H-07 boundary into the Codex reference package at
-`plugins/llmwiki-research/`. Its Plugin, Skill, MCP configuration, and optional
-Hook preserve the same invariant: Hook signals are untrusted hints, while
-explicit `llmwiki_reconcile` remains the correctness path. See
-[`codex-reference-adapter.md`](codex-reference-adapter.md). The independent
-B-07 adaptive-reading-priority slice landed on **2026-07-17**; C-05 is the next
-executable roadmap task.
+J-05 wires this validated H-07 boundary into the Codex reference package at
+`plugins/llmwiki-research/`; J-05B distributes the same boundary in a
+self-contained Windows release. Its Plugin, Skill, MCP configuration, and
+optional Hook preserve the invariant that Hook signals are untrusted hints while
+explicit `llmwiki_reconcile` remains the correctness path, including when Hooks
+are absent. See [`codex-reference-adapter.md`](codex-reference-adapter.md) and
+[`codex-plugin-installation.md`](codex-plugin-installation.md). J-05B changes
+packaging only and does not claim H-05 selective extraction or knowledge refresh.

@@ -131,6 +131,16 @@ Codex / Claude Code / 其他宿主 Agent
 
 宿主适配包只保存连接配置和工作流，不在每个科研项目中复制一套 Core 或知识库。
 
+
+> **J-05B implementation note (2026-07-19):** the Windows x86-64 Codex release
+> may bundle a versioned, allowlisted copy of Research Core code, a private Python
+> runtime, and locked dependencies as one host installation unit. This does not
+> copy project machine state, curated knowledge, or business data into the
+> Plugin, and it does not duplicate Core inside each registered research project.
+> The installed release therefore needs neither a source checkout nor
+> `LLMWIKI_CORE_ROOT`; `LLMWIKI_WORKSPACE_ROOT` remains an optional absolute
+> machine-state/knowledge root with a safe per-user default.
+
 ## 3. 数据边界与最终目录
 
 ### 3.1 原科研项目
