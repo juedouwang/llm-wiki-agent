@@ -168,6 +168,7 @@ The `research-assistant` branch is evolving this repository into a local-first, 
 - [Minimal MCP stdio server](docs/research-mcp-server.md)
 - [Codex reference adapter package](docs/codex-reference-adapter.md)
 - [B-02 explainable scan-policy contract](docs/scan-policy.md)
+- [J-03 product research cockpit](docs/research-cockpit.md)
 - [J-03A development supervision dashboard](docs/development-dashboard.md)
 
 - [B-03 project inventory and accountable directory contract](docs/project-inventory.md)
@@ -185,20 +186,37 @@ python -B -m tools.project understand /path/to/research-project \
   --workspace-root /path/to/assistant-workspace --json
 ```
 
-This currently performs only `register -> inventory -> classify`, persists a
-resumable run report, and leaves later stages pending. It does **not** call the
-standalone B-07 `prioritize` operation or advance the canonical `adaptive-read`
-stage. It also does **not** yet produce the 15-artifact package or the full J-03
-research-product dashboard, and it has no `--open` option. A separate J-03A
-loopback-only development supervision dashboard is available with:
+This runs the complete deterministic E-08 stage sequence:
+`register -> inventory -> classify -> extract -> adaptive-read -> synthesize ->
+evidence -> status -> plan -> index -> web-render`. It creates or resumes a
+bounded run, produces all 15 canonical Knowledge entries (with explicit `DRAFT`
+gaps where grounding is unavailable), and supports `--open` for the run-local,
+self-contained read-only HTML result. B-07 also remains available as an
+independent `prioritize` operation. The pipeline is local-only and source-read-
+only; it does not claim Verified Query, mature planning, or C-07 scientific-
+binary metadata extraction.
+
+The completed J-03 product research cockpit is a separate registered-project
+surface:
+
+```bash
+python -B tools/research_cockpit.py --workspace-root . serve
+```
+
+Open `http://127.0.0.1:8765/` to browse projects, all 15 Knowledge entries,
+coverage and file state, Claim/Evidence/Source/Locator traces, Goal/task/plan
+state, and run history. It is loopback-only and read-only; controlled editing is
+a J-04 concern, and Query remains explicitly unavailable until G-04.
+
+Repository engineering progress is supervised independently with:
 
 ```bash
 python -B tools/development_dashboard.py serve
 ```
 
-Open `http://127.0.0.1:8765/` to supervise roadmap, Git, checkpoint, and local
-validation progress. This read-only development view does not scan registered
-research projects and must not be treated as completion of the full J-03 task.
+The development dashboard shows Roadmap, Git, checkpoint, and validation-ledger
+state. It does not scan registered research projects and is not the product
+cockpit.
 
 The J-05 Codex reference package lives at `plugins/llmwiki-research/`. It
 contains a validated Plugin manifest, Skill, MCP configuration, portable Core

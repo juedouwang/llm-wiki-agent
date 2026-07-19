@@ -401,7 +401,7 @@ models/model.ckpt          → metadata_only / 模型权重，不做语义解析
 → 当前宿主继续下一任务
 ```
 
-As of 2026-07-19, the deterministic `project understand` pipeline, independent B-07 reading priority, H-04 event-input boundary, and H-07 conservative reconciliation boundary are integrated. E-08 `--open` produces only a self-contained local read-only run page with no external resources; it does not present the legacy development supervision dashboard as the product cockpit. I-01 through I-04 now provide strict Goal/task state, a current project snapshot, and a non-executable DRAFT initial plan that the E-07 renderer projects through F-05 controlled writes. The product Web cockpit and controlled Web editing remain the next R3 J units; Verified Query and mature planning remain later work.
+As of 2026-07-19, the deterministic `project understand` pipeline, independent B-07 reading priority, H-04 event-input boundary, and H-07 conservative reconciliation boundary are integrated. E-08 `--open` produces a self-contained local read-only run page with no external resources, while the completed J-03 product research cockpit is a separate loopback-only read surface for registered projects, all 15 canonical Knowledge entries, coverage and file state, Evidence/source/locator traces, plans, tasks, and run history. The repository development-supervision dashboard remains a distinct engineering surface. I-01 through I-04 provide strict Goal/task state, a current project snapshot, and a non-executable DRAFT initial plan that the E-07 renderer projects through F-05 controlled writes. J-04 controlled Web editing is the next R3 unit; Verified Query and mature planning remain later work.
 
 任务执行包保留为 Core 与宿主之间的内部协议：
 

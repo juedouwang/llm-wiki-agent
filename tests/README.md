@@ -73,3 +73,15 @@ python -B -m pytest -q -p no:cacheprovider tests/test_reading_priority.py tests/
 ```
 
 Result: **45 passed, 3 skipped**. The skipped cases require host symbolic-link creation privilege; deterministic mocked unresolved-link and ancestor-redirection paths remain covered.
+
+## J-03 product-research-cockpit coverage
+
+`test_research_cockpit.py` verifies honest registration-only DRAFT gaps; strict
+Knowledge Schema v2/path handling for all fifteen canonical entries; bounded
+Manifest/coverage/file-state, Claim/Evidence/Source/Locator, Goal/task/plan, and
+run usage/cost/error projections; absolute-path redaction; source-tree
+immutability; loopback bind and Host enforcement; read-only HTTP methods;
+restrictive security headers; traversal/query rejection; and redirected-path
+fail-closed behavior where the host permits symbolic-link creation. Focused
+validation on 2026-07-19 produced **15 passed, 3 skipped**; the skipped cases
+require Windows symbolic-link privilege.

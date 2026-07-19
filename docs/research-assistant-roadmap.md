@@ -51,7 +51,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | D-05 source relocation recovery | complete | `a49c6a8` | `checkpoint/d-05-source-relocation` |
 | D-06 source and Evidence health | complete | `9b38353` | `checkpoint/d-06-source-health` |
 | J-01 R1 basic-chain acceptance | complete (R1 slice) | `73070f1` | `checkpoint/j-01-r1-e2e` |
-| J-03 阶段 A：开发监督驾驶舱基础 | 部分完成（完整产品驾驶舱仍未完成；2026-07-17 验证） | `e876060` | `checkpoint/j-03-dashboard-foundation` |
+| J-03 local read-only product research cockpit | complete (2026-07-19 validation; development-supervision dashboard remains separate) | `15ae906` | `checkpoint/j-03-product-cockpit` |
 | G-01 Research Core service facade | complete | `baa9625` | `checkpoint/g-01-core-service` |
 | G-07 minimal MCP server | complete | `7b0eef9` | `checkpoint/g-07-mcp-server` |
 | G-08 budget-bounded Host Context Pack | complete | `3721fb5` | `checkpoint/g-08-host-context-pack` |
@@ -369,11 +369,11 @@ git tag checkpoint/b-01-project-register
 
 ## 6. Next executable task
 
-The next executable R3 unit is **J-03**: replace the development-supervision
-foundation with the loopback-only product research cockpit. I-04 is complete at
-`checkpoint/i-04-initial-planning`; continue in dependency order
-`J-03 -> J-04 -> J-01`. **C-07 remains `deferred/not_started` and is not part of
-this run.**
+The next executable R3 unit is **J-04**: add narrowly mapped controlled Web
+editing to the completed loopback-only J-03 product research cockpit by reusing
+the F-05A/F-05B controlled Markdown boundary. Continue in dependency order
+`J-04 -> J-01`. **C-07 remains `deferred/not_started` and is not part of this
+run.**
 
 R1 and the G-01 Core facade remain accepted at their checkpoints. G-07 is
 complete at `checkpoint/g-07-mcp-server`; its stdio transport, seven-tool catalog,
@@ -950,3 +950,20 @@ produced 794 passed, 28 skipped. Ruff, isolated `py_compile`, UTF-8 health, and
 changed, no LLM/external send occurred, and no task execution was authorized.
 C-07 remains `deferred/not_started`. See
 [`initial-planning.md`](initial-planning.md).
+
+J-03 is complete at implementation commit `15ae906` and checkpoint
+`checkpoint/j-03-product-cockpit`. The product cockpit is separate from the
+repository development-supervision dashboard and provides loopback-only,
+read-only views for registered projects, all fifteen canonical Knowledge
+entries, Manifest/coverage and file-state details, Claim -> Evidence -> Source
+-> Locator traces, Goal/task/plan state, and bounded run usage/cost/error data.
+Strict Knowledge Schema v2/path validation, regular-file and redirection checks,
+absolute-path redaction, restrictive browser headers, and request/Host/method
+bounds preserve the local read-only surface. `llmwiki_query` remains
+`capability-unavailable` with `available_after=G-04`, and Web editing remains
+unavailable until J-04. Focused validation produced 15 passed, 3 skipped;
+dependent validation produced 234 passed, 12 skipped. Ruff check/format,
+`py_compile`, UTF-8/LF checks, and `git diff --check` passed. No source-project
+content or research binary was read or changed, no LLM/external send occurred,
+and C-07 remains `deferred/not_started`. See
+[`research-cockpit.md`](research-cockpit.md).
