@@ -44,6 +44,7 @@ if __package__:
         ProjectState,
         ProjectStateError,
         ProjectStateNotFoundError,
+        StaleProjectStateError,
         generate_project_state,
         load_project_state,
         parse_project_state,
@@ -93,6 +94,7 @@ else:
         ProjectState,
         ProjectStateError,
         ProjectStateNotFoundError,
+        StaleProjectStateError,
         generate_project_state,
         load_project_state,
         parse_project_state,
@@ -1143,31 +1145,42 @@ def _ensure_state_exists(
     *,
     generated_at: str,
     lock_timeout_seconds: float,
-) -> bool:
+) -> tuple[bool, bool]:
+    """Ensure a current I-03 snapshot, rebuilding only trusted stale inputs.
+
+    A missing snapshot and a valid snapshot whose Manifest/registration binding
+    changed are both deterministic rebuild cases.  Malformed or unsupported state
+    remains fail-closed and is never silently replaced.
+    """
+
     try:
         load_project_state(
             workspace_root,
             project_id,
             lock_timeout_seconds=lock_timeout_seconds,
         )
-        return False
+        return False, False
     except ProjectStateNotFoundError:
-        try:
-            generate_project_state(
-                workspace_root,
-                project_id,
-                generated_at=generated_at,
-                lock_timeout_seconds=lock_timeout_seconds,
-            )
-        except ProjectStateError as exc:
-            raise InitialPlanningError(
-                f"project-state could not be generated: {exc}"
-            ) from exc
-        return True
+        created = True
+    except StaleProjectStateError:
+        created = False
     except ProjectStateError as exc:
         raise InitialPlanningError(
             f"project-state is malformed, future, or stale: {exc}"
         ) from exc
+
+    try:
+        generate_project_state(
+            workspace_root,
+            project_id,
+            generated_at=generated_at,
+            lock_timeout_seconds=lock_timeout_seconds,
+        )
+    except ProjectStateError as exc:
+        raise InitialPlanningError(
+            f"project-state could not be generated: {exc}"
+        ) from exc
+    return created, True
 
 
 def _create_missing_planning_artifacts(
@@ -1430,7 +1443,7 @@ def generate_initial_plan(
         else None
     )
 
-    state_created = _ensure_state_exists(
+    state_created, state_refreshed = _ensure_state_exists(
         root,
         normalized_project_id,
         generated_at=timestamp,
@@ -1444,8 +1457,8 @@ def generate_initial_plan(
         plan_date=normalized_date,
         lock_timeout_seconds=lock_timeout_seconds,
     )
-    state_rebuilt = goal_created or tasks_created
-    if state_rebuilt:
+    state_rebuilt = state_refreshed
+    if goal_created or tasks_created:
         try:
             generate_project_state(
                 root,
@@ -1457,6 +1470,7 @@ def generate_initial_plan(
             raise InitialPlanningError(
                 f"project-state could not bind generated drafts: {exc}"
             ) from exc
+        state_rebuilt = True
 
     registration = _load_registration(root, normalized_project_id)
     try:

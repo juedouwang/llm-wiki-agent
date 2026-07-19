@@ -153,6 +153,10 @@ class ProjectStateNotFoundError(ProjectStateError):
     """No current project-state artifact exists."""
 
 
+class StaleProjectStateError(ProjectStateError):
+    """The snapshot is valid but its rebuildable inputs have changed."""
+
+
 def _timestamp(value: object | None = None) -> str:
     if value is None:
         current = datetime.now(timezone.utc)
@@ -1262,13 +1266,17 @@ def load_project_state(
             raise ProjectStateError("project-state artifact bytes were not captured")
         state = parse_project_state(raw, project_id=locked.registration.project_id)
         if state.manifest != manifest_binding(locked.manifest, locked.manifest_sha256):
-            raise ProjectStateError("current project-state artifact is stale for the Manifest")
+            raise StaleProjectStateError(
+                "current project-state artifact is stale for the Manifest"
+            )
         project_bytes = _read_machine_file(
             locked.registration.layout, locked.registration.project_file, optional=False
         )
         expected_registration = _safe_registration_binding(locked.registration, project_bytes)
         if dict(state.registration) != expected_registration:
-            raise ProjectStateError("current project-state artifact is stale for registration")
+            raise StaleProjectStateError(
+                "current project-state artifact is stale for registration"
+            )
         return state
 
 
@@ -1377,6 +1385,7 @@ __all__ = [
     "ProjectStateError",
     "UnsupportedProjectStateSchemaVersionError",
     "ProjectStateNotFoundError",
+    "StaleProjectStateError",
     "ProjectState",
     "ProjectStateSnapshot",
     "ProjectStateResult",

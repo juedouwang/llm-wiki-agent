@@ -21,7 +21,7 @@ from tools.research_planning import (
     parse_initial_plan,
     serialize_initial_plan,
 )
-from tools.research_state import generate_project_state
+from tools.research_state import generate_project_state, load_project_state
 from tools.research_tasks import ResearchTask, TaskCollection, TaskStore
 
 
@@ -198,6 +198,42 @@ class InitialPlanningStorageTests(unittest.TestCase):
         self.assertEqual(goal_path.read_bytes(), before_goal)
         self.assertEqual(task_path.read_bytes(), before_tasks)
         self.assertEqual(result.goal.goal, "User-authored objective")
+
+
+    def test_manifest_stale_state_is_refreshed_before_planning(self) -> None:
+        first = generate_initial_plan(
+            self.workspace,
+            PROJECT_ID,
+            generated_at=TIMESTAMP,
+        )
+        goal_path = self.registration.layout.goals_file
+        task_path = self.registration.layout.tasks_file
+        before_goal = goal_path.read_bytes()
+        before_tasks = task_path.read_bytes()
+
+        (self.source / "README.md").write_text(
+            "# Study\n\nUpdated after reconciliation.\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        inventory_project(self.workspace, PROJECT_ID)
+
+        refreshed = generate_initial_plan(
+            self.workspace,
+            PROJECT_ID,
+            generated_at="2026-07-19T05:00:00Z",
+        )
+        current_state = load_project_state(self.workspace, PROJECT_ID)
+
+        self.assertFalse(refreshed.state_created)
+        self.assertTrue(refreshed.state_rebuilt)
+        self.assertNotEqual(
+            first.plan.state_artifact_id,
+            refreshed.plan.state_artifact_id,
+        )
+        self.assertEqual(refreshed.plan.state_artifact_id, current_state.artifact_id)
+        self.assertEqual(goal_path.read_bytes(), before_goal)
+        self.assertEqual(task_path.read_bytes(), before_tasks)
 
     def test_stale_state_fails_closed_instead_of_silent_rebuild(self) -> None:
         generate_initial_plan(
