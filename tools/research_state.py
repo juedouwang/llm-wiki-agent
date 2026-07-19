@@ -225,6 +225,15 @@ def _canonical_timestamp(value: object, *, label: str) -> str:
     return value
 
 
+def _project_run_timestamp_seconds(value: str) -> str:
+    """Project a validated ProjectRun timestamp into ProjectState's seconds precision."""
+
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed.astimezone(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
+
+
 def _relative_path(value: object, *, label: str, optional: bool = True) -> str | None:
     if value is None and optional:
         return None
@@ -997,7 +1006,7 @@ def _run_items(layout: Any, project_id: str) -> tuple[list[dict[str, Any]], byte
                 "run",
                 title=run_id,
                 status=str(record["status"]),
-                updated_at=str(record["updated_at"]),
+                updated_at=_project_run_timestamp_seconds(record["updated_at"]),
                 reasons=("run-failed",) if record["status"] == "failed" else (),
             )
         )

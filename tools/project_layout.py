@@ -445,6 +445,12 @@ class ProjectLayout:
         return self.indexes_dir / "project-state.json"
 
     @property
+    def initial_plan_file(self) -> Path:
+        """I-04 deterministic initial planning machine artifact."""
+
+        return self.indexes_dir / "initial-plan.json"
+
+    @property
     def machine_state_lock_file(self) -> Path:
         """Stable advisory lock shared by per-project machine-state mutations."""
 

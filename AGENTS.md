@@ -50,7 +50,7 @@ New research-project features must keep machine state and human-readable knowled
 wiki/projects/<project_id>/       # curated Markdown knowledge for people and agents
 ```
 
-The machine-state tree uses `project.yaml`, `manifest.jsonl`, `sources.jsonl`, `extracted/`, `indexes/` (including B-07 `reading-priority.json`, E-02 `project-map.json`, E-03 `hierarchical-understanding.json`, E-04 `execution-flow.json`, E-05 `research-linkage.json`, E-06 `experiment-chains.json`, I-01 `goals.json`, I-02 `tasks.json`, and I-03 `project-state.json`), and `runs/`. The canonical curated directory tree uses `papers/`, `methods/`, `datasets/`, `experiments/`, `results/`, `claims/`, `plans/` (including `plans/daily/`), `decisions/`, and `sources/`. Registration and layout initialization create only this empty directory skeleton; later tasks own Markdown singleton and collection pages.
+The machine-state tree uses `project.yaml`, `manifest.jsonl`, `sources.jsonl`, `extracted/`, `indexes/` (including B-07 `reading-priority.json`, E-02 `project-map.json`, E-03 `hierarchical-understanding.json`, E-04 `execution-flow.json`, E-05 `research-linkage.json`, E-06 `experiment-chains.json`, I-01 `goals.json`, I-02 `tasks.json`, and I-03 `project-state.json`, and I-04 `initial-plan.json`), and `runs/`. The canonical curated directory tree uses `papers/`, `methods/`, `datasets/`, `experiments/`, `results/`, `claims/`, `plans/` (including `plans/daily/`), `decisions/`, and `sources/`. Registration and layout initialization create only this empty directory skeleton; later tasks own Markdown singleton and collection pages.
 
 Rules:
 1. New structured machine records, including `project.yaml` and JSON/JSONL files, must carry `schema_version`.
@@ -145,8 +145,9 @@ core.knowledge_render(project_id, persist=True, host_context=..., decision_id=..
 
 `tools/knowledge_renderer.py` owns the deterministic fifteen-artifact contract,
 collection detail pages, the unified `index.md`, and the daily plan. It consumes
-current E-02--E-06 machine artifacts plus explicit host overrides, emits stable
-`DRAFT` placeholders for missing inputs, and keeps C-07 `deferred/not_started`.
+current E-02--E-06 analysis artifacts, current I-01--I-04 planning artifacts,
+and explicit host overrides, emits stable `DRAFT` placeholders for missing inputs,
+and keeps C-07 `deferred/not_started`.
 Use `persist=False` for content-free planning observations. Persisted pages must
 flow through F-05A and F-05B; Schema v1/future/malformed, user-owned, mixed, and
 non-draft pages are protected, and mixed user regions are preserved byte-for-byte.
@@ -154,6 +155,22 @@ The operation writes curated Markdown only below the registered/custom knowledge
 root, never the research source or machine-state tree, calls no LLM, sends nothing
 externally, and adds no alternate write path. See
 `docs/knowledge-rendering.md` and `docs/research-core-service.md`.
+
+Generate the I-04 initial planning bundle with:
+
+```python
+core.plan(project_id, objective=None, plan_date=None)
+```
+
+I-04 creates or loads strict Goal/task state, refreshes the current I-03 snapshot,
+and writes only the DRAFT `indexes/initial-plan.json` machine artifact under the
+shared mutation lock. Automatically proposed tasks remain non-executable. Existing
+Goal/task bytes are not rewritten, and Markdown rendering remains an E-07 plus
+F-05A/F-05B concern. The `llmwiki_plan` MCP tool delegates to this boundary;
+`llmwiki_query` remains `capability-unavailable` with `available_after=G-04`.
+I-04 reads no source bytes or research binaries, calls no LLM, sends nothing
+externally, and does not implement I-05 mature planning. See
+`docs/initial-planning.md`.
 
 Run the complete E-08 one-action project understanding pipeline with:
 
@@ -194,7 +211,7 @@ H-07 reconciliation always uses a full deterministic scan through `classify` as 
 
 For project registration, scan/inventory, reading prioritization, coverage, reconciliation, and source-open integrations, use the host-independent `tools.research_core.ResearchCoreService` facade. CLI and future MCP/host adapters must delegate to this boundary rather than duplicating filesystem workflows. See `docs/research-core-service.md`.
 
-The minimal MCP stdio adapter is `python -m tools.research_mcp --workspace-root <workspace>`. Its project-context, coverage, reconciliation, and source-open tools delegate to host-safe `ResearchCoreService` views; all advertised input/output JSON Schemas are enforced. The current MCP catalog does not expose B-07 prioritization; use the local Core method or CLI. Coverage and reconciliation write deterministic machine state and are not read-only. Source-open must enforce current Manifest content policy, deny sensitive or ignored files, omit absolute/storage/Git-origin paths, and may allow ordinary local access even when independent external sends are `local-only`. Query and plan must return explicit `capability-unavailable` errors until their real Core roadmap slices land. The adapter must not echo caller-controlled sensitive inputs or return raw content outside explicit policy-authorized source-open. See `docs/research-mcp-server.md`.
+The minimal MCP stdio adapter is `python -m tools.research_mcp --workspace-root <workspace>`. Its project-context, coverage, reconciliation, source-open, and I-04 initial-plan tools delegate to host-safe `ResearchCoreService` views; all advertised input/output JSON Schemas are enforced. The current MCP catalog does not expose B-07 prioritization; use the local Core method or CLI. Coverage, reconciliation, and planning write deterministic machine state and are not read-only. Source-open must enforce current Manifest content policy, deny sensitive or ignored files, omit absolute/storage/Git-origin paths, and may allow ordinary local access even when independent external sends are `local-only`. `llmwiki_plan` returns only non-executable DRAFT planning state; `llmwiki_query` must continue to return `capability-unavailable` with `available_after=G-04`. The adapter must not echo caller-controlled sensitive inputs or return raw content outside explicit policy-authorized source-open. See `docs/research-mcp-server.md`.
 
 Existing top-level `wiki/` workflows and the current `raw-md` output layout remain compatible during migration. See `docs/project-storage-layout.md`.
 
@@ -211,8 +228,10 @@ only. It requires an existing `LLMWIKI_PROJECT_ID`, must normalize paths beneath
 the registered source root, and must never register, scan, extract, reconcile,
 acknowledge checkpoints, or update curated Markdown. Always keep explicit
 reconciliation available when Hooks are disabled, unavailable, malformed, or
-untrusted. `llmwiki_query` and `llmwiki_plan` currently return
-`capability-unavailable`; do not claim Verified Query or planning from J-05.
+untrusted. `llmwiki_plan` now delegates to the I-04 initial-planning slice and
+returns only non-executable DRAFT machine state. `llmwiki_query` continues to
+return `capability-unavailable` with `available_after=G-04`; do not claim Verified
+Query or mature I-05 planning from J-05.
 
 See `docs/codex-reference-adapter.md`.
 

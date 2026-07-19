@@ -33,6 +33,7 @@ from tools.research_mcp import (
     SOURCE_OPEN_TOOL,
     ResearchMCPAdapter,
 )
+from tools.research_tasks import load_tasks
 from tools.source_registry import load_source_registry, sync_source_registry
 
 
@@ -337,12 +338,54 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
-            for name, milestone in (
-                (QUERY_TOOL, "G-04"),
-                (PLAN_TOOL, "I-04"),
-            ):
-                self.assertIn("capability-unavailable", by_name[name].description)
-                self.assertIn(milestone, by_name[name].description)
+            query_tool = by_name[QUERY_TOOL]
+            self.assertIn("capability-unavailable", query_tool.description)
+            self.assertIn("G-04", query_tool.description)
+
+            plan_tool = by_name[PLAN_TOOL]
+            self.assertIn("I-04", plan_tool.description)
+            self.assertIn("DRAFT", plan_tool.description)
+            self.assertNotIn("capability-unavailable", plan_tool.description)
+            self.assertFalse(plan_tool.annotations.readOnlyHint)
+            self.assertFalse(plan_tool.annotations.destructiveHint)
+            self.assertFalse(plan_tool.annotations.idempotentHint)
+            self.assertFalse(plan_tool.annotations.openWorldHint)
+            self.assertEqual(plan_tool.inputSchema["required"], ["project_id"])
+            self.assertEqual(
+                set(plan_tool.inputSchema["properties"]),
+                {"project_id", "objective"},
+            )
+            plan_output = plan_tool.outputSchema
+            self.assertEqual(
+                plan_output["properties"]["capability"]["const"],
+                "plan",
+            )
+            plan_schema = plan_output["properties"]["result"]
+            self.assertFalse(plan_schema["additionalProperties"])
+            self.assertEqual(
+                set(plan_schema["required"]),
+                {
+                    "project_id",
+                    "artifacts",
+                    "created",
+                    "state_rebuilt",
+                    "goal",
+                    "tasks",
+                    "plan",
+                },
+            )
+            self.assertEqual(
+                plan_schema["properties"]["plan"]["properties"]["status"][
+                    "const"
+                ],
+                "draft",
+            )
+            self.assertEqual(
+                plan_schema["properties"]["artifacts"]["properties"][
+                    "initial_plan"
+                ]["const"],
+                "indexes/initial-plan.json",
+            )
 
     async def test_direct_script_entrypoint_initializes_the_same_server(self) -> None:
         async with self.mcp_session(direct_script=True) as session:
@@ -1030,45 +1073,87 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["error"]["code"], "schema-version-unsupported")
         self.assertNotIn(self.secret, json.dumps(payload, ensure_ascii=False))
 
-    async def test_query_and_plan_are_unavailable_without_echoing_inputs(self) -> None:
+    async def test_query_remains_unavailable_without_echoing_inputs(self) -> None:
         before_source = self.source_snapshot()
         before_workspace = self.workspace_snapshot()
-        sensitive_inputs = (
-            (
+
+        async with self.mcp_session() as session:
+            await session.initialize()
+            result = await session.call_tool(
                 QUERY_TOOL,
                 {
                     "project_id": self.registration.project_id,
                     "question": f"reveal {self.secret}",
                     "mode": "verified",
                 },
-                "G-04",
-            ),
-            (
-                PLAN_TOOL,
-                {
-                    "project_id": self.registration.project_id,
-                    "objective": f"private objective {self.secret}",
-                },
-                "I-04",
-            ),
+            )
+
+        payload = self.payload(result)
+        serialized = json.dumps(payload, ensure_ascii=False)
+        self.assertTrue(result.isError)
+        self.assertEqual(payload["error"]["code"], "capability-unavailable")
+        self.assertEqual(
+            payload["error"]["details"],
+            {"available_after": "G-04", "status": "not-implemented"},
         )
+        self.assertNotIn(self.secret, serialized)
+        self.assertEqual(self.source_snapshot(), before_source)
+        self.assertEqual(self.workspace_snapshot(), before_workspace)
+
+    async def test_plan_generates_only_draft_machine_state(self) -> None:
+        before_source = self.source_snapshot()
+        before_curated = {
+            path.relative_to(self.registration.layout.knowledge_root).as_posix():
+            hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(self.registration.layout.knowledge_root.rglob("*.md"))
+        }
 
         async with self.mcp_session() as session:
             await session.initialize()
-            for name, arguments, milestone in sensitive_inputs:
-                result = await session.call_tool(name, arguments)
-                payload = self.payload(result)
-                serialized = json.dumps(payload, ensure_ascii=False)
-                self.assertTrue(result.isError)
-                self.assertEqual(payload["error"]["code"], "capability-unavailable")
-                self.assertEqual(
-                    payload["error"]["details"],
-                    {"available_after": milestone, "status": "not-implemented"},
-                )
-                self.assertNotIn(self.secret, serialized)
+            result = await session.call_tool(
+                PLAN_TOOL,
+                {
+                    "project_id": self.registration.project_id,
+                    "objective": "Finish the transport-boundary study",
+                },
+            )
 
+        payload = self.payload(result)
+        self.assertFalse(result.isError)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["capability"], "plan")
+        planned = payload["result"]
+        self.assertEqual(planned["project_id"], self.registration.project_id)
+        self.assertEqual(planned["goal"]["status"], "draft")
+        self.assertTrue(planned["goal"]["draft_reasons"])
+        self.assertEqual(planned["plan"]["status"], "draft")
+        self.assertTrue(planned["tasks"]["task_ids"])
+        self.assertEqual(
+            planned["tasks"]["statuses"],
+            ["draft"] * len(planned["tasks"]["task_ids"]),
+        )
+        tasks = load_tasks(self.workspace, self.registration.project_id)
+        self.assertTrue(tasks.tasks)
+        self.assertTrue(all(task.status == "draft" for task in tasks.tasks))
+        self.assertTrue(all(not task.executable for task in tasks.tasks))
+        for relative_path in (
+            "indexes/goals.json",
+            "indexes/tasks.json",
+            "indexes/project-state.json",
+            "indexes/initial-plan.json",
+        ):
+            self.assertTrue(
+                (self.registration.layout.machine_root / relative_path).is_file(),
+                relative_path,
+            )
+        self.assert_host_safe(payload)
         self.assertEqual(self.source_snapshot(), before_source)
-        self.assertEqual(self.workspace_snapshot(), before_workspace)
+        after_curated = {
+            path.relative_to(self.registration.layout.knowledge_root).as_posix():
+            hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(self.registration.layout.knowledge_root.rglob("*.md"))
+        }
+        self.assertEqual(after_curated, before_curated)
 
     async def test_raw_content_appears_only_after_explicit_source_open(self) -> None:
         async with self.mcp_session() as session:

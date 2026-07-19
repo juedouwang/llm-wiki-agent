@@ -10,6 +10,13 @@ import webbrowser
 from pathlib import Path
 from typing import Sequence
 
+# Direct script execution must make package-qualified domain imports available even
+# when the caller's working directory is outside this checkout.
+if not __package__:
+    repository_root = Path(__file__).resolve().parent.parent
+    if str(repository_root) not in sys.path:
+        sys.path.insert(0, str(repository_root))
+
 # Support both ``python -m tools.project`` and ``python tools/project.py``.
 if __package__:
     from .host_context import HOST_CONTEXT_DEFAULT_MAX_BYTES

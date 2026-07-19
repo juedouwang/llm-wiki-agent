@@ -65,6 +65,27 @@ project and does not create state in the research source tree.
 | `source_open(...)` | `tools.source_access.open_source` or `open_evidence` | local/path-bearing `SourceOpenResult` |
 | `source_open_view(...)` | policy-enforced `source_open(...)` plus host-safe projection | path-free `HostSourceOpenResult` |
 | `knowledge_render(...)` | deterministic E-07 renderer plus F-05A/F-05B controlled writes | content-free `KnowledgeRenderingResult` observations |
+| `plan(project_id, ...)` | `tools.research_planning.generate_initial_plan` over current registration, Manifest, I-03 state, Goal, and tasks | host-safe `InitialPlanningResult` with strict DRAFT machine-state projections |
+
+### Initial planning
+
+```python
+planning = core.plan(
+    project_id,
+    objective="Reproduce the baseline result",
+    generated_at="2026-07-19T00:00:00Z",
+    plan_date="2026-07-19",
+)
+```
+
+`plan(...)` is the I-04 initial slice, not the I-05 mature planner. It creates or
+loads strict Goal/task state, refreshes the current project-state snapshot, and
+publishes only the canonical DRAFT `indexes/initial-plan.json` artifact under the
+shared mutation lock. Existing Goal/task bytes remain unchanged and automatically
+created tasks are non-executable. The result omits local paths and hashes. This
+operation reads no registered source bytes, writes no curated Markdown, calls no
+LLM, and sends nothing externally. See
+[`initial-planning.md`](initial-planning.md).
 
 ### Register
 
@@ -558,13 +579,11 @@ The accepted deterministic Core slices also include the standalone B-07
 reading-priority operation. It does not add an MCP operation, run creation or
 stage advancement, extraction, semantic reading, `project_understand`, H-07
 reconciliation, or H-05 refresh behavior. The H-04 host-event ledger and
-validated H-07 conservative reconciliation boundary remain independent. They do
-not yet implement
-Hook installation or reliability, H-05 selective extraction/knowledge refresh,
-full extraction/synthesis, 15-artifact rendering, Web rendering/`--open`,
-Verified Query, or the I-02 task store and planning pipeline. The initial E-08
-action and H-07 fallback both stop at the deterministic
-`register -> inventory -> classify` prefix. G-07 supplies the minimal MCP
-adapter documented in [`research-mcp-server.md`](research-mcp-server.md); query
-and plan remain honest unavailable contracts, and later capabilities remain
-separate roadmap tasks.
+validated H-07 conservative reconciliation boundary remain independent. They do not yet implement Hook installation or reliability or H-05 selective
+extraction/knowledge refresh. E-08 now runs the complete deterministic pipeline,
+E-07 provides controlled 15-artifact rendering, and I-04 provides only the first
+non-executable DRAFT planning slice. G-07 supplies the minimal MCP adapter
+documented in [`research-mcp-server.md`](research-mcp-server.md): `llmwiki_plan`
+delegates to I-04 while query remains an honest unavailable contract until G-04.
+Verified Query, mature I-05 planning, product Web behavior, and later capabilities
+remain separate roadmap tasks.

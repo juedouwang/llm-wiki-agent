@@ -101,6 +101,8 @@ if __package__:
         register_project,
     )
     from .project_runs import ProjectRunResult, StageOutcome
+    from .research_planning import InitialPlanningResult, generate_initial_plan
+    from .research_state import generate_project_state
     from .scan_policy import ScanPolicyConfig, ScanPolicyError
     from .source_access import (
         SourceLocatorError,
@@ -191,6 +193,11 @@ else:
         ProjectRunResult,
         StageOutcome,
     )
+    from research_planning import (  # type: ignore[no-redef]
+        InitialPlanningResult,
+        generate_initial_plan,
+    )
+    from research_state import generate_project_state  # type: ignore[no-redef]
     from project_understand import (  # type: ignore[no-redef]
         write_json_artifact,
         write_stage_report,
@@ -986,18 +993,28 @@ class ResearchCoreService:
         )
 
     def _run_status_stage(self, context: StageContext) -> StageOutcome:
-        """Persist a reconstructable, draft-safe status summary for this run."""
+        """Publish the strict current I-03 state plus a bounded run summary."""
 
-        coverage = self.coverage(context.project_id)
-        counts = coverage.report.get("counts", {})
+        generated_at = context.run.get("created_at")
+        if not isinstance(generated_at, str):
+            raise LayoutError("run has no canonical creation timestamp")
+        state_result = generate_project_state(
+            self.workspace_root,
+            context.project_id,
+            generated_at=generated_at,
+        )
+        state = state_result.state
         report = self._run_stage_report(
             context,
-            summary="Project status was summarized from current machine artifacts.",
+            summary=(
+                "The strict current project-state snapshot was rebuilt from "
+                "current machine and Knowledge Schema inputs."
+            ),
             status="draft",
-            reason_code="machine-state-status-summary",
-            inputs=("coverage-report", "synthesis-artifacts"),
-            outputs=("status-summary",),
-            gaps=("user-confirmed-status-not-provided",),
+            reason_code="current-project-state-snapshot",
+            inputs=("current-registration", "current-manifest", "current-machine-artifacts"),
+            outputs=("project-state", "status-summary"),
+            gaps=(item["code"] for item in state.gaps),
         )
         status_artifact = write_json_artifact(
             self.workspace_root,
@@ -1006,82 +1023,109 @@ class ResearchCoreService:
             "status-summary.json",
             {
                 "kind": "llmwiki-project-understand-status-summary",
-                "artifact_version": "status-summary-v1",
+                "artifact_version": "status-summary-v2",
                 "project_id": context.project_id,
                 "run_id": context.run_id,
                 "status": "draft",
-                "reason_code": "machine-state-status-summary",
-                "counts": dict(counts) if isinstance(counts, Mapping) else {},
-                "stale": [],
-                "blockers": ["user-confirmed-status-not-provided"],
+                "reason_code": "current-project-state-snapshot",
+                "project_state_artifact_id": state.artifact_id,
+                "counts": {
+                    "experiments": state.experiments["total"],
+                    "results": state.results["total"],
+                    "open_questions": state.open_questions["total"],
+                    "blockers": state.blockers["total"],
+                    "stale_knowledge": state.stale_knowledge["total"],
+                    "stale_evidence": state.stale_evidence["total"],
+                    "recent_changes": state.recent_changes["total"],
+                },
+                "gap_codes": [item["code"] for item in state.gaps],
             },
             artifact_type="status-summary",
             artifact_id=f"{context.run_id}:status-summary",
         )
+        state_artifact = self._run_machine_file_artifact(
+            context.project_id,
+            state_result.project_state_file,
+            artifact_type="project-state",
+            artifact_id=state.artifact_id,
+        )
         return StageOutcome.succeeded(
-            input_versions={"status_mode": "reconstructable-machine-summary"},
-            artifacts=(report, status_artifact.as_run_artifact()),
+            input_versions={"project_state_version": "project-state-v1"},
+            artifacts=(report, state_artifact, status_artifact.as_run_artifact()),
         )
 
     def _run_plan_stage(self, context: StageContext) -> StageOutcome:
-        """Create bounded next-step suggestions, never claim user authorization."""
+        """Generate strict I-04 DRAFT Goal, backlog, and daily-plan state."""
 
-        project = self.project_context(context.project_id)
-        suggestions: list[dict[str, Any]] = []
-        if not project.final_goal:
-            suggestions.append(
-                {
-                    "task_id": "draft-define-goal",
-                    "title": "Define the research goal",
-                    "status": "DRAFT",
-                    "why_now": "The project has no user-confirmed final goal.",
-                }
-            )
-        suggestions.extend(
-            [
-                {
-                    "task_id": "draft-review-candidates",
-                    "title": "Review deterministic project candidates",
-                    "status": "DRAFT",
-                    "why_now": "Candidate structure is available but semantic review is pending.",
-                },
-                {
-                    "task_id": "draft-bind-evidence",
-                    "title": "Bind source locators and Evidence",
-                    "status": "DRAFT",
-                    "why_now": "No host Evidence observations were supplied.",
-                },
-            ]
+        generated_at = context.run.get("created_at")
+        if not isinstance(generated_at, str):
+            raise LayoutError("run has no canonical creation timestamp")
+        planning_timestamp = (
+            datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
+        planning = self.plan(
+            context.project_id,
+            generated_at=planning_timestamp,
+            plan_date=planning_timestamp[:10],
         )
         report = self._run_stage_report(
             context,
-            summary="A draft next-step plan was generated from machine-state gaps.",
+            summary=(
+                "A strict DRAFT Goal, backlog, and daily plan were bound to "
+                "the current project-state snapshot."
+            ),
             status="draft",
-            reason_code="draft-plan-no-user-authorization",
-            inputs=("onboarding-context", "status-summary", "evidence-readiness"),
-            outputs=("plan-draft",),
+            reason_code="current-initial-plan-draft",
+            inputs=("project-state", "onboarding-context", "current-goal-and-tasks"),
+            outputs=("goal", "backlog", "daily-plan"),
             gaps=("user-confirmation-required",),
         )
         plan_artifact = write_json_artifact(
             self.workspace_root,
             context.project_id,
             context.run_id,
-            "plan-draft.json",
-            {
-                "kind": "llmwiki-project-understand-plan-draft",
-                "artifact_version": "plan-draft-v1",
-                "project_id": context.project_id,
-                "run_id": context.run_id,
-                "status": "DRAFT",
-                "reason_code": "draft-plan-no-user-authorization",
-                "tasks": suggestions,
-            },
-            artifact_type="plan-draft",
-            artifact_id=f"{context.run_id}:plan-draft",
+            "initial-planning.json",
+            planning.as_dict(),
+            artifact_type="initial-planning-result",
+            artifact_id=f"{context.run_id}:initial-planning",
+        )
+        registration = load_registered_project(
+            self.workspace_root,
+            context.project_id,
+        )
+        machine_artifacts = (
+            self._run_machine_file_artifact(
+                context.project_id,
+                registration.layout.goals_file,
+                artifact_type="research-goal",
+                artifact_id=planning.goal.goal_id,
+            ),
+            self._run_machine_file_artifact(
+                context.project_id,
+                registration.layout.tasks_file,
+                artifact_type="research-tasks",
+                artifact_id="research-tasks-v1",
+            ),
+            self._run_machine_file_artifact(
+                context.project_id,
+                registration.layout.project_state_file,
+                artifact_type="project-state",
+                artifact_id=planning.initial_plan.state_artifact_id,
+            ),
+            self._run_machine_file_artifact(
+                context.project_id,
+                registration.layout.initial_plan_file,
+                artifact_type="initial-plan",
+                artifact_id=(
+                    f"initial-plan-{planning.initial_plan.plan_date}"
+                ),
+            ),
         )
         return StageOutcome.succeeded(
-            input_versions={"plan_mode": "draft-only"},
-            artifacts=(report, plan_artifact.as_run_artifact()),
+            input_versions={"initial_plan_version": "initial-plan-v1"},
+            artifacts=(report, *machine_artifacts, plan_artifact.as_run_artifact()),
         )
 
     def _run_index_stage(self, context: StageContext) -> StageOutcome:
@@ -1374,6 +1418,30 @@ class ResearchCoreService:
             workspace_root=self.workspace_root,
             project_id=project_id,
             observations=observations,
+        )
+
+    def plan(
+        self,
+        project_id: str,
+        *,
+        objective: str | None = None,
+        generated_at: object | None = None,
+        plan_date: object | None = None,
+        lock_timeout_seconds: float = 5.0,
+    ) -> InitialPlanningResult:
+        """Generate the current strict I-04 DRAFT planning bundle.
+
+        This writes only project machine state. Curated Markdown remains behind
+        the E-07 renderer and F-05A/F-05B controlled persistence boundary.
+        """
+
+        return generate_initial_plan(
+            self.workspace_root,
+            project_id,
+            objective=objective,
+            generated_at=generated_at,
+            plan_date=plan_date,
+            lock_timeout_seconds=lock_timeout_seconds,
         )
 
     def knowledge_render(

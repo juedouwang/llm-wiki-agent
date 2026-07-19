@@ -1,9 +1,9 @@
 """Deterministic rendering of the project Knowledge Schema v2.
 
-E-07 is deliberately a narrow bridge between the machine artifacts produced by
-E-02--E-06 and the curated project Markdown tree.  It does not read a registered
-source project, call an LLM, infer scientific truth, or bypass the controlled
-Markdown writer.  Missing or ungrounded inputs become explicit draft
+E-07 is deliberately a narrow bridge between current E-02--E-06 analysis and
+I-01--I-04 planning artifacts and the curated project Markdown tree.  It does not
+read a registered source project, call an LLM, infer scientific truth, or bypass
+the controlled Markdown writer.  Missing or ungrounded inputs become explicit draft
 placeholders instead of silently successful empty pages.
 """
 
@@ -446,25 +446,39 @@ def _load_machine_artifacts(
     workspace_root: str | Path,
     project_id: str,
 ) -> tuple[dict[str, Mapping[str, Any] | None], dict[str, str]]:
-    # Imports stay local so E-07 does not widen any public adapter surface.
+    # Imports stay local so renderer imports do not widen adapter initialization.
     from tools.execution_flow import load_current_execution_flow
     from tools.experiment_chains import load_current_experiment_chains
     from tools.hierarchical_understanding import load_current_hierarchical_understanding
     from tools.project_map import load_current_project_map
+    from tools.research_goals import load_goal
     from tools.research_linkage import load_current_research_linkage
+    from tools.research_planning import load_initial_plan
+    from tools.research_state import load_project_state
+    from tools.research_tasks import load_tasks
 
-    loaders: tuple[tuple[str, Callable[..., Mapping[str, Any]]], ...] = (
+    loaders: tuple[tuple[str, Callable[..., Any]], ...] = (
         ("project_map", load_current_project_map),
         ("hierarchical", load_current_hierarchical_understanding),
         ("execution_flow", load_current_execution_flow),
         ("research_linkage", load_current_research_linkage),
         ("experiment_chains", load_current_experiment_chains),
+        ("goal", load_goal),
+        ("tasks", load_tasks),
+        ("project_state", load_project_state),
+        ("initial_plan", load_initial_plan),
     )
     payloads: dict[str, Mapping[str, Any] | None] = {}
     reasons: dict[str, str] = {}
     for key, loader in loaders:
         try:
-            payloads[key] = dict(loader(workspace_root, project_id))
+            loaded = loader(workspace_root, project_id)
+            if isinstance(loaded, Mapping):
+                payloads[key] = dict(loaded)
+            elif hasattr(loaded, "as_dict"):
+                payloads[key] = dict(loaded.as_dict())
+            else:  # pragma: no cover - defensive adapter guard
+                raise TypeError(f"{key} loader returned an unsupported value")
             reasons[key] = "current-machine-artifact"
         except (LayoutError, OSError, ValueError, TypeError):
             payloads[key] = None
@@ -998,32 +1012,237 @@ def _risks_body(context: _RenderingContext) -> tuple[str, str, str]:
     return body, "deterministic-risk-register", "available" if risks or metadata_only else "missing"
 
 
+def _planning_reference(value: object) -> str:
+    """Render a planning reference without exposing machine indexes or local paths."""
+
+    if not isinstance(value, str):
+        return "unknown"
+    if value.startswith("machine:") or value.startswith("indexes/"):
+        return "Core-managed current machine state"
+    if value.startswith("knowledge:"):
+        return _safe_inline(
+            value.removeprefix("knowledge:"),
+            fallback="knowledge artifact",
+        )
+    if value.startswith("evidence:") or value.startswith("evd-"):
+        return "current Evidence reference"
+    return _safe_inline(value, fallback="unknown", maximum=512)
+
+
 def _goals_body(context: _RenderingContext) -> tuple[str, str, str]:
+    payload = context.machine.get("goal")
+    if payload is not None:
+        criteria = payload.get("success_criteria", ())
+        dependencies = payload.get("dependencies", ())
+        draft_reasons = payload.get("draft_reasons", ())
+        milestones = payload.get("milestones", ())
+        criteria_values = (
+            criteria
+            if isinstance(criteria, Sequence)
+            and not isinstance(criteria, (str, bytes, bytearray))
+            else ()
+        )
+        dependency_values = (
+            dependencies
+            if isinstance(dependencies, Sequence)
+            and not isinstance(dependencies, (str, bytes, bytearray))
+            else ()
+        )
+        reason_values = (
+            draft_reasons
+            if isinstance(draft_reasons, Sequence)
+            and not isinstance(draft_reasons, (str, bytes, bytearray))
+            else ()
+        )
+        milestone_rows: list[tuple[object, ...]] = []
+        if isinstance(milestones, Sequence) and not isinstance(
+            milestones, (str, bytes, bytearray)
+        ):
+            for item in milestones:
+                if isinstance(item, Mapping):
+                    milestone_rows.append(
+                        (
+                            item.get("milestone_id", "unknown"),
+                            item.get("title", "unknown"),
+                            item.get("status", "draft"),
+                            item.get("deadline") or "not supplied",
+                        )
+                    )
+        body = (
+            "# Initial goals and milestones\n\n"
+            "> This page projects the strict current Goal artifact. "
+            "DRAFT means user confirmation is still required.\n\n"
+            "## Current Goal\n\n"
+            f"- **Status:** "
+            f"{_safe_inline(str(payload.get('status', 'draft')).upper())}\n"
+            f"- **Goal ID:** `"
+            f"{_safe_inline(payload.get('goal_id'), fallback='primary')}`\n"
+            f"- **Goal:** "
+            f"{_safe_inline(payload.get('goal'), fallback='DRAFT - awaiting user confirmation', maximum=1000)}\n"
+            f"- **Current phase:** "
+            f"{_safe_inline(payload.get('current_stage'), fallback='DRAFT - awaiting user confirmation')}\n"
+            f"- **Deadline:** "
+            f"{_safe_inline(payload.get('deadline'), fallback='not supplied')}\n\n"
+            "### Success criteria\n\n"
+            + _list_lines(
+                criteria_values,
+                empty="- DRAFT - awaiting user confirmation",
+            )
+            + "\n\n### Dependencies\n\n"
+            + _list_lines(dependency_values, empty="- None recorded")
+            + "\n\n### Draft reasons\n\n"
+            + _list_lines(reason_values, empty="- awaiting-user-confirmation")
+            + "\n\n## Milestones\n\n"
+            + _table(
+                milestone_rows,
+                ("Milestone", "Title", "Status", "Deadline"),
+            )
+            + "\n## User-confirmed goals and milestones\n\n"
+        )
+        reason = (
+            "current-goal-draft"
+            if payload.get("status") == "draft"
+            else "current-goal-artifact"
+        )
+        return _mixed_body(body, ("user-goals",)), reason, "available"
+
     goal = context.onboarding.get("final_goal")
     stage = context.onboarding.get("current_stage")
     question = context.onboarding.get("important_question")
     deadline = context.onboarding.get("deadline")
     hours = context.onboarding.get("daily_available_hours")
-    supplied = any(value not in (None, "") for value in (goal, stage, question, deadline, hours))
+    supplied = any(
+        value not in (None, "")
+        for value in (goal, stage, question, deadline, hours)
+    )
     body = (
         "# Initial goals and milestones\n\n"
-        + ("" if supplied else _reason_placeholder(
-            "onboarding-goal-not-supplied",
-            "Confirm the project goal, success criteria, current stage, dependencies, deadline, and available time.",
-        ))
-        + "## Generated draft\n\n"
-        f"- **Goal:** {_safe_inline(goal, fallback='DRAFT — awaiting user confirmation')}\n"
-        "- **Success criteria:** DRAFT — awaiting user confirmation\n"
-        f"- **Current phase:** {_safe_inline(stage, fallback='DRAFT — awaiting user confirmation')}\n"
-        f"- **Most important question:** {_safe_inline(question, fallback='DRAFT — awaiting user confirmation')}\n"
+        + (
+            ""
+            if supplied
+            else _reason_placeholder(
+                "goal-artifact-not-supplied",
+                "Run initial planning, then confirm the project goal, success "
+                "criteria, current stage, dependencies, and deadline.",
+            )
+        )
+        + "## Onboarding fallback (DRAFT)\n\n"
+        f"- **Goal:** "
+        f"{_safe_inline(goal, fallback='DRAFT - awaiting user confirmation')}\n"
+        "- **Success criteria:** DRAFT - awaiting user confirmation\n"
+        f"- **Current phase:** "
+        f"{_safe_inline(stage, fallback='DRAFT - awaiting user confirmation')}\n"
+        f"- **Most important question:** "
+        f"{_safe_inline(question, fallback='DRAFT - awaiting user confirmation')}\n"
         f"- **Deadline:** {_safe_inline(deadline, fallback='not supplied')}\n"
-        f"- **Daily available time:** {_safe_inline(str(hours) if hours is not None else None, fallback='not supplied')}\n\n"
+        f"- **Daily available time:** "
+        f"{_safe_inline(str(hours) if hours is not None else None, fallback='not supplied')}\n\n"
         "## User-confirmed goals and milestones\n\n"
     )
-    return _mixed_body(body, ("user-goals",)), "onboarding-goal" if supplied else "onboarding-goal-not-supplied", "available" if supplied else "missing"
+    return (
+        _mixed_body(body, ("user-goals",)),
+        "onboarding-goal-fallback" if supplied else "goal-artifact-not-supplied",
+        "available" if supplied else "missing",
+    )
 
 
 def _backlog_body(context: _RenderingContext) -> tuple[str, str, str]:
+    payload = context.machine.get("tasks")
+    if payload is not None:
+        raw_tasks = payload.get("tasks", ())
+        tasks = (
+            tuple(item for item in raw_tasks if isinstance(item, Mapping))
+            if isinstance(raw_tasks, Sequence)
+            and not isinstance(raw_tasks, (str, bytes, bytearray))
+            else ()
+        )
+        body = (
+            "# Backlog\n\n"
+            "This page projects the strict current task protocol. A task is "
+            "executable only when its machine status is `ready` or "
+            "`in_progress`; this page does not grant execution "
+            "authorization.\n\n"
+            "## Current tasks\n\n"
+        )
+        if not tasks:
+            body += _reason_placeholder(
+                "task-collection-empty",
+                "Add or confirm a bounded task before execution.",
+            )
+        for task in tasks[:100]:
+            task_id = _safe_inline(
+                task.get("task_id"),
+                fallback="unknown-task",
+            )
+            title = _safe_inline(
+                task.get("title"),
+                fallback="Untitled task",
+                maximum=500,
+            )
+            inputs = task.get("inputs", ())
+            allowed = task.get("allowed_paths", ())
+            denied = task.get("denied_paths", ())
+            dependencies = task.get("dependencies", ())
+            dod = task.get("dod", ())
+            verification = task.get("verification", ())
+            artifacts = task.get("artifacts", ())
+            blockers = task.get("draft_reasons", ())
+            evidence = task.get("evidence", ())
+            evidence_count = (
+                len(evidence)
+                if isinstance(evidence, Sequence)
+                and not isinstance(evidence, (str, bytes, bytearray))
+                else 0
+            )
+            timebox = task.get("timebox_minutes")
+            body += (
+                f"### `{task_id}` - {title}\n\n"
+                f"- **status:** `"
+                f"{_safe_inline(task.get('status'), fallback='draft')}`\n"
+                f"- **why_now:** "
+                f"{_safe_inline(task.get('why_now'), fallback='DRAFT - reason not confirmed', maximum=1000)}\n"
+                f"- **timebox:** "
+                f"{_safe_inline(str(timebox) if timebox is not None else None, fallback='not supplied')} minutes\n"
+                f"- **Evidence refs:** {evidence_count}\n\n"
+                "#### Inputs\n\n"
+                + _list_lines(
+                    (_planning_reference(item) for item in inputs),
+                    empty="- None recorded",
+                )
+                + "\n\n#### Allowed source paths\n\n"
+                + _list_lines(allowed, empty="- DRAFT - not confirmed")
+                + "\n\n#### Denied source paths\n\n"
+                + _list_lines(denied, empty="- None recorded")
+                + "\n\n#### Dependencies\n\n"
+                + _list_lines(dependencies, empty="- None")
+                + "\n\n#### Definition of Done\n\n"
+                + _list_lines(dod, empty="- DRAFT - not confirmed")
+                + "\n\n#### Verification\n\n"
+                + _list_lines(
+                    verification,
+                    empty="- DRAFT - not confirmed",
+                )
+                + "\n\n#### Expected artifacts\n\n"
+                + _list_lines(
+                    (_planning_reference(item) for item in artifacts),
+                    empty="- DRAFT - not confirmed",
+                )
+                + "\n\n#### Draft blockers\n\n"
+                + _list_lines(blockers, empty="- None")
+                + "\n\n"
+            )
+        if len(tasks) > 100:
+            body += (
+                f"- {len(tasks) - 100} additional task(s) omitted from this "
+                "bounded view.\n\n"
+            )
+        body += "## User-maintained backlog\n\n"
+        return (
+            _mixed_body(body, ("user-backlog",)),
+            "current-task-protocol",
+            "available",
+        )
+
     questions, risks = _questions(context)
     suggestions = [
         "Ground the highest-impact open question with current Evidence",
@@ -1033,44 +1252,121 @@ def _backlog_body(context: _RenderingContext) -> tuple[str, str, str]:
     if not questions:
         suggestions[0] = "Identify and record the highest-impact open research question"
     if not risks:
-        suggestions[2] = "Review reading coverage and record any missing or policy-limited material"
+        suggestions[2] = (
+            "Review reading coverage and record missing or policy-limited material"
+        )
     body = (
         "# Backlog\n\n"
-        "All generated tasks are **DRAFT**. Dependencies, allowed paths, Definition of Done, and verification must be confirmed by the task protocol before execution.\n\n"
-        "## Generated suggestions\n\n"
+        + _reason_placeholder(
+            "task-artifact-unavailable-or-stale",
+            "Run initial planning to create a strict DRAFT task collection.",
+        )
+        + "All fallback suggestions are **DRAFT** and are not executable.\n\n"
+        "## Generated fallback suggestions\n\n"
     )
     for index, suggestion in enumerate(suggestions, 1):
+        focus = (
+            questions[0]
+            if questions
+            else risks[0]
+            if risks
+            else "Initial project understanding is incomplete"
+        )
         body += (
             f"### TASK-{index:02d}: {suggestion}\n\n"
-            f"- **why_now:** {_safe_inline(questions[0] if questions else risks[0] if risks else 'Initial project understanding is incomplete')}\n"
-            "- **inputs:** current project knowledge and policy-authorized Evidence\n"
-            "- **dependencies:** DRAFT — not confirmed\n"
-            "- **Definition of Done:** DRAFT — not confirmed\n"
-            "- **verification:** DRAFT — not confirmed\n"
-            "- **artifacts:** DRAFT — not confirmed\n\n"
+            f"- **why_now:** {_safe_inline(focus)}\n"
+            "- **status:** `draft`\n"
+            "- **verification:** DRAFT - not confirmed\n\n"
         )
     body += "## User-maintained backlog\n\n"
-    return _mixed_body(body, ("user-backlog",)), "initial-backlog-draft", "available"
+    return (
+        _mixed_body(body, ("user-backlog",)),
+        "task-artifact-unavailable-or-stale",
+        "missing",
+    )
 
 
 def _daily_plan_body(context: _RenderingContext) -> tuple[str, str, str]:
+    payload = context.machine.get("initial_plan")
+    if payload is not None and payload.get("plan_date") == context.plan_date:
+        task_ids = payload.get("task_ids", ())
+        inputs = payload.get("inputs", ())
+        outputs = payload.get("outputs", ())
+        verification = payload.get("verification", ())
+        blockers = payload.get("blockers", ())
+        body = (
+            f"# Daily plan - {context.plan_date}\n\n"
+            f"> **{_safe_inline(str(payload.get('status', 'draft')).upper())} "
+            "/ review required:** this plan is bound to the current "
+            "project-state snapshot. It does not authorize execution.\n\n"
+            "## Plan\n\n"
+            f"- **Goal ID:** `"
+            f"{_safe_inline(payload.get('goal_id'), fallback='primary')}`\n"
+            f"- **why_now:** "
+            f"{_safe_inline(payload.get('why_now'), fallback='Review the current project state', maximum=1200)}\n"
+            f"- **timebox:** "
+            f"{_safe_inline(str(payload.get('timebox_minutes')), fallback='not supplied')} minutes\n\n"
+            "### Selected task IDs\n\n"
+            + _list_lines(task_ids, empty="- No task selected")
+            + "\n\n### Inputs\n\n"
+            + _list_lines(
+                (_planning_reference(item) for item in inputs),
+                empty="- None recorded",
+            )
+            + "\n\n### Expected outputs\n\n"
+            + _list_lines(
+                (_planning_reference(item) for item in outputs),
+                empty="- None recorded",
+            )
+            + "\n\n### Verification\n\n"
+            + _list_lines(
+                verification,
+                empty="- DRAFT - not confirmed",
+            )
+            + "\n\n### Blockers\n\n"
+            + _list_lines(blockers, empty="- None recorded")
+            + "\n\n## User adjustments\n\n"
+        )
+        return (
+            _mixed_body(body, ("user-daily-plan",)),
+            "current-initial-plan-draft",
+            "available",
+        )
+
+    reason = (
+        "initial-plan-date-mismatch"
+        if payload is not None
+        else "initial-plan-unavailable-or-stale"
+    )
     questions, risks = _questions(context)
-    focus = questions[0] if questions else risks[0] if risks else "Confirm the project's next evidence-backed action"
+    focus = (
+        questions[0]
+        if questions
+        else risks[0]
+        if risks
+        else "Confirm the project's next evidence-backed action"
+    )
     hours = context.onboarding.get("daily_available_hours")
-    timebox = f"{hours} hours" if isinstance(hours, (int, float)) and not isinstance(hours, bool) else "DRAFT — timebox not supplied"
+    timebox = (
+        f"{hours} hours"
+        if isinstance(hours, (int, float)) and not isinstance(hours, bool)
+        else "DRAFT - timebox not supplied"
+    )
     body = (
-        f"# Daily plan — {context.plan_date}\n\n"
-        "> **DRAFT / review required:** this plan is generated from current project state and onboarding data.\n\n"
-        "## Primary task\n\n"
+        f"# Daily plan - {context.plan_date}\n\n"
+        + _reason_placeholder(
+            reason,
+            "Run initial planning for this date and review the resulting DRAFT.",
+        )
+        + "> **DRAFT / review required:** this fallback does not authorize "
+        "execution.\n\n"
+        "## Fallback focus\n\n"
         f"- **why_now:** {_safe_inline(focus, maximum=600)}\n"
         f"- **timebox:** {timebox}\n"
-        "- **inputs:** current status, open questions, risks, and policy-authorized Evidence\n"
-        "- **output:** one bounded, reviewable project artifact update\n"
-        "- **verification:** confirm the stated Definition of Done and source currentness\n"
-        "- **blockers:** DRAFT — review before execution\n\n"
+        "- **verification:** confirm the task protocol and source currentness\n\n"
         "## User adjustments\n\n"
     )
-    return _mixed_body(body, ("user-daily-plan",)), "daily-plan-draft", "available"
+    return _mixed_body(body, ("user-daily-plan",)), reason, "missing"
 
 
 def _apply_host_page_override(
@@ -1192,9 +1488,10 @@ def build_project_knowledge_pages(
 ) -> tuple[KnowledgePageInput, ...]:
     """Build the complete proposed page set without reading or writing Markdown.
 
-    The only machine inputs are the current E-02--E-06 artifacts and the
-    registration record.  ``rendering_data``/``host_data`` is an explicit host
-    observation boundary; it is never inferred from source files by this module.
+    The machine inputs are the current E-02--E-06 analysis artifacts,
+    I-01--I-04 planning artifacts, and the registration record.
+    ``rendering_data``/``host_data`` is an explicit host observation boundary;
+    it is never inferred from source files by this module.
     """
 
     normalized_project_id = validate_project_id(project_id)
@@ -1209,7 +1506,17 @@ def build_project_knowledge_pages(
     registration = load_registered_project(workspace_root, normalized_project_id)
     record = _mapping(registration.record)
     onboarding = _mapping(record.get("onboarding"))
-    artifact_keys = ("project_map", "hierarchical", "execution_flow", "research_linkage", "experiment_chains")
+    artifact_keys = (
+        "project_map",
+        "hierarchical",
+        "execution_flow",
+        "research_linkage",
+        "experiment_chains",
+        "goal",
+        "tasks",
+        "project_state",
+        "initial_plan",
+    )
     if machine_artifacts is None:
         machine, machine_reasons = _load_machine_artifacts(workspace_root, normalized_project_id)
     else:

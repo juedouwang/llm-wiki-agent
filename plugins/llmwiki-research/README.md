@@ -60,7 +60,7 @@ The MCP server delegates to `tools.research_mcp` and exposes the Core catalog:
 - `llmwiki_query`
 - `llmwiki_plan`
 
-Project context, host context, coverage, source-open, and explicit reconciliation are real Core operations. `llmwiki_query` and `llmwiki_plan` intentionally return `capability-unavailable` until their Core roadmap slices exist. The plugin does not add extraction, selective knowledge refresh, or Web behavior.
+Project context, host context, coverage, source-open, explicit reconciliation, and I-04 initial planning are real Core operations. `llmwiki_plan` writes strict DRAFT Goal/task/project-state/initial-plan machine artifacts only; it does not authorize task execution or directly write curated Markdown. `llmwiki_query` intentionally returns `capability-unavailable` with `available_after=G-04`. The plugin does not add extraction, selective knowledge refresh, or Web behavior.
 
 ## Optional H-04 Hook
 
@@ -79,4 +79,4 @@ The Hook writes untrusted H-04 event hints only. It never starts a scan, invokes
 - The source project remains read-only to registration, inventory, coverage, source-open, and reconciliation workflows except for the user or host tool action that originally triggered a Hook.
 - Machine state stays under `.llmwiki/projects/`; curated Markdown stays under `wiki/projects/`.
 - Hook paths are untrusted hints, not evidence that a source now has particular content.
-- Query and planning remain explicit `capability-unavailable` contracts.
+- Initial planning is available only as strict non-executable I-04 DRAFT machine state; Query remains an explicit `capability-unavailable` contract until G-04.

@@ -14,6 +14,7 @@ from tools.knowledge_artifacts import (
 )
 from tools.project_inventory import inventory_project
 from tools.project_registry import register_project
+from tools.project_runs import create_project_run
 from tools.research_state import (
     PROJECT_STATE_KIND,
     PROJECT_STATE_SCHEMA_VERSION,
@@ -181,6 +182,28 @@ class ResearchStateTests(unittest.TestCase):
         stale_paths = {item["path"] for item in result.state.stale_knowledge["items"]}
         self.assertIn("results/accuracy.md", stale_paths)
         self.assertEqual(result.state.recent_changes["items"][0]["updated_at"], "2026-07-19T00:00:00Z")
+
+    def test_project_run_microseconds_are_projected_to_state_seconds(self) -> None:
+        run_id = "run-20260719t035048473037z-111111111111"
+        create_project_run(
+            self.workspace,
+            self.project_id,
+            run_id=run_id,
+            created_at="2026-07-19T03:50:48.473037Z",
+        )
+        result = generate_project_state(
+            self.workspace,
+            self.project_id,
+            generated_at="2026-07-19T04:00:00Z",
+        )
+        run_item = next(
+            item
+            for item in result.state.recent_changes["items"]
+            if item["id"] == "run:" + run_id
+        )
+        self.assertEqual(run_item["updated_at"], "2026-07-19T03:50:48Z")
+        self.assertEqual(result.state.inputs["runs"]["status"], "available")
+        self.assert_source_unchanged()
 
     def test_source_and_evidence_currentness_is_reported_without_source_reads(self) -> None:
         sync_source_registry(self.workspace, self.project_id)

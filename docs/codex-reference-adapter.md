@@ -16,11 +16,12 @@ The package exposes only the currently implemented Research Core boundary:
 - `llmwiki_coverage`;
 - policy-authorized `llmwiki_source_open`;
 - conservative full-scan `llmwiki_reconcile`;
-- explicit `capability-unavailable` results for `llmwiki_query` and
-  `llmwiki_plan`.
+- I-04 non-executable DRAFT initial planning through `llmwiki_plan`;
+- an explicit `capability-unavailable` result for `llmwiki_query`.
 
-J-05 does **not** claim Verified Query, research planning, adaptive extraction,
-selective knowledge refresh, 15 curated artifacts, Web rendering/editing, or
+The package now exposes the later I-04 planning slice through the same stable J-05
+transport, but it does **not** claim Verified Query, mature I-05 planning, adaptive
+extraction, selective knowledge refresh, product Web rendering/editing, or
 cross-host continuity. Those remain later roadmap work.
 
 ## Package layout
@@ -88,9 +89,10 @@ has completed.
 
 Use `llmwiki_project_context` or the budget-bounded `llmwiki_host_context` for
 project handoff, `llmwiki_coverage` for accountable inventory state, and
-`llmwiki_source_open` only for an explicit current-source excerpt. Do not use
-`llmwiki_query` or `llmwiki_plan` as if they were implemented: both intentionally
-return `capability-unavailable`.
+`llmwiki_source_open` only for an explicit current-source excerpt. Use
+`llmwiki_plan` only for strict I-04 DRAFT Goal/task/plan machine state; it does not
+authorize execution or directly write curated Markdown. `llmwiki_query` still
+returns `capability-unavailable` with `available_after=G-04`.
 
 ### 4. Reconcile explicitly after work
 
@@ -175,7 +177,7 @@ The automated acceptance covers:
 - real stdio MCP initialization and the seven-tool catalog;
 - real project context, Host Context Pack, coverage, source-open, and
   reconciliation delegation;
-- explicit unavailable query/plan results;
+- strict non-executable I-04 plan results and an explicit unavailable query result;
 - reconciliation with absent or malformed Hooks;
 - valid Hook-to-H-04 submission from project-root and nested working
   directories, rejection of outside-root hints, plus malformed, disabled, and

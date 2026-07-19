@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,6 +28,8 @@ from tools.knowledge_renderer import (
 )
 from tools.project_registry import register_project
 from tools.research_core import ResearchCoreService
+from tools.research_goals import load_goal
+from tools.research_tasks import load_tasks
 
 
 PROJECT_ID = "e-07-renderer"
@@ -344,6 +347,115 @@ class KnowledgeRendererTests(unittest.TestCase):
         records = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
         self.assertIn("prepared", [record["phase"] for record in records])
         self.assertIn("committed", [record["phase"] for record in records])
+        self.assertEqual(self.source_snapshot_before, self.source_snapshot())
+
+    def test_real_initial_plan_renders_and_preserves_all_mixed_user_regions(
+        self,
+    ) -> None:
+        service = ResearchCoreService(self.workspace)
+        service.scan(PROJECT_ID)
+        service.plan(
+            PROJECT_ID,
+            objective="Reproduce the baseline before comparing the method",
+            generated_at="2026-07-19T09:00:00Z",
+            plan_date="2026-07-19",
+        )
+        goal = load_goal(self.workspace, PROJECT_ID)
+        tasks = load_tasks(self.workspace, PROJECT_ID)
+
+        pages = build_project_knowledge_pages(
+            self.workspace,
+            PROJECT_ID,
+            rendered_at="2026-07-19T09:05:00Z",
+            plan_date="2026-07-19",
+        )
+        by_path = {page.path: page for page in pages}
+        goals = by_path["goals.md"].body
+        backlog = by_path["plans/backlog.md"].body
+        daily = by_path["plans/daily/2026-07-19.md"].body
+        self.assertIsNotNone(goal.goal)
+        self.assertIn(goal.goal or "", goals)
+        for task in tasks.tasks:
+            self.assertIn(task.task_id, backlog)
+            self.assertIn(task.title, backlog)
+        self.assertIn("2026-07-19", daily)
+        self.assertIn(goal.goal_id, daily)
+        self.assertTrue(any(task.task_id in daily for task in tasks.tasks))
+
+        rendered = "\n".join((goals, backlog, daily))
+        for absolute_root in (
+            str(self.source.resolve()),
+            str(self.workspace.resolve()),
+            str(self.knowledge_parent.resolve()),
+        ):
+            self.assertNotIn(absolute_root, rendered)
+        self.assertNotRegex(
+            rendered,
+            re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])"),
+        )
+        self.assertNotIn("indexes/", rendered)
+
+        first = render_project_knowledge(
+            self.workspace,
+            PROJECT_ID,
+            rendered_at="2026-07-19T09:05:00Z",
+            plan_date="2026-07-19",
+            persist=True,
+            host_context=self._host_context("planning-render-1"),
+            decision_id_prefix="planning-render-1",
+            authorized_at="2026-07-19T09:05:00Z",
+        )
+        self.assertEqual(first.status, "succeeded")
+
+        regions = {
+            "goals.md": (
+                "user-goals",
+                b"GOAL user bytes: \xe4\xbd\xa0\xe5\xa5\xbd\r\nline two\r\n",
+            ),
+            "plans/backlog.md": (
+                "user-backlog",
+                b"BACKLOG user bytes\r\nkeep exactly\r\n",
+            ),
+            "plans/daily/2026-07-19.md": (
+                "user-daily-plan",
+                b"DAILY user bytes\r\nkeep exactly\r\n",
+            ),
+        }
+        for relative_path, (region_id, exact_user) in regions.items():
+            target = self.registration.layout.knowledge_root / relative_path
+            payload = target.read_bytes()
+            start = (
+                f'<!-- llmwiki:user-region:start id="{region_id}" -->'.encode()
+            )
+            end = f'<!-- llmwiki:user-region:end id="{region_id}" -->'.encode()
+            start_index = payload.index(start) + len(start)
+            if payload[start_index : start_index + 2] == b"\r\n":
+                content_start = start_index + 2
+            elif payload[start_index : start_index + 1] == b"\n":
+                content_start = start_index + 1
+            else:
+                self.fail(f"missing user-region delimiter in {relative_path}")
+            end_index = payload.index(end, content_start)
+            target.write_bytes(
+                payload[:content_start] + exact_user + payload[end_index:]
+            )
+
+        second = render_project_knowledge(
+            self.workspace,
+            PROJECT_ID,
+            rendered_at="2026-07-19T09:10:00Z",
+            plan_date="2026-07-19",
+            persist=True,
+            host_context=self._host_context("planning-render-2"),
+            decision_id_prefix="planning-render-2",
+            authorized_at="2026-07-19T09:10:00Z",
+        )
+        self.assertEqual(second.status, "succeeded")
+        for relative_path, (_region_id, exact_user) in regions.items():
+            payload = (
+                self.registration.layout.knowledge_root / relative_path
+            ).read_bytes()
+            self.assertIn(exact_user, payload, relative_path)
         self.assertEqual(self.source_snapshot_before, self.source_snapshot())
 
     def test_mixed_user_region_bytes_survive_regeneration(self) -> None:

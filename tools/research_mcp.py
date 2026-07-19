@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -25,6 +26,11 @@ from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 
 # Support both ``python -m tools.research_mcp`` and direct script execution.
+if not __package__:
+    repository_root = Path(__file__).resolve().parent.parent
+    if str(repository_root) not in sys.path:
+        sys.path.insert(0, str(repository_root))
+
 if __package__:
     from .coverage_report import (
         COVERAGE_REPORT_KIND,
@@ -61,6 +67,12 @@ if __package__:
         ProjectReconciliationError,
     )
     from .project_registry import ProjectNotRegisteredError, ProjectRecordError
+    from .research_planning import (
+        INITIAL_PLAN_KIND,
+        INITIAL_PLAN_SCHEMA_VERSION,
+        INITIAL_PLAN_STATUS,
+        INITIAL_PLAN_VERSION,
+    )
     from .research_core import (
         HOST_COVERAGE_KIND,
         HOST_COVERAGE_VERSION,
@@ -118,6 +130,12 @@ else:
         ProjectNotRegisteredError,
         ProjectRecordError,
     )
+    from research_planning import (  # type: ignore[no-redef]
+        INITIAL_PLAN_KIND,
+        INITIAL_PLAN_SCHEMA_VERSION,
+        INITIAL_PLAN_STATUS,
+        INITIAL_PLAN_VERSION,
+    )
     from research_core import (  # type: ignore[no-redef]
         HOST_COVERAGE_KIND,
         HOST_COVERAGE_VERSION,
@@ -157,7 +175,6 @@ _TOOL_CAPABILITIES = {
 
 _UNAVAILABLE_MILESTONES = {
     QUERY_TOOL: "G-04",
-    PLAN_TOOL: "I-04",
 }
 
 _SAFE_ERROR_MESSAGES = {
@@ -934,6 +951,169 @@ def _reconciliation_result_schema() -> dict[str, Any]:
     )
 
 
+def _initial_plan_result_schema() -> dict[str, Any]:
+    artifact_paths = {
+        "goal": {"const": "indexes/goals.json"},
+        "tasks": {"const": "indexes/tasks.json"},
+        "project_state": {"const": "indexes/project-state.json"},
+        "initial_plan": {"const": "indexes/initial-plan.json"},
+        "goals_markdown": {"const": "goals.md"},
+        "backlog_markdown": {"const": "plans/backlog.md"},
+        "daily_plan_markdown": {
+            "type": "string",
+            "pattern": r"^plans/daily/[0-9]{4}-[0-9]{2}-[0-9]{2}\.md$",
+        },
+    }
+    created = {
+        name: {"type": "boolean"}
+        for name in ("goal", "tasks", "project_state")
+    }
+    plan = _object_schema(
+        {
+            "schema_version": {"const": INITIAL_PLAN_SCHEMA_VERSION},
+            "kind": {"const": INITIAL_PLAN_KIND},
+            "plan_version": {"const": INITIAL_PLAN_VERSION},
+            "project_id": {"type": "string", "minLength": 1},
+            "plan_date": {
+                "type": "string",
+                "pattern": r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+            },
+            "generated_at": {
+                "type": "string",
+                "pattern": (
+                    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+                    r"[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+                ),
+            },
+            "status": {"const": INITIAL_PLAN_STATUS},
+            "goal_id": {"type": "string", "minLength": 1},
+            "state_artifact_id": {
+                "type": "string",
+                "pattern": r"^state-[0-9a-f]{64}$",
+            },
+            "task_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "uniqueItems": True,
+            },
+            "why_now": {"type": "string", "minLength": 1},
+            "timebox_minutes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1440,
+            },
+            "inputs": {
+                "type": "array",
+                "items": _relative_path_schema(),
+                "minItems": 1,
+                "uniqueItems": True,
+            },
+            "outputs": {
+                "type": "array",
+                "items": _relative_path_schema(),
+                "minItems": 1,
+                "uniqueItems": True,
+            },
+            "verification": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+                "uniqueItems": True,
+            },
+            "blockers": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "uniqueItems": True,
+            },
+        },
+        required=(
+            "schema_version",
+            "kind",
+            "plan_version",
+            "project_id",
+            "plan_date",
+            "generated_at",
+            "status",
+            "goal_id",
+            "state_artifact_id",
+            "task_ids",
+            "why_now",
+            "timebox_minutes",
+            "inputs",
+            "outputs",
+            "verification",
+            "blockers",
+        ),
+    )
+    return _object_schema(
+        {
+            "project_id": {"type": "string", "minLength": 1},
+            "artifacts": _object_schema(
+                artifact_paths,
+                required=tuple(artifact_paths),
+            ),
+            "created": _object_schema(
+                created,
+                required=tuple(created),
+            ),
+            "state_rebuilt": {"type": "boolean"},
+            "goal": _object_schema(
+                {
+                    "goal_id": {"type": "string", "minLength": 1},
+                    "status": {
+                        "enum": [
+                            "draft",
+                            "active",
+                            "blocked",
+                            "completed",
+                            "cancelled",
+                        ]
+                    },
+                    "draft_reasons": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                        "uniqueItems": True,
+                    },
+                },
+                required=("goal_id", "status", "draft_reasons"),
+            ),
+            "tasks": _object_schema(
+                {
+                    "task_ids": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                        "uniqueItems": True,
+                    },
+                    "statuses": {
+                        "type": "array",
+                        "items": {
+                            "enum": [
+                                "draft",
+                                "ready",
+                                "in_progress",
+                                "blocked",
+                                "completed",
+                                "cancelled",
+                            ]
+                        },
+                    },
+                },
+                required=("task_ids", "statuses"),
+            ),
+            "plan": plan,
+        },
+        required=(
+            "project_id",
+            "artifacts",
+            "created",
+            "state_rebuilt",
+            "goal",
+            "tasks",
+            "plan",
+        ),
+    )
+
+
 def _output_schema(
     capability: str,
     result_schema: dict[str, Any] | None = None,
@@ -1156,8 +1336,8 @@ def tool_contracts() -> tuple[Tool, ...]:
             name=PLAN_TOOL,
             title="Plan research work",
             description=(
-                "Reserved Core planning contract. G-07 returns capability-unavailable "
-                "until the real I-04 goal/backlog planning slice exists."
+                "Generate the strict current I-04 DRAFT Goal, backlog tasks, "
+                "project-state binding, and daily plan through Research Core."
             ),
             inputSchema=_object_schema(
                 {
@@ -1166,12 +1346,12 @@ def tool_contracts() -> tuple[Tool, ...]:
                 },
                 required=("project_id",),
             ),
-            outputSchema=_output_schema("plan"),
+            outputSchema=_output_schema("plan", _initial_plan_result_schema()),
             annotations=ToolAnnotations(
                 title="Plan research work",
                 readOnlyHint=False,
                 destructiveHint=False,
-                idempotentHint=True,
+                idempotentHint=False,
                 openWorldHint=False,
             ),
         ),
@@ -1521,7 +1701,9 @@ class ResearchMCPAdapter:
             project_id = values.pop("project_id")
             return self.service.project_reconcile(project_id, **values).as_dict()
         elif name == PLAN_TOOL:
-            _validate_plan(arguments)
+            values = _validate_plan(arguments)
+            project_id = values.pop("project_id")
+            return self.service.plan(project_id, **values).as_dict()
         else:  # Guarded by call_tool; retained as a fail-closed invariant.
             raise MCPArgumentError("unknown tool")
         raise CapabilityUnavailableError(
@@ -1540,8 +1722,9 @@ def create_mcp_server(adapter: ResearchMCPAdapter) -> Server:
             "Use host-context for a budget-bounded project handoff, and use "
             "project-context or coverage for focused metadata. Call source-open "
             "only when exact current-source evidence is needed. Reconcile performs "
-            "a conservative full scan even when Hook hints are absent. Query and plan "
-            "remain explicit capability-unavailable contracts."
+            "a conservative full scan even when Hook hints are absent. Plan generates "
+            "I-04 DRAFT Goal/task/daily-plan machine state; query remains unavailable "
+            "until G-04."
         ),
     )
 

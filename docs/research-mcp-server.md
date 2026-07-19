@@ -1,12 +1,13 @@
-# Minimal Research Core MCP Server (G-07, extended by G-08 and H-07)
+# Minimal Research Core MCP Server (G-07, extended by G-08, H-07, and I-04)
 
-- Status: implemented for the R2 G-07 transport scope, G-08 Host Context Pack, and validated H-07 reconciliation boundary on 2026-07-16
+- Status: implemented for G-07 transport, G-08 Host Context Pack, H-07 reconciliation, and I-04 DRAFT initial planning through 2026-07-19
 - Server module: `tools.research_mcp`
 - Core boundary: `tools.research_core.ResearchCoreService`
 - Transport: MCP stdio, official Python SDK `mcp>=1.28.1,<2`
 - JSON Schema validation: `jsonschema>=4.25,<5`
-- Validation: `tests/test_research_mcp_server.py`, `tests/test_source_access.py`,
-  `tests/test_host_context_pack.py`, and `tests/test_project_reconciliation.py`
+- Validation: `tests/test_research_mcp_server.py`, `tests/test_research_planning.py`,
+  `tests/test_source_access.py`, `tests/test_host_context_pack.py`, and
+  `tests/test_project_reconciliation.py`
 - Existing checkpoints: `checkpoint/g-07-mcp-server` and `checkpoint/h-07-project-reconciliation`
 
 ## Purpose and boundary
@@ -38,9 +39,9 @@ The adapter is deliberately transport-only:
 
 G-07 and G-08 originally reserved later query, reconciliation, and planning
 contracts so adapters could stabilize without successful placeholders. Validated
-H-07 now activates `llmwiki_reconcile` as a real Core call. Verified Query and
-planning remain honest `capability-unavailable` contracts until G-04 and I-04
-land.
+H-07 activates `llmwiki_reconcile`, and I-04 activates `llmwiki_plan` as real Core
+calls. Planning returns strict non-executable DRAFT machine state only. Verified
+Query remains an honest `capability-unavailable` contract until G-04 lands.
 
 ## Installation and startup
 
@@ -94,12 +95,13 @@ later J-06 adapter task. See
 | `llmwiki_source_open` | Available, read-only source access | `ResearchCoreService.source_open_view(...)` enforces current Manifest content policy and returns a path-free `HostSourceOpenResult` |
 | `llmwiki_query` | Contract only | Returns `capability-unavailable`, `available_after: G-04` |
 | `llmwiki_reconcile` | Available, writes deterministic machine state | `ResearchCoreService.project_reconcile(project_id, dirty_paths=...)` snapshots H-04 events, always runs the full `register -> inventory -> classify` fallback, and advances only the starting snapshot checkpoint; `readOnlyHint=false` |
-| `llmwiki_plan` | Contract only | Returns `capability-unavailable`, `available_after: I-04` |
+| `llmwiki_plan` | Available, writes deterministic DRAFT machine state | Delegates to `ResearchCoreService.plan(...)`; creates/loads Goal/tasks/project-state and publishes `indexes/initial-plan.json` without authorizing execution or directly writing Markdown |
 
-The catalog contains exactly seven tools. Query and plan are the two remaining
-negative capability contracts, not successful placeholders: `isError` is true,
-`ok` is false, no `result` exists, and no project state changes. Reconciliation
-is a real non-read-only operation and must not be grouped with them.
+The catalog contains exactly seven tools. Query is the only remaining negative
+capability contract: `isError` is true, `ok` is false, and no `result` exists.
+Plan and reconciliation are real non-read-only operations. Plan annotations set
+`readOnlyHint=false` and `idempotentHint=false` because each call may publish a
+new explicitly dated DRAFT revision.
 
 ## Host-safe result DTOs
 
@@ -273,7 +275,7 @@ directory is created inside the source project.
 uses the official MCP `ClientSession` and stdio client to verify:
 
 1. protocol initialization, module/direct-script startup, and the exact seven-tool
-   catalog with reconciliation available and only query/plan unavailable;
+   catalog with reconciliation and I-04 DRAFT planning available and only query unavailable;
 2. explicit input and output JSON Schema enforcement, including malformed types,
    duplicate arrays, reconciliation hint bounds, malformed hashes, missing fields,
    and extra fields;
@@ -293,7 +295,7 @@ uses the official MCP `ClientSession` and stdio client to verify:
    `internal-error`;
 9. stable redacted reconciliation failures without dirty-path or exception-text
    echo;
-10. honest query/plan unavailable results with no state change or input echo;
+10. honest query-unavailable results plus strict host-safe I-04 DRAFT planning with no input echo, source write, or direct Markdown write;
 11. no raw-content leakage outside explicit policy-authorized source-open;
 12. clean server stderr and no duplicated filesystem workflow in the adapter.
 
@@ -309,7 +311,7 @@ typed too-small-budget failure, and fail-closed future schemas.
 
 G-07, G-08, and H-07 do not implement Verified Query (G-02 through G-06),
 H-05 selective extraction or knowledge refresh, the I-02 task store or planning
-pipeline (I-01 through I-04), Hook/Plugin installation, Web rendering, or the full
+mature planning beyond I-04, Hook/Plugin installation, Web rendering, or the full
 15-artifact one-click project-understanding contract. H-07 reconciliation stops
 at `classify`, leaves later run stages pending, and does not mutate curated
 knowledge.

@@ -28,6 +28,8 @@ from tools.research_mcp import (
     RECONCILE_TOOL,
     SOURCE_OPEN_TOOL,
 )
+from tools.project_registry import load_registered_project
+from tools.research_tasks import load_tasks
 from tools.source_registry import load_source_registry
 
 
@@ -424,11 +426,31 @@ class CodexPluginBehaviorTests(unittest.IsolatedAsyncioTestCase):
                 PLAN_TOOL,
                 {"project_id": project_id, "objective": "Finish the study"},
             )
-            self.assertTrue(plan.isError)
+            self.assertFalse(plan.isError)
+            plan_result = self.payload(plan)["result"]
+            self.assertEqual(plan_result["project_id"], project_id)
+            self.assertEqual(plan_result["goal"]["status"], "draft")
+            self.assertEqual(plan_result["plan"]["status"], "draft")
+            self.assertTrue(plan_result["tasks"]["task_ids"])
             self.assertEqual(
-                self.payload(plan)["error"]["code"], "capability-unavailable"
+                plan_result["tasks"]["statuses"],
+                ["draft"] * len(plan_result["tasks"]["task_ids"]),
             )
 
+        tasks = load_tasks(self.workspace, project_id)
+        self.assertTrue(tasks.tasks)
+        self.assertTrue(all(not task.executable for task in tasks.tasks))
+        registration = load_registered_project(self.workspace, project_id)
+        for relative_path in (
+            "indexes/goals.json",
+            "indexes/tasks.json",
+            "indexes/project-state.json",
+            "indexes/initial-plan.json",
+        ):
+            self.assertTrue(
+                (registration.layout.machine_root / relative_path).is_file(),
+                relative_path,
+            )
         self.assertEqual(_source_snapshot(self.project), source_before)
         self.assertEqual(_file_snapshot(curated_root), curated_before)
 

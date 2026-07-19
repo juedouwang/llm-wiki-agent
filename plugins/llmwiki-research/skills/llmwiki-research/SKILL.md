@@ -1,6 +1,6 @@
 ---
 name: llmwiki-research
-description: Use the local LLM Wiki Research Core through its Codex MCP adapter and portable CLI, including registration, context, coverage, source access, and explicit reconciliation.
+description: Use the local LLM Wiki Research Core through its Codex MCP adapter and portable CLI, including registration, context, coverage, source access, explicit reconciliation, and DRAFT initial planning.
 ---
 
 # LLM Wiki Research
@@ -26,6 +26,7 @@ The wrapper delegates to `tools.project` and supplies the workspace root only wh
 - `llmwiki_coverage` generates the deterministic coverage view.
 - `llmwiki_source_open` reopens policy-authorized source content using the current Manifest contract.
 - `llmwiki_reconcile` performs explicit conservative reconciliation through the current deterministic `classify` boundary.
+- `llmwiki_plan` creates or loads the strict I-04 DRAFT Goal and backlog, binds them to current project state, and emits a DRAFT daily plan machine artifact.
 
 Treat source-open policy denials as final unless project policy or registration is intentionally changed. Do not bypass Core by reading machine state directly.
 
@@ -45,4 +46,4 @@ When `LLMWIKI_PROJECT_ID` is configured, the asynchronous `PostToolUse` Hook may
 
 ## Honest capability boundary
 
-`llmwiki_query` and `llmwiki_plan` are reserved contracts that currently return `capability-unavailable`. Do not represent either as implemented, repeatedly retry them, or claim verified answers or generated research plans from those tools. Extraction, selective knowledge refresh, and Web behavior are also outside this adapter package.
+`llmwiki_plan` is implemented only as the I-04 initial-planning slice. Treat every generated Goal, task, and daily plan as `DRAFT`: tasks remain non-executable until explicit user confirmation, and the MCP operation writes machine state only rather than curated Markdown. `llmwiki_query` still returns `capability-unavailable` with `available_after=G-04`; do not retry it or claim Verified Query. Extraction, selective knowledge refresh, and Web behavior remain outside this adapter package.
