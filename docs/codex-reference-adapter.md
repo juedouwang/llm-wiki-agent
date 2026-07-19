@@ -322,7 +322,17 @@ uses an installed Codex CLI:
 $env:LLMWIKI_RUN_RELEASE_TESTS = '1'
 $env:LLMWIKI_RELEASE_CACHE_DIR = '<verified-release-cache>'
 $env:LLMWIKI_RELEASE_OFFLINE = '1'
-$env:LLMWIKI_CODEX_EXE = (Get-Command codex).Source
+$codexExe = Get-Command codex.exe -ErrorAction SilentlyContinue
+if ($codexExe) {
+  $env:LLMWIKI_CODEX_EXE = $codexExe.Source
+} else {
+  $env:LLMWIKI_CODEX_EXE = Get-ChildItem `
+    -LiteralPath "$env:LOCALAPPDATA\OpenAI\Codex\bin" `
+    -Recurse -Filter codex.exe -File |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1 -ExpandProperty FullName
+}
+if (-not $env:LLMWIKI_CODEX_EXE) { throw 'Codex executable not found.' }
 python -B -m pytest -q -p no:cacheprovider tests/test_codex_plugin_release.py
 ```
 
