@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>LLM Wiki Research Cockpit</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to research workspace</a>
+  <div id="app-shell" class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">LLM WIKI AGENT</p>
+        <h1>Research Cockpit</h1>
+        <p class="subtitle">Local evidence, durable knowledge, and accountable project state.</p>
+      </div>
+      <div class="topbar-actions">
+        <span id="mode-badge" class="mode-badge">READ ONLY · J-03</span>
+        <button id="refresh-button" class="secondary-button" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <div id="system-banner" class="system-banner" role="status" aria-live="polite">
+      Loopback-only view. Source files are not reopened by this page.
+    </div>
+
+    <div class="workspace-grid">
+      <aside class="sidebar" aria-label="Registered projects">
+        <div class="sidebar-heading">
+          <div>
+            <p class="section-kicker">Workspace</p>
+            <h2>Projects</h2>
+          </div>
+          <span id="project-count" class="count-pill">0</span>
+        </div>
+        <label class="search-label" for="project-search">Filter projects</label>
+        <input id="project-search" class="search-input" type="search" placeholder="Name or project ID" autocomplete="off">
+        <div id="project-list" class="project-list" role="list"></div>
+        <div class="capability-card">
+          <p class="section-kicker">Capability boundary</p>
+          <p><strong>Verified Query</strong> is unavailable until G-04.</p>
+          <p><strong>C-07</strong> remains deferred / not started.</p>
+        </div>
+      </aside>
+
+      <main id="main-content" class="main-content" tabindex="-1">
+        <section class="hero-panel" aria-labelledby="project-title">
+          <div>
+            <p id="project-id" class="section-kicker">No project selected</p>
+            <h2 id="project-title">Choose a registered research project</h2>
+            <p id="project-meta" class="muted">The cockpit will expose only validated local machine state and curated Markdown.</p>
+          </div>
+          <div class="hero-status">
+            <span id="project-health" class="status-chip status-draft">DRAFT</span>
+          </div>
+        </section>
+
+        <section aria-labelledby="summary-heading">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">At a glance</p>
+              <h2 id="summary-heading">Project state</h2>
+            </div>
+          </div>
+          <div id="summary-grid" class="summary-grid"></div>
+        </section>
+
+        <section class="two-column" aria-label="Knowledge and gaps">
+          <div class="panel">
+            <div class="section-heading compact">
+              <div>
+                <p class="section-kicker">Knowledge Schema v2</p>
+                <h2>Fifteen product artifacts</h2>
+              </div>
+              <span id="artifact-count" class="count-pill">0 / 15</span>
+            </div>
+            <div id="artifact-grid" class="artifact-grid"></div>
+          </div>
+          <div class="panel">
+            <div class="section-heading compact">
+              <div>
+                <p class="section-kicker">Honest gaps</p>
+                <h2>Missing or invalid inputs</h2>
+              </div>
+            </div>
+            <div id="gaps-list" class="gap-list"></div>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="coverage-heading">
+          <div class="section-heading compact">
+            <div>
+              <p class="section-kicker">Inventory accountability</p>
+              <h2 id="coverage-heading">Coverage and file state</h2>
+            </div>
+            <div id="coverage-totals" class="inline-metrics"></div>
+          </div>
+          <div id="coverage-panel" class="coverage-grid"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Project-relative path</th>
+                  <th>Role</th>
+                  <th>Status</th>
+                  <th>Read depth</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody id="files-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="two-column" aria-label="Evidence trace and planning">
+          <div class="panel">
+            <div class="section-heading compact">
+              <div>
+                <p class="section-kicker">Evidence first</p>
+                <h2>Claims and provenance</h2>
+              </div>
+              <span id="claim-count" class="count-pill">0</span>
+            </div>
+            <div id="claims-list" class="claim-list"></div>
+          </div>
+          <div class="panel">
+            <div class="section-heading compact">
+              <div>
+                <p class="section-kicker">Agent-native loop</p>
+                <h2>Goal, tasks, and daily plan</h2>
+              </div>
+            </div>
+            <div id="planning-panel" class="planning-panel"></div>
+          </div>
+        </section>
+
+        <section class="two-column" aria-label="Runs and content viewer">
+          <div class="panel">
+            <div class="section-heading compact">
+              <div>
+                <p class="section-kicker">Execution ledger</p>
+                <h2>Run history</h2>
+              </div>
+              <span id="run-count" class="count-pill">0</span>
+            </div>
+            <div id="runs-list" class="run-list"></div>
+          </div>
+          <div class="panel viewer-panel">
+            <div class="section-heading compact">
+              <div>
+                <p class="section-kicker">Safe local preview</p>
+                <h2 id="viewer-title">Markdown and Evidence locator</h2>
+              </div>
+              <button id="close-viewer" class="text-button" type="button">Clear</button>
+            </div>
+            <div id="evidence-viewer" class="evidence-viewer" aria-live="polite"></div>
+            <pre id="markdown-viewer" class="markdown-viewer" tabindex="0">Select a knowledge artifact or Claim trace.</pre>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>
