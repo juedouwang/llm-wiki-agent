@@ -12,6 +12,37 @@ CLI `0.144.2`; compatibility with every future Codex release is not implied.
 Codex's current Plugin structure is documented by OpenAI at
 <https://developers.openai.com/codex/plugins/build>.
 
+## Install from the public Git marketplace (recommended)
+
+```powershell
+codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.0
+codex plugin add llmwiki-research@llmwiki-research-release --json
+```
+
+This clones the public marketplace snapshot and installs the complete bundled
+Plugin, not the unbundled source template in this checkout. Verify discovery:
+
+```powershell
+codex plugin list --available --json
+codex mcp list --json
+```
+
+For a tagged upgrade or reinstall, remove the installed Plugin and marketplace,
+then add the desired immutable tag and install again:
+
+```powershell
+codex plugin remove llmwiki-research@llmwiki-research-release --json
+codex plugin marketplace remove llmwiki-research-release --json
+codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.0
+codex plugin add llmwiki-research@llmwiki-research-release --json
+```
+
+Public repository:
+<https://github.com/juedouwang/llmwiki-research-codex-plugin>
+
+Release assets:
+<https://github.com/juedouwang/llmwiki-research-codex-plugin/releases/tag/v0.2.0>
+
 ## Install from the release package
 
 Extract `llmwiki-research-0.2.0-windows-x86_64.zip`, enter the extracted release

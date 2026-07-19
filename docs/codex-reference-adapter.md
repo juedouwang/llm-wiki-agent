@@ -130,6 +130,36 @@ The release target is intentionally Windows x86-64 only. Other operating systems
 or architectures require a separately locked and tested release unit; they are
 not inferred from this package.
 
+## Public Git marketplace publication
+
+The complete built Plugin is published separately from the unbundled source
+adapter at:
+
+<https://github.com/juedouwang/llmwiki-research-codex-plugin>
+
+Install the immutable `v0.2.0` marketplace snapshot with the current validated
+CLI commands:
+
+```powershell
+codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.0
+codex plugin add llmwiki-research@llmwiki-research-release --json
+```
+
+The corresponding GitHub Release publishes the deterministic ZIP, sidecar,
+release notes, `FILELIST.txt`, internal `SHA256SUMS`, and `release.json`:
+
+<https://github.com/juedouwang/llmwiki-research-codex-plugin/releases/tag/v0.2.0>
+
+The ZIP SHA-256 is
+`2e067be43a3329aae5f9df5e5a558a2f3a46727e2cea84f6362cc94bb1a60658`.
+A remote Git-backed clean-profile acceptance on **2026-07-19** confirmed
+marketplace and Skill discovery, MCP registration and handshake, all seven tool
+Schemas, project context, Host Context Pack, coverage, policy-authorized
+source-open, explicit full-scan reconciliation with absent Hook hints, I-04 DRAFT
+planning, exact Query unavailability, default workspace selection, source
+immutability, and error redaction without `LLMWIKI_CORE_ROOT` or a source
+checkout.
+
 ## Installation, upgrade, rollback, and removal
 
 From the extracted release root:

@@ -54,17 +54,29 @@ The J-05B release packages the accepted R3-minus-C-07 Research Core workflows as
 `llmwiki-research` Plugin `0.2.0`. A release installation does not require this
 repository checkout, a system Python, or `LLMWIKI_CORE_ROOT`.
 
-Build the deterministic package on Windows x86-64 with Python 3.13:
+Install from the public Git marketplace without cloning this source repository:
 
 ```powershell
-python -B tools/build_codex_plugin_release.py --output-dir dist --json
+codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.0
+codex plugin add llmwiki-research@llmwiki-research-release --json
 ```
 
-After extracting `llmwiki-research-0.2.0-windows-x86_64.zip`, install directly:
+The public marketplace repository and immutable release assets are available at
+[`juedouwang/llmwiki-research-codex-plugin`](https://github.com/juedouwang/llmwiki-research-codex-plugin)
+and its [`v0.2.0` release](https://github.com/juedouwang/llmwiki-research-codex-plugin/releases/tag/v0.2.0).
+Codex CLI `0.144.2`, used for release validation, names the installation command
+`codex plugin add`.
+
+For the integrity-checked ZIP path, download and extract
+`llmwiki-research-0.2.0-windows-x86_64.zip`, then run:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
+
+Maintainers can rebuild the deterministic package on Windows x86-64 with Python
+3.13 by running `python -B tools/build_codex_plugin_release.py --output-dir dist
+--json`.
 
 The optional workspace defaults to `%LOCALAPPDATA%\LLMWiki\workspace`.
 Upgrade/reinstall, rollback, uninstall, archive verification, and exact capability

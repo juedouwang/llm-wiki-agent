@@ -13,7 +13,49 @@ not require an `llm-wiki-agent` checkout, a system Python, or
 The release was validated on **2026-07-19** with Codex CLI `0.144.2`. Other
 Codex versions are not implied by that validation.
 
-## Artifact names
+## Recommended: public Git marketplace
+
+Add the public, immutable marketplace tag and install the Plugin:
+
+```powershell
+codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.0
+codex plugin add llmwiki-research@llmwiki-research-release --json
+```
+
+This is a real Git-backed installation of the complete self-contained Plugin.
+It does not use the unbundled `plugins/llmwiki-research/` source template from a
+checkout. Codex CLI `0.144.2` uses `plugin add` as the installation subcommand.
+
+Verify the remote marketplace, Plugin, Skill-backed prompt context, and MCP
+registration:
+
+```powershell
+codex plugin marketplace list --json
+codex plugin list --available --json
+codex mcp list --json
+```
+
+For a tagged upgrade/reinstall or a full uninstall:
+
+```powershell
+# Upgrade/reinstall from the selected immutable tag
+codex plugin remove llmwiki-research@llmwiki-research-release --json
+codex plugin marketplace remove llmwiki-research-release --json
+codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.0
+codex plugin add llmwiki-research@llmwiki-research-release --json
+
+# Uninstall
+codex plugin remove llmwiki-research@llmwiki-research-release --json
+codex plugin marketplace remove llmwiki-research-release --json
+```
+
+Public repository:
+<https://github.com/juedouwang/llmwiki-research-codex-plugin>
+
+Release page:
+<https://github.com/juedouwang/llmwiki-research-codex-plugin/releases/tag/v0.2.0>
+
+## Direct ZIP artifact names
 
 ```text
 llmwiki-research-0.2.0-windows-x86_64.zip
@@ -36,7 +78,13 @@ Expand-Archive -LiteralPath $archive -DestinationPath . -Force
 Set-Location .\llmwiki-research-0.2.0-windows-x86_64
 ```
 
-The published SHA-256 is also reported in the J-05B completion record. Do not
+The published ZIP SHA-256 is:
+
+```text
+2e067be43a3329aae5f9df5e5a558a2f3a46727e2cea84f6362cc94bb1a60658
+```
+
+It is also available in the release sidecar and GitHub asset digest. Do not
 install an archive whose hash differs.
 
 ## 2. Direct installation
