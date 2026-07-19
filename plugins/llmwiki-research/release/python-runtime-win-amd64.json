@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "platform": "windows",
+  "architecture": "x86_64",
+  "python_version": "3.13.9",
+  "implementation": "CPython",
+  "archive": "python-3.13.9-embed-amd64.zip",
+  "url": "https://www.python.org/ftp/python/3.13.9/python-3.13.9-embed-amd64.zip",
+  "sha256": "91d828c2da3a029b41699e918674a0cb379c02cf20dab9c501306885f837402a"
+}

@@ -1,4 +1,4 @@
-"""Portable discovery and delegation helpers for the LLM Wiki Research plugin."""
+"""Self-contained discovery and delegation helpers for LLM Wiki Research."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from typing import Callable
 CORE_ROOT_ENV = "LLMWIKI_CORE_ROOT"
 WORKSPACE_ROOT_ENV = "LLMWIKI_WORKSPACE_ROOT"
 MAX_ANCESTOR_LEVELS = 8
+_PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+_BUNDLED_CORE_ROOT = _PLUGIN_ROOT / "runtime" / "core"
 _CORE_MARKERS = (
     Path("tools") / "__init__.py",
     Path("tools") / "project.py",
@@ -21,7 +23,7 @@ _CORE_MARKERS = (
 
 
 class BootstrapError(RuntimeError):
-    """Raised when a portable launcher cannot safely locate Research Core."""
+    """Raised when a launcher cannot establish a safe bundled runtime."""
 
 
 def _resolved(path: Path) -> Path:
@@ -29,7 +31,7 @@ def _resolved(path: Path) -> Path:
         return path.expanduser().resolve(strict=False)
     except (OSError, RuntimeError) as exc:
         raise BootstrapError(
-            "A configured Research Core path could not be resolved."
+            "A configured local directory could not be resolved."
         ) from exc
 
 
@@ -53,12 +55,24 @@ def _bounded_ancestors(start: Path) -> list[Path]:
     return ancestors
 
 
+def _is_within(candidate: Path, root: Path) -> bool:
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
 def locate_core_root(
     *,
     environ: Mapping[str, str] | None = None,
     start: Path | None = None,
 ) -> Path:
-    """Locate a Core checkout from explicit configuration or bounded ancestors."""
+    """Prefer the bundled Core; retain checkout discovery for source development."""
+
+    bundled = _resolved(_BUNDLED_CORE_ROOT)
+    if _is_core_root(bundled):
+        return bundled
 
     selected_environment = os.environ if environ is None else environ
     configured = selected_environment.get(CORE_ROOT_ENV, "").strip()
@@ -67,7 +81,7 @@ def locate_core_root(
         if _is_core_root(candidate):
             return candidate
         raise BootstrapError(
-            f"{CORE_ROOT_ENV} must name a directory containing the Research Core tools package."
+            f"{CORE_ROOT_ENV} does not identify a compatible development Core."
         )
 
     search_starts = [
@@ -84,8 +98,22 @@ def locate_core_root(
                 return candidate
 
     raise BootstrapError(
-        f"Research Core could not be located; set {CORE_ROOT_ENV} to its checkout root."
+        "The bundled Research Core is unavailable; reinstall the Plugin package."
     )
+
+
+def _default_workspace_candidate(environ: Mapping[str, str]) -> Path:
+    if os.name == "nt":
+        local_app_data = environ.get("LOCALAPPDATA", "").strip()
+        if local_app_data and Path(local_app_data).is_absolute():
+            return Path(local_app_data) / "LLMWiki" / "workspace"
+        return Path.home() / "AppData" / "Local" / "LLMWiki" / "workspace"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "LLMWiki" / "workspace"
+    xdg_data_home = environ.get("XDG_DATA_HOME", "").strip()
+    if xdg_data_home and Path(xdg_data_home).is_absolute():
+        return Path(xdg_data_home) / "llmwiki" / "workspace"
+    return Path.home() / ".local" / "share" / "llmwiki" / "workspace"
 
 
 def locate_workspace_root(
@@ -93,11 +121,41 @@ def locate_workspace_root(
     *,
     environ: Mapping[str, str] | None = None,
 ) -> Path:
-    """Use an explicit assistant workspace, defaulting to the Core root."""
+    """Return an explicit absolute workspace or a safe per-user data directory."""
 
     selected_environment = os.environ if environ is None else environ
     configured = selected_environment.get(WORKSPACE_ROOT_ENV, "").strip()
-    return _resolved(Path(configured)) if configured else core_root
+    if configured:
+        raw_candidate = Path(configured)
+        if not raw_candidate.is_absolute():
+            raise BootstrapError(f"{WORKSPACE_ROOT_ENV} must be an absolute directory.")
+        candidate = _resolved(raw_candidate)
+    else:
+        candidate = _resolved(_default_workspace_candidate(selected_environment))
+
+    normalized_core = _resolved(core_root)
+    normalized_plugin = _resolved(_PLUGIN_ROOT)
+    if (
+        candidate == normalized_core
+        or _is_within(candidate, normalized_core)
+        or candidate == normalized_plugin
+        or _is_within(candidate, normalized_plugin)
+    ):
+        raise BootstrapError("The workspace must be outside the Plugin runtime.")
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise BootstrapError(
+            "The local workspace directory could not be created."
+        ) from exc
+    if not candidate.is_dir():
+        raise BootstrapError("The local workspace location is not a directory.")
+    if os.name != "nt":
+        try:
+            candidate.chmod(0o700)
+        except OSError:
+            pass
+    return candidate
 
 
 def add_core_to_import_path(core_root: Path) -> None:
@@ -130,20 +188,14 @@ def load_main(
     try:
         module = importlib.import_module(module_name)
     except Exception as exc:
-        raise BootstrapError(
-            f"Unable to import the configured Research Core module {module_name}."
-        ) from exc
+        raise BootstrapError("The bundled Research Core could not be loaded.") from exc
     module_file = getattr(module, "__file__", None)
     expected_file = core_root.joinpath(*module_name.split(".")).with_suffix(".py")
     if not isinstance(module_file, str) or _resolved(Path(module_file)) != _resolved(
         expected_file
     ):
-        raise BootstrapError(
-            f"The imported module {module_name} does not belong to the configured Research Core."
-        )
+        raise BootstrapError("A Research Core module failed its origin check.")
     entrypoint = getattr(module, "main", None)
     if not callable(entrypoint):
-        raise BootstrapError(
-            f"The configured Research Core module {module_name} has no main entry point."
-        )
+        raise BootstrapError("A Research Core entry point is unavailable.")
     return entrypoint

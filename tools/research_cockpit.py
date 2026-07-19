@@ -2329,7 +2329,7 @@ def make_handler(
         def _header_values(self, name: str) -> tuple[str, ...]:
             return tuple(self.headers.get_all(name, []))
 
-        def allowed(self) -> bool:
+        def allowed(self, *, drain_rejected_body: bool = False) -> bool:
             host_values = self._header_values("Host")
             port = int(self.server.server_address[1])
             if (
@@ -2338,6 +2338,8 @@ def make_handler(
                 and _host_matches_server_port(host_values[0], port)
             ):
                 return True
+            if drain_rejected_body:
+                self._drain_rejected_edit_body()
             self.send_json(
                 421,
                 {
@@ -2428,6 +2430,38 @@ def make_handler(
                 return secrets.compare_digest(token_values[0], edit_token)
             except (TypeError, ValueError):
                 return False
+
+        def _drain_rejected_edit_body(self) -> None:
+            """Consume only a safely framed body before an early POST rejection.
+
+            On Windows, closing a socket with unread request bytes can reset the
+            connection before the client receives the already-generated JSON
+            response. Rejected bodies are never parsed or retained. Malformed,
+            unbounded, transfer-encoded, or ``Expect`` requests remain fail-closed
+            and are not read.
+            """
+
+            self.close_connection = True
+            if self._header_values("Transfer-Encoding") or self._header_values(
+                "Expect"
+            ):
+                return
+            lengths = self._header_values("Content-Length")
+            if (
+                len(lengths) != 1
+                or len(lengths[0]) > 20
+                or re.fullmatch(r"[0-9]+", lengths[0]) is None
+            ):
+                return
+            length = int(lengths[0], 10)
+            if length > MAX_EDIT_REQUEST_BYTES:
+                return
+            remaining = length
+            while remaining:
+                chunk = self.rfile.read(min(64 * 1024, remaining))
+                if not chunk:
+                    return
+                remaining -= len(chunk)
 
         def _read_edit_body(self) -> bytes:
             if self._header_values("Transfer-Encoding"):
@@ -2633,9 +2667,10 @@ def make_handler(
             self.serve(head=True)
 
         def do_POST(self) -> None:
-            if not self.allowed():
+            if not self.allowed(drain_rejected_body=True):
                 return
             if not cockpit.editing_enabled:
+                self._drain_rejected_edit_body()
                 self.reject(already_allowed=True)
                 return
             try:
@@ -2647,6 +2682,7 @@ def make_handler(
                     and segments[1] == "projects"
                     and segments[3] == "edits"
                 ):
+                    self._drain_rejected_edit_body()
                     if (
                         len(segments) >= 4
                         and segments[0] == "api"
@@ -2661,9 +2697,11 @@ def make_handler(
                 project_id = self._decode_segment(segments[2])
                 target_key = self._decode_segment(segments[4])
                 if target_key not in _EDIT_TARGETS_BY_KEY:
+                    self._drain_rejected_edit_body()
                     self._not_found()
                     return
                 if not self._edit_request_authorized():
+                    self._drain_rejected_edit_body()
                     self.send_json(
                         403,
                         {

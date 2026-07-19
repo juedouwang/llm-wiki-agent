@@ -10,7 +10,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from _bootstrap import add_core_to_import_path, locate_core_root, locate_workspace_root
+_SCRIPT_ROOT = Path(__file__).resolve().parent
+if str(_SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_ROOT))
+from _bootstrap import (  # noqa: E402
+    add_core_to_import_path,
+    locate_core_root,
+    locate_workspace_root,
+)
 
 _PROJECT_ID_ENV = "LLMWIKI_PROJECT_ID"
 _PROJECT_ROOT_ENV = "LLMWIKI_PROJECT_ROOT"

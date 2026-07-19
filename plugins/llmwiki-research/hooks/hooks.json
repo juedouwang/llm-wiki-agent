@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python -B scripts/host_event.py",
+            "command": "\"${PLUGIN_ROOT}/runtime/python/python.exe\" -I -B \"${PLUGIN_ROOT}/scripts/host_event.py\"",
             "async": true
           }
         ]

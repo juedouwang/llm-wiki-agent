@@ -1,7 +1,7 @@
 {
   "name": "llmwiki-research",
-  "version": "0.1.0",
-  "description": "Codex adapter for deterministic LLM Wiki Research Core operations.",
+  "version": "0.2.0",
+  "description": "Self-contained Windows Codex adapter for deterministic R3-minus-C-07 LLM Wiki Research Core workflows.",
   "author": {
     "name": "LLM Wiki Agent contributors",
     "url": "https://github.com/juedouwang/llm-wiki-agent"
@@ -20,13 +20,14 @@
   "interface": {
     "displayName": "LLM Wiki Research",
     "shortDescription": "Use deterministic Research Core operations in Codex.",
-    "longDescription": "Connects Codex to the local Research Core through MCP, portable CLI launchers, and optional host-event hints.",
+    "longDescription": "Bundles the accepted deterministic Research Core, a private Python runtime, MCP tools, local CLI launchers, the loopback research cockpit, and optional untrusted host-event hints. Query and C-07 remain unavailable.",
     "developerName": "LLM Wiki Agent contributors",
     "category": "Productivity",
     "capabilities": [
       "MCP",
       "Local research",
-      "Hooks"
+      "Controlled cockpit",
+      "Optional hooks"
     ],
     "defaultPrompt": [
       "Show the registered research project context.",

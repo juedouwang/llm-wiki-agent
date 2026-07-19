@@ -1,56 +1,120 @@
 # LLM Wiki Research Codex Plugin
 
-This package is the portable Codex reference adapter for the existing local Research Core. It provides a Skill, an MCP stdio configuration, thin CLI launchers, and an optional fail-open `PostToolUse` Hook. Filesystem scanning, coverage, source access, and reconciliation remain implemented by the Core modules rather than by this plugin.
+`llmwiki-research` is the self-contained Windows Codex adapter for the accepted
+**R3-minus-C-07** LLM Wiki Research workflows. Release `0.2.0` bundles the
+validated Research Core, a private CPython runtime, locked dependencies, a Codex
+Skill, MCP configuration, local CLI/cockpit launchers, and an optional fail-open
+Hook. A release installation does **not** need an `llm-wiki-agent` checkout and
+does **not** need `LLMWIKI_CORE_ROOT`.
 
-## Install and discovery
+The current release target is **Windows x86-64**. It was validated with Codex
+CLI `0.144.2`; compatibility with every future Codex release is not implied.
+Codex's current Plugin structure is documented by OpenAI at
+<https://developers.openai.com/codex/plugins/build>.
 
-The repository ships the plugin package rather than modifying a user's personal
-marketplace. For a clean-profile installation, stage this directory as
-`plugins/llmwiki-research/` beneath a local marketplace whose
-`.agents/plugins/marketplace.json` names `llmwiki-research`, then run:
+## Install from the release package
 
-```bash
-codex plugin marketplace add /path/to/local-marketplace
-codex plugin add llmwiki-research@MARKETPLACE_NAME
+Extract `llmwiki-research-0.2.0-windows-x86_64.zip`, enter the extracted release
+directory, and run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+The installer verifies the complete internal `SHA256SUMS` inventory before it
+stages or registers anything. It then installs the bundled local marketplace
+`llmwiki-research-release` and the Plugin ID
+`llmwiki-research@llmwiki-research-release` through the Codex CLI.
+
+Verify discovery:
+
+```powershell
 codex plugin list --json
+codex mcp list --json
 ```
 
-`tests/test_codex_plugin.py` builds that marketplace in a temporary directory and
-checks real discovery, cache installation, enablement, Skill, MCP, and Hook
-files when the Codex CLI is available. The validated reference host is Codex CLI
-`0.144.2`; compatibility with every Codex release is not implied.
+Reinstall the same version, or upgrade from a newly extracted release package:
 
-## Configuration
-
-The launchers locate Core in this order:
-
-1. `LLMWIKI_CORE_ROOT`, pointing to a checkout root that contains `tools/research_core.py`, `tools/research_mcp.py`, and `tools/project.py`.
-2. A bounded ancestor search from the plugin scripts and current working directory.
-
-Set `LLMWIKI_WORKSPACE_ROOT` to the assistant workspace containing `.llmwiki/projects/` and `wiki/projects/`. If it is unset, the located Core root is used. The bundled `.mcp.json` starts from `cwd: "."`, which Codex resolves relative to the plugin root, and calls the plugin-relative `scripts/launch_mcp.py` launcher.
-
-Example environment setup:
-
-```bash
-export LLMWIKI_CORE_ROOT=/path/to/llm-wiki-agent
-export LLMWIKI_WORKSPACE_ROOT=/path/to/assistant-workspace
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Force
 ```
 
-## Portable CLI
+Rollback to any version still staged under the managed package directory:
 
-`scripts/llmwiki.py` delegates directly to `tools.project`. It injects `--workspace-root` only when the caller has not supplied that option.
-
-```bash
-python -B scripts/llmwiki.py register /path/to/research-project --json
-python -B scripts/llmwiki.py context PROJECT_ID --json
-python -B scripts/llmwiki.py reconcile PROJECT_ID --json
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rollback.ps1 -Version 0.2.0
 ```
 
-Registration creates stable project identity and empty external storage; it is not a completed scan. Explicit `reconcile` remains the correctness path when Hooks are disabled, unavailable, malformed, or untrusted.
+Uninstall the Codex registration while retaining staged packages and all
+workspace state:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
+```
+
+Optionally purge only the marker-validated managed package directory. The
+workspace is still retained:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1 -PurgePackages
+```
+
+See [`../../docs/codex-plugin-installation.md`](../../docs/codex-plugin-installation.md)
+for archive verification, exact paths, rollback semantics, and troubleshooting.
+
+## Runtime and storage
+
+The managed package base defaults to:
+
+```text
+%LOCALAPPDATA%\LLMWiki\CodexPlugins\llmwiki-research\
+```
+
+Version `0.2.0` is staged below that directory and remains movable as a complete
+Plugin tree. Codex may also copy the Plugin into its own cache. All launchers
+resolve their bundled Core relative to the installed Plugin root, so moving the
+complete installed Plugin directory does not require path rewrites.
+
+`LLMWIKI_WORKSPACE_ROOT` is optional. If unset, the launchers create and use:
+
+```text
+%LOCALAPPDATA%\LLMWiki\workspace
+```
+
+An explicit `LLMWIKI_WORKSPACE_ROOT` must be an absolute path. The bootstrap
+rejects a workspace inside the Plugin package or bundled Core. The workspace
+holds machine state under `.llmwiki/projects/` and curated project knowledge
+under `wiki/projects/`; it is never deleted by uninstall or package purge.
+
+`LLMWIKI_CORE_ROOT` is retained only as a source-development fallback when the
+unbundled Plugin directory in this repository is tested. A formal release always
+prefers its bundled Core and requires no manual Core-root configuration.
+
+## Local launchers
+
+From the staged Plugin root, use the bundled `.cmd` launchers; no system Python is
+required:
+
+```powershell
+scripts\llmwiki.cmd register C:\path\to\research-project --json
+scripts\llmwiki.cmd understand C:\path\to\research-project --json
+scripts\llmwiki.cmd context PROJECT_ID --json
+scripts\llmwiki.cmd reconcile PROJECT_ID --json
+scripts\research-cockpit.cmd serve
+```
+
+The Python launchers remain available for source development. The release MCP
+entry uses `runtime/python/python.exe -I -B`, so ambient `PYTHONPATH`,
+`PYTHONHOME`, and checkout import paths cannot supply the Core or dependencies.
+
+Registration creates stable project identity and empty external storage; it is
+not a completed scan. `understand` runs the existing deterministic E-08
+R3-minus-C-07 pipeline. Explicit reconciliation remains the correctness path
+when Hooks are disabled, unavailable, malformed, delayed, or untrusted.
 
 ## MCP operations
 
-The MCP server delegates to `tools.research_mcp` and exposes the Core catalog:
+The MCP server exposes exactly these seven operations:
 
 - `llmwiki_project_context`
 - `llmwiki_host_context`
@@ -60,23 +124,37 @@ The MCP server delegates to `tools.research_mcp` and exposes the Core catalog:
 - `llmwiki_query`
 - `llmwiki_plan`
 
-Project context, host context, coverage, source-open, explicit reconciliation, and I-04 initial planning are real Core operations. `llmwiki_plan` writes strict DRAFT Goal/task/project-state/initial-plan machine artifacts only; it does not authorize task execution or directly write curated Markdown. `llmwiki_query` intentionally returns `capability-unavailable` with `available_after=G-04`. The plugin does not add extraction, selective knowledge refresh, or Web behavior.
+Project context, Host Context Pack, coverage, policy-authorized source-open,
+conservative H-07 reconciliation, and I-04 initial planning are real Core
+operations. `llmwiki_plan` writes strict non-executable DRAFT machine state; it
+does not authorize execution or directly write curated Markdown.
+
+`llmwiki_query` intentionally returns `capability-unavailable` with
+`available_after=G-04`.
 
 ## Optional H-04 Hook
 
-Set `LLMWIKI_PROJECT_ID` to enable the asynchronous `PostToolUse` Hook for one registered project:
+Set `LLMWIKI_PROJECT_ID` only when a Codex session should submit successful
+file-changing path hints for one already registered project. The default
+workspace must contain that registration, or `LLMWIKI_WORKSPACE_ROOT` must point
+to the workspace that does.
 
-```bash
-export LLMWIKI_PROJECT_ID=my-project-id
-```
+The asynchronous `PostToolUse` Hook calls only
+`ResearchCoreService.host_event_submit`. It records untrusted H-04 hints and
+never registers, scans, extracts, reconciles, acknowledges checkpoints, or
+updates curated Markdown. Missing or malformed configuration fails open and
+must not block Codex. Run explicit reconciliation whenever synchronized state is
+required.
 
-For successful file-changing tools, `scripts/host_event.py` loads the existing registration, extracts path hints from Hook input (including `tool_input.file_path` and `tool_input.path`), resolves them against the registered source root, and calls only `ResearchCoreService.host_event_submit`. A relative path is interpreted from a Hook `cwd` only when that directory is inside the registered source root. An optional `LLMWIKI_PROJECT_ROOT` is accepted only when it exactly matches the registered root. Outside, traversal, protected, malformed, and ambiguous paths are ignored.
+## Honest boundary
 
-The Hook writes untrusted H-04 event hints only. It never starts a scan, invokes reconciliation, updates curated knowledge, or advances a reconciliation checkpoint. It exits successfully and without output when disabled, when input is malformed or irrelevant, or when event submission fails. Run `llmwiki_reconcile` explicitly whenever synchronized state is required.
+This release packages only the already accepted R3-minus-C-07 capability set:
 
-## Boundary summary
-
-- The source project remains read-only to registration, inventory, coverage, source-open, and reconciliation workflows except for the user or host tool action that originally triggered a Hook.
-- Machine state stays under `.llmwiki/projects/`; curated Markdown stays under `wiki/projects/`.
-- Hook paths are untrusted hints, not evidence that a source now has particular content.
-- Initial planning is available only as strict non-executable I-04 DRAFT machine state; Query remains an explicit `capability-unavailable` contract until G-04.
+- Query is unavailable until G-04.
+- C-07 remains `deferred/not_started`.
+- There is no Verified Query, H-05 selective refresh, mature planning, task
+  execution loop, R4 behavior, or cross-host continuity claim.
+- Research binaries are not semantically extracted.
+- Registered research-project source files are not modified by the Core.
+- Sensitive raw content is not sent externally, and no new external-send path is
+  introduced.

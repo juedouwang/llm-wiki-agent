@@ -1,11 +1,16 @@
-"""Delegate plugin CLI arguments to the existing tools.project command."""
+"""Delegate Plugin CLI arguments to the bundled project command."""
 
 from __future__ import annotations
 
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
-from _bootstrap import (
+_SCRIPT_ROOT = Path(__file__).resolve().parent
+if str(_SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_ROOT))
+
+from _bootstrap import (  # noqa: E402
     BootstrapError,
     inject_workspace_root,
     load_main,

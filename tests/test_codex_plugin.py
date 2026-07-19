@@ -49,10 +49,22 @@ EXPECTED_PLUGIN_FILES = {
     ".mcp.json",
     "README.md",
     "hooks/hooks.json",
+    "release/RELEASE_NOTES.md",
+    "release/core-files.txt",
+    "release/install-common.ps1",
+    "release/install.ps1",
+    "release/python-runtime-win-amd64.json",
+    "release/requirements-win-amd64.txt",
+    "release/rollback.ps1",
+    "release/uninstall.ps1",
     "scripts/_bootstrap.py",
     "scripts/host_event.py",
+    "scripts/launch-mcp.cmd",
     "scripts/launch_mcp.py",
+    "scripts/llmwiki.cmd",
     "scripts/llmwiki.py",
+    "scripts/research-cockpit.cmd",
+    "scripts/research_cockpit.py",
     "skills/llmwiki-research/SKILL.md",
 }
 
@@ -90,30 +102,29 @@ class CodexPluginStructureTests(unittest.TestCase):
         observed = {
             path.relative_to(PLUGIN_ROOT).as_posix()
             for path in PLUGIN_ROOT.rglob("*")
-            if path.is_file()
+            if path.is_file() and "__pycache__" not in path.parts
         }
         self.assertEqual(observed, EXPECTED_PLUGIN_FILES)
 
         manifest = json.loads(
-            (PLUGIN_ROOT / ".codex-plugin" / "plugin.json").read_text(
-                encoding="utf-8"
-            )
+            (PLUGIN_ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
         )
         self.assertEqual(manifest["name"], "llmwiki-research")
-        self.assertRegex(manifest["version"], r"^\d+\.\d+\.\d+$")
+        self.assertEqual(manifest["version"], "0.2.0")
         self.assertEqual(manifest["skills"], "./skills/")
         self.assertEqual(manifest["mcpServers"], "./.mcp.json")
         self.assertNotIn("hooks", manifest)
-        self.assertNotIn("query", json.dumps(manifest).lower())
-        self.assertNotIn("plan", json.dumps(manifest).lower())
+        self.assertIn(
+            "Query and C-07 remain unavailable",
+            manifest["interface"]["longDescription"],
+        )
 
         mcp_config = json.loads((PLUGIN_ROOT / ".mcp.json").read_text(encoding="utf-8"))
-        self.assertEqual(set(mcp_config), {"mcpServers"})
-        self.assertEqual(set(mcp_config["mcpServers"]), {"llmwiki-research-core"})
-        server = mcp_config["mcpServers"]["llmwiki-research-core"]
+        self.assertEqual(set(mcp_config), {"llmwiki-research-core"})
+        server = mcp_config["llmwiki-research-core"]
         self.assertEqual(server["cwd"], ".")
-        self.assertIn(server["command"], {"python", "python3", "py"})
-        self.assertIn("scripts/launch_mcp.py", [arg.replace("\\", "/") for arg in server["args"]])
+        self.assertEqual(server["command"], "runtime/python/python.exe")
+        self.assertEqual(server["args"], ["-I", "-B", "scripts/launch_mcp.py"])
         self.assertFalse(Path(server["cwd"]).is_absolute())
         for argument in server["args"]:
             self.assertFalse(Path(argument).is_absolute(), argument)
@@ -129,7 +140,8 @@ class CodexPluginStructureTests(unittest.TestCase):
         self.assertEqual(len(handlers), 1)
         handler = handlers[0]
         self.assertEqual(handler["type"], "command")
-        self.assertIn("host_event.py", handler["command"])
+        self.assertIn("${PLUGIN_ROOT}/runtime/python/python.exe", handler["command"])
+        self.assertIn("${PLUGIN_ROOT}/scripts/host_event.py", handler["command"])
         self.assertTrue(handler.get("async", False))
 
         skill = (PLUGIN_ROOT / "skills" / "llmwiki-research" / "SKILL.md").read_text(
@@ -150,7 +162,9 @@ class CodexPluginStructureTests(unittest.TestCase):
             path = PLUGIN_ROOT / relative_path
             text = path.read_text(encoding="utf-8")
             for pattern in forbidden_patterns:
-                self.assertIsNone(pattern.search(text), f"{relative_path}: {pattern.pattern}")
+                self.assertIsNone(
+                    pattern.search(text), f"{relative_path}: {pattern.pattern}"
+                )
 
         hook_script = (PLUGIN_ROOT / "scripts" / "host_event.py").read_text(
             encoding="utf-8"
@@ -165,7 +179,9 @@ class CodexPluginStructureTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, hook_script)
 
-    def test_repo_local_launchers_find_core_without_an_absolute_checkout_path(self) -> None:
+    def test_repo_local_launchers_find_core_without_an_absolute_checkout_path(
+        self,
+    ) -> None:
         environment = os.environ.copy()
         environment["PYTHONUTF8"] = "1"
         environment.pop("LLMWIKI_CORE_ROOT", None)
@@ -183,9 +199,10 @@ class CodexPluginStructureTests(unittest.TestCase):
         self.assertIn("Manage external research projects", completed.stdout)
         self.assertEqual(completed.stderr, "")
 
-
     @unittest.skipUnless(shutil.which("codex"), "Codex CLI is not installed")
-    def test_codex_cli_installs_and_discovers_package_from_clean_marketplace(self) -> None:
+    def test_codex_cli_installs_and_discovers_package_from_clean_marketplace(
+        self,
+    ) -> None:
         codex = shutil.which("codex")
         if codex is None:
             self.skipTest("Codex CLI is not installed")
@@ -266,7 +283,9 @@ class CodexPluginStructureTests(unittest.TestCase):
             installation = json.loads(added_plugin.stdout)
             self.assertEqual(installation["pluginId"], "llmwiki-research@j05-test")
             installed_path = Path(installation["installedPath"])
-            self.assertTrue((installed_path / ".codex-plugin" / "plugin.json").is_file())
+            self.assertTrue(
+                (installed_path / ".codex-plugin" / "plugin.json").is_file()
+            )
             self.assertTrue(
                 (installed_path / "skills" / "llmwiki-research" / "SKILL.md").is_file()
             )
@@ -370,7 +389,9 @@ class CodexPluginBehaviorTests(unittest.IsolatedAsyncioTestCase):
             raise AssertionError(f"missing structured MCP payload: {result!r}")
         return payload
 
-    async def test_clean_fixture_registers_and_delegates_real_core_operations(self) -> None:
+    async def test_clean_fixture_registers_and_delegates_real_core_operations(
+        self,
+    ) -> None:
         registration = self.register()
         project_id = registration["project_id"]
         source_before = _source_snapshot(self.project)
@@ -402,7 +423,9 @@ class CodexPluginBehaviorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reconcile_payload["run"]["through_stage"], "classify")
             self.assertEqual(reconcile_payload["coverage"]["failed_file_count"], 0)
 
-            coverage = await session.call_tool(COVERAGE_TOOL, {"project_id": project_id})
+            coverage = await session.call_tool(
+                COVERAGE_TOOL, {"project_id": project_id}
+            )
             self.assertFalse(coverage.isError)
             self.assertEqual(self.payload(coverage)["result"]["project_id"], project_id)
 
@@ -411,16 +434,18 @@ class CodexPluginBehaviorTests(unittest.IsolatedAsyncioTestCase):
                 {"project_id": project_id, "max_bytes": 4096},
             )
             self.assertFalse(host_context.isError)
-            self.assertEqual(self.payload(host_context)["result"]["project_id"], project_id)
+            self.assertEqual(
+                self.payload(host_context)["result"]["project_id"], project_id
+            )
 
             query = await session.call_tool(
                 QUERY_TOOL,
                 {"project_id": project_id, "question": "What changed?"},
             )
             self.assertTrue(query.isError)
-            self.assertEqual(
-                self.payload(query)["error"]["code"], "capability-unavailable"
-            )
+            query_error = self.payload(query)["error"]
+            self.assertEqual(query_error["code"], "capability-unavailable")
+            self.assertEqual(query_error["details"]["available_after"], "G-04")
 
             plan = await session.call_tool(
                 PLAN_TOOL,
@@ -477,7 +502,9 @@ class CodexPluginBehaviorTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(opened.isError)
             self.assertEqual(
                 self.payload(opened)["result"]["excerpt"],
-                self.source_path.read_bytes().splitlines(keepends=True)[0].decode("utf-8"),
+                self.source_path.read_bytes()
+                .splitlines(keepends=True)[0]
+                .decode("utf-8"),
             )
 
     async def test_explicit_reconcile_survives_absent_or_malformed_hooks(self) -> None:
@@ -503,7 +530,8 @@ class CodexPluginBehaviorTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertFalse(reconciled.isError, str(reconciled))
                 self.assertEqual(
-                    self.payload(reconciled)["result"]["coverage"]["failed_file_count"], 0
+                    self.payload(reconciled)["result"]["coverage"]["failed_file_count"],
+                    0,
                 )
 
     def test_optional_hook_only_submits_h04_events_and_fails_open(self) -> None:
@@ -567,8 +595,7 @@ class CodexPluginBehaviorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(nested.stdout, "")
         self.assertEqual(nested.stderr, "")
         nested_events = [
-            json.loads(line)
-            for line in ledger.read_text(encoding="utf-8").splitlines()
+            json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()
         ]
         self.assertEqual(len(nested_events), 2)
         self.assertEqual(nested_events[1]["paths"], ["src/model.py"])
@@ -599,7 +626,9 @@ class CodexPluginBehaviorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(_source_snapshot(self.project), source_before)
         self.assertEqual(_file_snapshot(curated_root), curated_before)
-        self.assertEqual((machine_root / "project.yaml").read_bytes(), registration_before)
+        self.assertEqual(
+            (machine_root / "project.yaml").read_bytes(), registration_before
+        )
         for forbidden in (
             "manifest.jsonl",
             "sources.jsonl",
@@ -649,7 +678,12 @@ class CodexPluginBehaviorTests(unittest.IsolatedAsyncioTestCase):
         isolated = self.root / "isolated"
         isolated.mkdir()
         completed = subprocess.run(
-            [sys.executable, "-B", str(self.portable_plugin / "scripts" / "llmwiki.py"), "--help"],
+            [
+                sys.executable,
+                "-B",
+                str(self.portable_plugin / "scripts" / "llmwiki.py"),
+                "--help",
+            ],
             cwd=isolated,
             env=environment,
             check=False,
@@ -659,7 +693,8 @@ class CodexPluginBehaviorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotEqual(completed.returncode, 0)
         self.assertEqual(completed.stdout, "")
-        self.assertIn("LLMWIKI_CORE_ROOT", completed.stderr)
+        self.assertIn("reinstall the Plugin package", completed.stderr)
+        self.assertNotIn("LLMWIKI_CORE_ROOT", completed.stderr)
         self.assertNotIn(str(REPO_ROOT), completed.stderr)
 
 
