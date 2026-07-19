@@ -71,6 +71,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | I-01 strict Goal/Milestone Schema | complete after validation on 2026-07-18 | `ddd5261` | `checkpoint/i-01-goal-schema` |
 | I-02 strict internal task protocol | complete after validation on 2026-07-18 | `76a81e3` | `checkpoint/i-02-task-protocol` |
 | I-03 deterministic project-state snapshot | complete after validation on 2026-07-19 | `5988961` | `checkpoint/i-03-project-state` |
+| I-04 deterministic initial Goal/backlog/daily-plan drafts | complete after validation on 2026-07-19 | `c42d9a7` | `checkpoint/i-04-initial-planning` |
 
 ## 3. 后续最小改动计划
 
@@ -368,11 +369,11 @@ git tag checkpoint/b-01-project-register
 
 ## 6. Next executable task
 
-The next executable R3 unit is **I-04**: integrate the first Goal, backlog, and
-daily-plan drafts with the current project state. I-03 is complete at
-`checkpoint/i-03-project-state`; continue in dependency order
-`I-04 -> J-03 -> J-04 -> J-01`. **C-07 remains `deferred/not_started` and is not
-part of this run.**
+The next executable R3 unit is **J-03**: replace the development-supervision
+foundation with the loopback-only product research cockpit. I-04 is complete at
+`checkpoint/i-04-initial-planning`; continue in dependency order
+`J-03 -> J-04 -> J-01`. **C-07 remains `deferred/not_started` and is not part of
+this run.**
 
 R1 and the G-01 Core facade remain accepted at their checkpoints. G-07 is
 complete at `checkpoint/g-07-mcp-server`; its stdio transport, seven-tool catalog,
@@ -425,18 +426,21 @@ The strict Schema v1 checkpoint is stored at
 source project and curated knowledge remain unchanged. See
 [`project-reconciliation.md`](project-reconciliation.md).
 
-This completion activates the previously reserved MCP reconciliation contract;
-only query and plan remain explicit `capability-unavailable` tools in the
-seven-tool catalog. H-07 stops at `classify` and does not claim H-05 selective
-extraction, selective knowledge refresh, or any later knowledge/rendering stage.
+This completion activated the previously reserved MCP reconciliation contract.
+At the H-07 checkpoint, query and plan were both explicit unavailable contracts;
+I-04 now activates plan as a strict non-executable DRAFT operation, while query
+remains `capability-unavailable` until G-04. H-07 itself stops at `classify` and
+does not claim H-05 selective extraction, selective knowledge refresh, or any
+later knowledge/rendering stage.
 
 J-05 is complete after validation on 2026-07-16 and is designated by
 `checkpoint/j-05-codex-plugin`. The package at `plugins/llmwiki-research/`
 contains the validated manifest, Skill, MCP configuration, portable Core/CLI
-launchers, and optional fail-open Hook. Clean-profile Codex CLI installation,
-real seven-tool MCP startup, current Core calls, explicit unavailable query/plan
-results, registered-root Hook normalization, and no-Hook reconciliation fallback
-are covered by `tests/test_codex_plugin.py`. See
+launchers, and optional fail-open Hook. At the J-05 checkpoint both query and plan
+were unavailable; the same adapter now exposes I-04 DRAFT planning while query
+remains unavailable. Clean-profile installation, seven-tool MCP startup, current
+Core calls, registered-root Hook normalization, and no-Hook reconciliation
+fallback are covered by `tests/test_codex_plugin.py`. See
 [`codex-reference-adapter.md`](codex-reference-adapter.md).
 
 B-07 implementation landed on **2026-07-17** in `248b231`. The completed
@@ -926,3 +930,23 @@ dependent validation produced 104 passed, 3 skipped; Ruff, `py_compile`, and
 writes no curated Markdown, and performs no C-07 research-binary extraction.
 C-07 remains `deferred/not_started`. See
 [`project-state-snapshot.md`](project-state-snapshot.md).
+
+I-04 is complete at implementation commit `c42d9a7` and checkpoint
+`checkpoint/i-04-initial-planning`. The strict `initial-plan-v1` artifact binds a
+DRAFT Goal and I-02 task collection to the exact current I-03 project-state
+revision and publishes only `indexes/initial-plan.json` under the shared
+machine-state lock. Explicit caller objectives take precedence over onboarding
+`final_goal`; missing intent remains an explicit draft, and onboarding questions
+are not inferred as success criteria. Existing Goal/task bytes remain unchanged,
+and every automatically proposed task is non-executable.
+
+`ResearchCoreService.plan(...)`, the E-08 plan stage, E-07 Goal/backlog/daily-plan
+rendering, and the real `llmwiki_plan` MCP operation share this boundary. Curated
+Markdown still flows only through F-05A/F-05B, including byte-preserved mixed user
+regions. `llmwiki_query` remains `capability-unavailable` with
+`available_after=G-04`. Focused validation produced 71 passed; full regression
+produced 794 passed, 28 skipped. Ruff, isolated `py_compile`, UTF-8 health, and
+`git diff --check` passed. No source-project or research-binary bytes were read or
+changed, no LLM/external send occurred, and no task execution was authorized.
+C-07 remains `deferred/not_started`. See
+[`initial-planning.md`](initial-planning.md).

@@ -8,7 +8,7 @@
 - Validation: `tests/test_research_mcp_server.py`, `tests/test_research_planning.py`,
   `tests/test_source_access.py`, `tests/test_host_context_pack.py`, and
   `tests/test_project_reconciliation.py`
-- Existing checkpoints: `checkpoint/g-07-mcp-server` and `checkpoint/h-07-project-reconciliation`
+- Existing checkpoints: `checkpoint/g-07-mcp-server`, `checkpoint/h-07-project-reconciliation`, and `checkpoint/i-04-initial-planning`
 
 ## Purpose and boundary
 

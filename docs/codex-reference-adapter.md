@@ -2,8 +2,9 @@
 
 ## Status
 
-J-05 was implemented and validated on **2026-07-16**. The reference package is
-located at `plugins/llmwiki-research/` and is reference-tested with Codex CLI
+J-05 was implemented and validated on **2026-07-16** and its MCP surface was
+extended by I-04 DRAFT planning on **2026-07-19**. The reference package is located
+at `plugins/llmwiki-research/` and is reference-tested with Codex CLI
 `0.144.2`. Compatibility with other host versions is not implied by this
 checkpoint; the Core API, schemas, and project storage remain host-independent.
 
