@@ -1,4 +1,4 @@
-"""Build the self-contained J-05B Codex Plugin release for Windows x86-64."""
+"""Build the self-contained Codex Plugin release for Windows x86-64."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_SOURCE = REPO_ROOT / "plugins" / "llmwiki-research"
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 BASENAME = f"llmwiki-research-{VERSION}-windows-x86_64"
 MARKETPLACE_NAME = "llmwiki-research-release"
 RELEASE_FILES = (
@@ -180,7 +180,14 @@ def prepare_wheels(cache: Path, requirements: Path, *, offline: bool) -> Path:
             "--requirement",
             str(requirements),
         ]
-        completed = subprocess.run(command, check=False, capture_output=True, text=True)
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         if completed.returncode != 0:
             raise ReleaseBuildError("Locked runtime wheel acquisition failed.")
         observed = {sha256(path) for path in wheel_dir.glob("*.whl")}
@@ -226,7 +233,14 @@ def install_runtime(
         "--requirement",
         str(requirements),
     ]
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     if completed.returncode != 0:
         raise ReleaseBuildError("Installing the locked runtime wheels failed.")
     python_executable = python_root / "python.exe"
@@ -310,10 +324,12 @@ def deterministic_zip(source: Path, destination: Path) -> None:
 
 def build(output_dir: Path, cache_dir: Path, *, offline: bool) -> dict[str, Any]:
     if os.name != "nt" or platform.machine().lower() not in {"amd64", "x86_64"}:
-        raise ReleaseBuildError("J-05B release construction requires Windows x86-64.")
+        raise ReleaseBuildError(
+            "Codex Plugin release construction requires Windows x86-64."
+        )
     if sys.version_info[:2] != (3, 13):
         raise ReleaseBuildError(
-            "J-05B release construction requires a Python 3.13 build host."
+            "Codex Plugin release construction requires a Python 3.13 build host."
         )
     manifest = json.loads(
         (PLUGIN_SOURCE / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
@@ -336,9 +352,9 @@ def build(output_dir: Path, cache_dir: Path, *, offline: bool) -> dict[str, Any]
     )
     requirements = PLUGIN_SOURCE / "release" / "requirements-win-amd64.txt"
     wheel_dir = prepare_wheels(cache_dir, requirements, offline=offline)
-    with tempfile.TemporaryDirectory(
-        prefix="llmwiki-release-", dir=output_dir
-    ) as temporary:
+    # Keep the staging component short: Windows PowerShell 5.1 and some wheel
+    # uninstall/cleanup paths still encounter legacy MAX_PATH behavior.
+    with tempfile.TemporaryDirectory(prefix="r-", dir=output_dir) as temporary:
         stage = Path(temporary) / BASENAME
         plugin_target = stage / "plugins" / "llmwiki-research"
         plugin_target.mkdir(parents=True)

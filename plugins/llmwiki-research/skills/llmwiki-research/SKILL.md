@@ -20,9 +20,57 @@ absolute path. Do not place the workspace inside the Plugin package or bundled
 Core. Project machine state belongs under `.llmwiki/projects/`; curated project
 Markdown belongs under `wiki/projects/`.
 
+## Human-readable report language and UTF-8 integrity
+
+Human-readable Markdown reports default to Simplified Chinese (`zh-CN`) unless
+the user explicitly requests another language. Write report titles, headings,
+explanations, summaries, conclusions, risk notes, and verification narratives in
+Chinese. Preserve exact English text for code, paths, shell commands, API and MCP
+tool names, Schema field names and enum/error values, Git refs and hashes,
+project IDs, quoted source titles, and standard technical names when translating
+them would reduce precision.
+
+A successful command or an existing file is not sufficient report validation.
+After every report write, strictly decode the saved bytes as UTF-8 and verify that
+CJK text survived, no Unicode replacement character is present, and no suspicious
+run of literal `?` characters replaced Chinese text. Use the bundled writer at
+`<plugin-root>\scripts\write_utf8_report.ps1`; derive `<plugin-root>` by moving
+up two directories from this loaded Skill's directory.
+
+```powershell
+$report = @'
+# 项目理解报告
+
+这里写中文分析；`ResearchCoreService`、`llmwiki_query`、路径和命令保留英文。
+'@
+
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File <plugin-root>\scripts\write_utf8_report.ps1 `
+  -LiteralPath C:\path\to\outputs\project-understanding.md `
+  -Content $report `
+  -Force
+```
+
+The writer saves strict UTF-8 without a BOM, reads the result back, and returns
+bounded JSON metadata including CJK count, literal-question-mark count, and
+SHA-256. To validate a report written by another safe Unicode method, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File <plugin-root>\scripts\write_utf8_report.ps1 `
+  -LiteralPath C:\path\to\outputs\project-understanding.md `
+  -VerifyOnly
+```
+
+For a user-requested non-Chinese report, add `-Language any`. Never save CJK by
+piping a PowerShell here-string directly to native Python under an unconfigured
+Windows PowerShell 5.1 session, for example `@'...中文...'@ | python -`; that
+pipeline can irreversibly replace CJK bytes with literal `?`. If the writer or
+verification fails, do not claim that the report was completed: correct the
+content or output method and validate again.
+
 From the staged Plugin root, use the bundled launcher rather than a system
 Python:
-
 ```powershell
 scripts\llmwiki.cmd register C:\path\to\research-project --json
 scripts\llmwiki.cmd understand C:\path\to\research-project --json

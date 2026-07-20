@@ -1,6 +1,6 @@
 {
   "name": "llmwiki-research",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Self-contained Windows Codex adapter for deterministic R3-minus-C-07 LLM Wiki Research Core workflows.",
   "author": {
     "name": "LLM Wiki Agent contributors",

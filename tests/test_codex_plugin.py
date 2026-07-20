@@ -65,6 +65,7 @@ EXPECTED_PLUGIN_FILES = {
     "scripts/llmwiki.py",
     "scripts/research-cockpit.cmd",
     "scripts/research_cockpit.py",
+    "scripts/write_utf8_report.ps1",
     "skills/llmwiki-research/SKILL.md",
 }
 
@@ -110,7 +111,7 @@ class CodexPluginStructureTests(unittest.TestCase):
             (PLUGIN_ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
         )
         self.assertEqual(manifest["name"], "llmwiki-research")
-        self.assertEqual(manifest["version"], "0.2.0")
+        self.assertEqual(manifest["version"], "0.2.1")
         self.assertEqual(manifest["skills"], "./skills/")
         self.assertEqual(manifest["mcpServers"], "./.mcp.json")
         self.assertNotIn("hooks", manifest)

@@ -35,6 +35,11 @@ EXPECTED_TOOLS = (
 PLUGIN_ID = "llmwiki-research@llmwiki-research-release"
 SECRET_INPUT = "J05B_SECRET_INPUT_CANARY"
 SECRET_BINARY = b"J05B_SECRET_BINARY_CANARY"
+CHINESE_REPORT = (
+    "# \u9879\u76ee\u7406\u89e3\u62a5\u544a\r\n\r\n"
+    "\u8fd9\u662f\u5e72\u51c0\u53d1\u884c\u5305\u4e2d\u7684\u4e2d\u6587 UTF-8 \u56de\u8bfb\u9a8c\u8bc1\u3002"
+    "`ResearchCoreService` \u548c `llmwiki_query` \u4fdd\u6301\u7cbe\u786e\u82f1\u6587\u6807\u8bc6\u3002\r\n"
+)
 
 
 def _sha256(path: Path) -> str:
@@ -137,6 +142,19 @@ class CodexPluginReleaseContractTests(unittest.TestCase):
         self.assertIn("tools/research_core.py", core_files)
         self.assertIn("tools/research_mcp.py", core_files)
         self.assertIn("tools/research_cockpit.py", core_files)
+        self.assertTrue(
+            (PLUGIN_TEMPLATE / "scripts" / "write_utf8_report.ps1").is_file()
+        )
+        release_notes = (PLUGIN_TEMPLATE / "release" / "RELEASE_NOTES.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Codex Plugin 0.2.1", release_notes)
+        self.assertIn("write_utf8_report.ps1", release_notes)
+        install_common = (PLUGIN_TEMPLATE / "release" / "install-common.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+        self.assertIn('"plugin", "add"', install_common)
+        self.assertNotIn('"plugin", "install"', install_common)
 
 
 @unittest.skipUnless(
@@ -213,6 +231,61 @@ class CodexPluginReleaseAcceptanceTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertEqual(completed.stdout, "")
         return completed
+
+    def _report_writer_command(
+        self,
+        writer: Path,
+        target: Path,
+        *,
+        content: str | None = None,
+        verify_only: bool = False,
+        force: bool = False,
+        expect_success: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        command: list[str | os.PathLike[str]] = [
+            self.powershell,
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            writer,
+            "-LiteralPath",
+            target,
+        ]
+        if content is not None:
+            command.extend(["-Content", content])
+        if verify_only:
+            command.append("-VerifyOnly")
+        if force:
+            command.append("-Force")
+        return self._run(
+            command,
+            cwd=self.clean_root,
+            timeout=60,
+            expect_success=expect_success,
+        )
+
+    def _report_writer_json(
+        self,
+        writer: Path,
+        target: Path,
+        *,
+        content: str | None = None,
+        verify_only: bool = False,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        completed = self._report_writer_command(
+            writer,
+            target,
+            content=content,
+            verify_only=verify_only,
+            force=force,
+        )
+        self.assertEqual(completed.stderr, "")
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["status"], "passed")
+        return payload
 
     def _codex_json(self, *arguments: str) -> Any:
         completed = self._run(
@@ -444,8 +517,10 @@ class CodexPluginReleaseAcceptanceTests(unittest.TestCase):
             .resolve()
         )
         profile_parent.mkdir(parents=True, exist_ok=True)
+        # Keep the profile shallow enough for embedded wheels on Windows hosts
+        # where cleanup still traverses legacy MAX_PATH-sensitive paths.
         with tempfile.TemporaryDirectory(
-            prefix="llmwiki-j05b-clean-profile-", dir=profile_parent
+            prefix="j5c-", dir=profile_parent
         ) as temporary:
             self.clean_root = Path(temporary).resolve()
             try:
@@ -455,7 +530,7 @@ class CodexPluginReleaseAcceptanceTests(unittest.TestCase):
             else:
                 self.fail("clean profile must not be inside the source checkout")
 
-            build_output = self.clean_root / "build"
+            build_output = self.clean_root / "b"
             cache_dir = (
                 Path(
                     os.environ.get(
@@ -638,11 +713,44 @@ class CodexPluginReleaseAcceptanceTests(unittest.TestCase):
             )
             self.assertTrue(plugin_list["installed"][0]["enabled"])
             installed_plugin = Path(install["codex"]["installedPath"]).resolve()
-            self.assertTrue(
-                (
-                    installed_plugin / "skills" / "llmwiki-research" / "SKILL.md"
-                ).is_file()
+            report_writer = installed_plugin / "scripts" / "write_utf8_report.ps1"
+            self.assertTrue(report_writer.is_file())
+            report_path = self.clean_root / "outputs" / "project-understanding.md"
+            report_metadata = self._report_writer_json(
+                report_writer,
+                report_path,
+                content=CHINESE_REPORT,
+                force=True,
             )
+            report_bytes = report_path.read_bytes()
+            report_text = report_bytes.decode("utf-8", errors="strict")
+            self.assertFalse(report_bytes.startswith(b"\xef\xbb\xbf"))
+            self.assertEqual(report_text, CHINESE_REPORT)
+            self.assertGreater(report_metadata["cjk_characters"], 0)
+            self.assertEqual(report_metadata["literal_question_marks"], 0)
+            self.assertEqual(report_metadata["sha256"], _sha256(report_path))
+            self.assertEqual(
+                self._report_writer_json(report_writer, report_path, verify_only=True),
+                report_metadata,
+            )
+            rejected_report_path = (
+                self.clean_root / f"rejected-{SECRET_INPUT}" / "report.md"
+            )
+            rejected_report = self._report_writer_command(
+                report_writer,
+                rejected_report_path,
+                content=f"# English report\n\n{SECRET_INPUT}\n",
+                expect_success=False,
+            )
+            self.assertEqual(rejected_report.returncode, 2)
+            self.assertEqual(rejected_report.stdout, "")
+            self.assertEqual(
+                rejected_report.stderr,
+                "error: report-language-zh-cn-missing\n",
+            )
+            self.assertNotIn(str(rejected_report_path), rejected_report.stderr)
+            self.assertNotIn(SECRET_INPUT, rejected_report.stderr)
+            self.assertFalse(rejected_report_path.exists())
             installed_skill = (
                 installed_plugin / "skills" / "llmwiki-research" / "SKILL.md"
             ).read_text(encoding="utf-8")
@@ -694,6 +802,26 @@ class CodexPluginReleaseAcceptanceTests(unittest.TestCase):
             shutil.copytree(installed_plugin, relocated_plugin)
             (relocated_plugin / "hooks" / "hooks.json").unlink()
             self.assertFalse((relocated_plugin / "hooks" / "hooks.json").exists())
+            relocated_writer = relocated_plugin / "scripts" / "write_utf8_report.ps1"
+            self.assertTrue(relocated_writer.is_file())
+            self.assertEqual(
+                self._report_writer_json(
+                    relocated_writer, report_path, verify_only=True
+                ),
+                report_metadata,
+            )
+            relocated_report = self.clean_root / "outputs" / "relocated-report.md"
+            relocated_metadata = self._report_writer_json(
+                relocated_writer,
+                relocated_report,
+                content=CHINESE_REPORT,
+                force=True,
+            )
+            relocated_bytes = relocated_report.read_bytes()
+            self.assertEqual(relocated_metadata["sha256"], _sha256(relocated_report))
+            self.assertEqual(
+                relocated_bytes.decode("utf-8", errors="strict"), CHINESE_REPORT
+            )
 
             project = self.clean_root / "research-project"
             (project / "src").mkdir(parents=True)

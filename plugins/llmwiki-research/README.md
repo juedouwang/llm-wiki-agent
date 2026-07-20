@@ -1,26 +1,32 @@
 # LLM Wiki Research Codex Plugin
 
 `llmwiki-research` is the self-contained Windows Codex adapter for the accepted
-**R3-minus-C-07** LLM Wiki Research workflows. Release `0.2.0` bundles the
+**R3-minus-C-07** LLM Wiki Research workflows. Release `0.2.1` bundles the
 validated Research Core, a private CPython runtime, locked dependencies, a Codex
 Skill, MCP configuration, local CLI/cockpit launchers, and an optional fail-open
 Hook. A release installation does **not** need an `llm-wiki-agent` checkout and
 does **not** need `LLMWIKI_CORE_ROOT`.
 
-The current release target is **Windows x86-64**. It was validated with Codex
-CLI `0.144.2`; compatibility with every future Codex release is not implied.
-Codex's current Plugin structure is documented by OpenAI at
-<https://developers.openai.com/codex/plugins/build>.
+The current release target is **Windows x86-64**. The original J-05B package
+was validated with Codex CLI `0.144.2`; the J-05C `0.2.1` corrective package was
+also validated end to end with Codex CLI `0.145.0-alpha.18`. Compatibility with
+every future Codex release is not implied. Codex's current Plugin structure is
+documented by OpenAI at <https://developers.openai.com/codex/plugins/build>.
 
 ## Install from the public Git marketplace (recommended)
 
 ```powershell
-codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.0
+codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.1
 codex plugin add llmwiki-research@llmwiki-research-release --json
 ```
 
 This clones the public marketplace snapshot and installs the complete bundled
-Plugin, not the unbundled source template in this checkout. Verify discovery:
+Plugin, not the unbundled source template in this checkout. OpenAI's current
+Plugin documentation defines the marketplace-add command and Plugin layout; the
+tested Codex CLI builds `0.144.2` and `0.145.0-alpha.18` expose installation as
+`plugin add`. Verify the verb on a future CLI with `codex plugin --help`.
+
+Verify discovery:
 
 ```powershell
 codex plugin list --available --json
@@ -33,7 +39,7 @@ then add the desired immutable tag and install again:
 ```powershell
 codex plugin remove llmwiki-research@llmwiki-research-release --json
 codex plugin marketplace remove llmwiki-research-release --json
-codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.0
+codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.1
 codex plugin add llmwiki-research@llmwiki-research-release --json
 ```
 
@@ -41,11 +47,11 @@ Public repository:
 <https://github.com/juedouwang/llmwiki-research-codex-plugin>
 
 Release assets:
-<https://github.com/juedouwang/llmwiki-research-codex-plugin/releases/tag/v0.2.0>
+<https://github.com/juedouwang/llmwiki-research-codex-plugin/releases/tag/v0.2.1>
 
 ## Install from the release package
 
-Extract `llmwiki-research-0.2.0-windows-x86_64.zip`, enter the extracted release
+Extract `llmwiki-research-0.2.1-windows-x86_64.zip`, enter the extracted release
 directory, and run:
 
 ```powershell
@@ -101,7 +107,7 @@ The managed package base defaults to:
 %LOCALAPPDATA%\LLMWiki\CodexPlugins\llmwiki-research\
 ```
 
-Version `0.2.0` is staged below that directory and remains movable as a complete
+Version `0.2.1` is staged below that directory and remains movable as a complete
 Plugin tree. Codex may also copy the Plugin into its own cache. All launchers
 resolve their bundled Core relative to the installed Plugin root, so moving the
 complete installed Plugin directory does not require path rewrites.
@@ -133,6 +139,45 @@ scripts\llmwiki.cmd context PROJECT_ID --json
 scripts\llmwiki.cmd reconcile PROJECT_ID --json
 scripts\research-cockpit.cmd serve
 ```
+
+## Chinese reports and UTF-8 validation
+
+Human-readable Markdown reports default to Simplified Chinese unless the user
+explicitly requests another language. Keep code, paths, commands, API/MCP tool
+names, Schema fields and enum/error values, Git refs/hashes, project IDs, quoted
+source titles, and precision-sensitive technical names in their exact English
+form.
+
+From the installed Plugin root, save a report through the PowerShell-native
+writer instead of piping CJK text into native Python:
+
+```powershell
+$report = @(
+  '# 项目理解报告',
+  '',
+  '这里写中文分析；`ResearchCoreService` 和 `llmwiki_query` 保留英文。'
+) -join "`r`n"
+
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\write_utf8_report.ps1 `
+  -LiteralPath C:\path\to\outputs\project-understanding.md `
+  -Content $report `
+  -Force
+```
+
+The command writes UTF-8 without a BOM and immediately performs strict readback,
+CJK, replacement-character, suspicious-`?`, and SHA-256 checks. Validate an
+existing Chinese report with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\write_utf8_report.ps1 `
+  -LiteralPath C:\path\to\outputs\project-understanding.md `
+  -VerifyOnly
+```
+
+Use `-Language any` only when the user explicitly requests a non-Chinese report.
+Do not report success if this validation fails.
 
 The Python launchers remain available for source development. The release MCP
 entry uses `runtime/python/python.exe -I -B`, so ambient `PYTHONPATH`,
