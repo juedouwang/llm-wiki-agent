@@ -27,6 +27,10 @@ runtime and does not add a new research capability.
 - The release installer uses the tested Codex CLI `plugin add` verb. The
   installer fails closed if the host does not expose that command; check
   `codex plugin --help` before using a future CLI version.
+- Release construction removes unused `pip --target` console launchers and
+  their metadata rows. The Plugin invokes only its isolated Python/module
+  launch paths, while excluding these staging-sensitive files makes repeated
+  builds byte-reproducible and avoids retaining an irrelevant build-host path.
 
 ## Included
 

@@ -16,7 +16,12 @@ from jsonschema.validators import validator_for
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
-from tools.build_codex_plugin_release import BASENAME, VERSION, default_cache_dir
+from tools.build_codex_plugin_release import (
+    BASENAME,
+    VERSION,
+    default_cache_dir,
+    prune_target_console_launchers,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -101,6 +106,35 @@ def _structured(result: Any) -> dict[str, Any]:
 
 
 class CodexPluginReleaseContractTests(unittest.TestCase):
+    def test_prune_target_console_launchers_is_deterministic_and_idempotent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="j5c-prune-") as temporary:
+            site_packages = Path(temporary)
+            launcher = site_packages / "bin" / "mcp.exe"
+            launcher.parent.mkdir()
+            launcher.write_bytes(b"nondeterministic-launcher")
+            record = site_packages / "mcp-1.0.dist-info" / "RECORD"
+            record.parent.mkdir()
+            record.write_text(
+                "../../bin/mcp.exe,sha256=unstable,27\n"
+                "mcp/__init__.py,sha256=stable,12\n"
+                "mcp-1.0.dist-info/RECORD,,\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            prune_target_console_launchers(site_packages)
+            first = record.read_bytes()
+            prune_target_console_launchers(site_packages)
+
+            self.assertFalse((site_packages / "bin").exists())
+            self.assertEqual(record.read_bytes(), first)
+            self.assertEqual(
+                first.decode("utf-8"),
+                "mcp/__init__.py,sha256=stable,12\nmcp-1.0.dist-info/RECORD,,\n",
+            )
+
     def test_release_inputs_are_locked_and_versioned(self) -> None:
         manifest = json.loads(
             (PLUGIN_TEMPLATE / ".codex-plugin" / "plugin.json").read_text(
@@ -589,6 +623,13 @@ class CodexPluginReleaseAcceptanceTests(unittest.TestCase):
                 (release_dir / "FILELIST.txt").read_text(encoding="utf-8").splitlines()
             )
             self.assertEqual(listed_files, actual_files)
+            self.assertFalse(
+                any(
+                    "/runtime/python/Lib/site-packages/bin/" in f"/{relative}"
+                    for relative in listed_files
+                ),
+                "unused pip console launchers make release builds non-reproducible",
+            )
             checksum_records: dict[str, str] = {}
             for line in (
                 (release_dir / "SHA256SUMS").read_text(encoding="ascii").splitlines()

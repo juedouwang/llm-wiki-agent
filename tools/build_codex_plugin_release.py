@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
+import io
 import json
 import os
 import platform
@@ -196,6 +198,41 @@ def prepare_wheels(cache: Path, requirements: Path, *, offline: bool) -> Path:
     return wheel_dir
 
 
+def prune_target_console_launchers(site_packages: Path) -> None:
+    """Remove unused pip entry-point launchers and their RECORD rows.
+
+    ``pip --target`` creates Windows console launcher executables below
+    ``site-packages/bin``. Their embedded launcher ZIP metadata varies between
+    invocations and the Plugin never invokes them: every bundled command starts
+    the private interpreter with ``-I -B`` and an explicit module or script.
+    Keeping the launchers would therefore make otherwise identical release
+    builds byte-different and retain an irrelevant build-host interpreter path.
+    """
+
+    launcher_root = site_packages / "bin"
+    if not launcher_root.exists():
+        return
+    if not launcher_root.is_dir():
+        raise ReleaseBuildError("The runtime console-launcher path is invalid.")
+
+    prefix = "../../bin/"
+    for record in sorted(site_packages.glob("*.dist-info/RECORD")):
+        rows = list(csv.reader(io.StringIO(record.read_text(encoding="utf-8"))))
+        retained = [
+            row
+            for row in rows
+            if not (row and row[0].replace("\\", "/").startswith(prefix))
+        ]
+        if retained == rows:
+            continue
+        output = io.StringIO(newline="")
+        writer = csv.writer(output, lineterminator="\n")
+        writer.writerows(retained)
+        record.write_text(output.getvalue(), encoding="utf-8", newline="\n")
+
+    shutil.rmtree(launcher_root)
+
+
 def install_runtime(
     python_archive: Path,
     wheel_dir: Path,
@@ -243,6 +280,7 @@ def install_runtime(
     )
     if completed.returncode != 0:
         raise ReleaseBuildError("Installing the locked runtime wheels failed.")
+    prune_target_console_launchers(site_packages)
     python_executable = python_root / "python.exe"
     smoke = subprocess.run(
         [
