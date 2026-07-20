@@ -70,6 +70,7 @@ A-01～A-03 的工程基线、测试基线和存储边界保持不变，且已�
 | H-07 conservative project reconciliation | complete after validation on 2026-07-16 | `cfb7274` | `checkpoint/h-07-project-reconciliation` |
 | J-05 Codex reference adapter package | complete after validation on 2026-07-16 | `62ccbdc` | `checkpoint/j-05-codex-plugin` |
 | J-05B installable Codex Plugin release | complete after validation on 2026-07-19 | `3c2bb29` | `checkpoint/j-05b-installable-codex-plugin-release` |
+| J-05C Chinese-report UTF-8 corrective release | complete after validation on 2026-07-20 | `325236b`, `427fc83` | `checkpoint/j-05c-chinese-report-utf8`, `checkpoint/j-05c-installable-release` |
 | I-01 strict Goal/Milestone Schema | complete after validation on 2026-07-18 | `ddd5261` | `checkpoint/i-01-goal-schema` |
 | I-02 strict internal task protocol | complete after validation on 2026-07-18 | `76a81e3` | `checkpoint/i-02-task-protocol` |
 | I-03 deterministic project-state snapshot | complete after validation on 2026-07-19 | `5988961` | `checkpoint/i-03-project-state` |
@@ -457,6 +458,14 @@ and a real clean-profile Codex/MCP acceptance that cannot import from the source
 checkout. It does not extend the scientific capability surface. See
 [`codex-reference-adapter.md`](codex-reference-adapter.md) and
 [`codex-plugin-installation.md`](codex-plugin-installation.md).
+
+J-05C is a corrective distribution unit triggered by a real Windows PowerShell
+Unicode-loss defect in a user-facing project-understanding report. Plugin `0.2.1`
+defaults human-readable report narrative to Simplified Chinese, preserves exact
+English technical identifiers, adds a PowerShell-native UTF-8-no-BOM writer with
+strict readback, and tests the writer in source, installed, and relocated Plugin
+trees. It does not add Query, C-07, H-05, mature planning, task execution, or R4
+behavior.
 
 B-07 implementation landed on **2026-07-17** in `248b231`. The completed
 implementation and validation state is designated by
@@ -1069,3 +1078,54 @@ Query remains `capability-unavailable` with `available_after=G-04`; C-07 remains
 extraction, source mutation, unauthorized external send, or R4 behavior is in
 scope. This checkpoint is the installable R3-minus-C-07 adapter release, not a
 claim that the complete research-assistant product has shipped.
+
+### J-05C Chinese-report UTF-8 corrective release (2026-07-20)
+
+J-05C corrects a verified output-integrity defect rather than expanding the
+research capability surface. In Windows PowerShell 5.1, piping a CJK here-string
+directly to native Python under the default native output encoding can replace
+Chinese characters with literal ASCII `?` before Python receives the input. The
+user's affected report was recovered from the original Codex session payload,
+written back as strict UTF-8 without a BOM, and retained alongside the original
+garbled file for audit.
+
+Plugin `0.2.1` adds `scripts/write_utf8_report.ps1` and a durable Skill contract:
+human-readable titles, headings, explanations, summaries, conclusions, risks,
+and verification narratives default to Simplified Chinese unless the user asks
+for another language. Code, paths, commands, API/MCP names, Schema fields,
+enum/error values, Git refs/hashes, project IDs, quoted source titles, and
+precision-sensitive technical names remain exact English. Every accepted report
+must survive strict UTF-8 readback; file existence or a zero exit code is not
+enough.
+
+Implementation commit `325236b` is preserved by
+`checkpoint/j-05c-chinese-report-utf8`; release reproducibility hardening commit
+`427fc83` is preserved by `checkpoint/j-05c-installable-release`. Two independent
+builds from `427fc83` produced the same 2,129-file ZIP and SHA-256 after unused
+staging-sensitive `pip` console launchers were removed. Focused validation
+produced **16 passed, 1 skipped**; the final related Core/adapter suite produced
+**158 passed, 4 skipped**; full regression produced **835 passed, 32 skipped**;
+and the real independent clean-profile release acceptance produced **3 passed**
+with Codex CLI `0.145.0-alpha.18`. That clean run used no checkout and no
+`LLMWIKI_CORE_ROOT`, poisoned ambient Python paths, discovered the installed
+Plugin and Skill through Codex, initialized MCP and validated every Schema,
+called project context, Host Context Pack, coverage, source-open, reconcile, and
+I-04 plan, kept Query exactly unavailable, removed Hooks for explicit
+reconciliation, moved the package, wrote and re-verified Chinese reports, and
+completed rollback/uninstall/purge. The public marketplace repository is
+`juedouwang/llmwiki-research-codex-plugin`; `main` and annotated tag `v0.2.1`
+select commit `81a9a589b3b207c04a56beb9ed53696bda2fde0f`, and the GitHub Release
+publishes the ZIP plus sidecar. A second remote-only clean profile fetched that
+tag, completed rollback `0.2.1 -> 0.2.0`, reinstalled `0.2.1`, removed the Plugin
+and marketplace, ended with zero Plugin/MCP registrations, and retained the
+workspace. A deliberately very deep custom `CODEX_HOME` exposed legacy Windows
+Git `MAX_PATH`; the default and short isolated profiles are verified, not
+arbitrary path depths. J-05C changed-file Ruff, Ruff format, `py_compile`, and
+`git diff --check` passed; unrelated legacy repository-wide Ruff findings remain
+outside this unit.
+
+`llmwiki_query` remains `capability-unavailable` with
+`available_after=G-04`; C-07 remains `deferred/not_started`. J-05C adds no
+Verified Query, H-05, mature planning, task execution, scientific-binary semantic
+extraction, source-project mutation, unauthorized external send, or R4 behavior.
+Work stops after publishing this corrective release.

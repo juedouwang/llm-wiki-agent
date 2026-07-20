@@ -171,3 +171,66 @@ map (the shipped shape) or to use an `mcp_servers` wrapper. The locally bundled
 gate instead uses the repository schema contract plus the real Codex
 clean-profile install, discovery, MCP startup, and tool-call acceptance; the
 independent Skill validator passes.
+
+## J-05C Chinese-report and UTF-8 release coverage
+
+`test_codex_report_encoding.py` exercises the PowerShell-native report writer in
+an isolated temporary directory. It proves exact Chinese round-trip, UTF-8
+without BOM, strict verify-only readback, SHA-256 stability, explicit
+`-Language any` handling, English-only rejection in the default `zh-CN` mode,
+and fail-closed handling for invalid UTF-8, `U+FFFD`, suspicious `?` runs,
+existing-output clobber attempts, and sensitive-input/path redaction.
+
+`test_codex_plugin.py` and `test_codex_plugin_release.py` require Plugin version
+`0.2.1` and include `scripts/write_utf8_report.ps1` in both the source template
+and release inventory. The enabled real release acceptance writes and strictly
+reads a Chinese report through the installed Plugin, verifies the same report
+through a relocated Plugin tree, writes a second report after relocation, and
+checks exact bytes, CJK counts, absence of BOM/replacement characters, and
+SHA-256. The test also keeps the existing no-checkout, no-`LLMWIKI_CORE_ROOT`,
+poisoned-import-path, Codex discovery, MCP handshake/Schema/tool, Hook-disabled
+reconciliation, source-immutability, error-redaction, rollback, uninstall, and
+purge gates. The release contract also removes unused
+`site-packages/bin` console launchers and their `RECORD` rows; these entry points
+are never used by the isolated Plugin launchers and otherwise make repeated
+Windows builds byte-different.
+
+On Windows, set a short profile parent to avoid legacy MAX_PATH behavior in deep
+embedded-wheel trees:
+
+```powershell
+$env:LLMWIKI_RUN_RELEASE_TESTS = '1'
+$env:LLMWIKI_RELEASE_OFFLINE = '1'
+$env:LLMWIKI_RELEASE_CACHE_DIR = '<verified-release-cache>'
+$env:LLMWIKI_RELEASE_TEST_ROOT = Join-Path $env:USERPROFILE 'l'
+$env:LLMWIKI_CODEX_EXE = '<absolute-path-to-codex.exe>'
+python -B -m pytest -q -p no:cacheprovider tests/test_codex_plugin_release.py
+```
+
+Recorded J-05C validation on **2026-07-20** produced **16 passed, 1 skipped** for
+the focused report/Plugin/release suite, **158 passed, 4 skipped** for the final
+related Core/adapter suite, **835 passed, 32 skipped** for the full repository,
+and **3 passed** for the enabled clean-profile release suite with Codex CLI
+`0.145.0-alpha.18`. Two complete offline builds from `427fc83` each contained
+2,129 files and produced the identical ZIP SHA-256. The changed Python files pass
+Ruff and Ruff format checks; all tracked Python files pass isolated `py_compile`;
+and `git diff --check` passes. Repository-wide Ruff was also run and exposed 46
+unrelated legacy-tool findings in files untouched by J-05C, so it is recorded as
+an existing baseline rather than misreported as a release pass.
+
+A separate remote-only acceptance cloned public annotated tag `v0.2.1` at commit
+`81a9a589b3b207c04a56beb9ed53696bda2fde0f`, installed it through the real
+marketplace commands, ran the discovery/MCP/tool/report gates, rolled back to
+`0.2.0`, reinstalled `0.2.1`, and removed the Plugin plus marketplace. Its final
+Codex state contained zero Plugins and zero MCP registrations; workspace state was
+retained. One earlier test with an intentionally much deeper custom `CODEX_HOME`
+failed at Git checkout because of legacy Windows `MAX_PATH`, so tests and release
+documentation require a default or short profile root and make no arbitrary-depth
+claim.
+
+The local `plugin-creator` validator still rejects the documented direct-map
+`.mcp.json` shape because it expects a historical `mcpServers` wrapper. The
+current official Plugin documentation and the real Codex clean-profile install
+accept the shipped format. The independent Skill validator passes when Python is
+run in UTF-8 mode; without `PYTHONUTF8=1`, that validator itself fails to decode
+the valid UTF-8 Chinese Skill under the host's GBK locale.

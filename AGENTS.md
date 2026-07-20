@@ -236,7 +236,7 @@ exactly `capability-unavailable` with `available_after=G-04`, C-07 remains
 `deferred/not_started`, and J-04 adds no R4 behavior. See
 `docs/research-cockpit.md`.
 
-## Codex Research Adapter and Installable Release (J-05/J-05B)
+## Codex Research Adapter and Installable Release (J-05/J-05B/J-05C)
 
 The reference Codex package is `plugins/llmwiki-research/`. J-05B release copies
 bundle the allowlisted current Core, a private locked Python runtime, Skill, MCP,
@@ -247,7 +247,25 @@ per-user `%LOCALAPPDATA%\LLMWiki\workspace`, separate from both Plugin runtime
 and registered source projects. `LLMWIKI_CORE_ROOT` is a source-development
 fallback only, and a valid bundled Core always takes precedence. Use the
 host-safe MCP operations for project context, Host Context Pack, coverage,
-policy-authorized source-open, and explicit `llmwiki_reconcile`.
+policy-authorized source-open, and explicit `llmwiki_reconcile`. The public
+installable `0.2.1` snapshot is repository
+`juedouwang/llmwiki-research-codex-plugin`, commit
+`81a9a589b3b207c04a56beb9ed53696bda2fde0f`, annotated tag `v0.2.1`. Do not
+claim arbitrary deeply nested custom `CODEX_HOME` support on Windows: the default
+profile and a short isolated profile are verified, while very deep paths can hit
+legacy Git `MAX_PATH`.
+
+J-05C release `0.2.1` makes human-readable Markdown reports default to Simplified
+Chinese unless the user explicitly requests another language. Preserve exact
+English for code, paths, commands, API/MCP names, Schema fields, enum/error
+values, Git refs/hashes, project IDs, quoted source titles, and technical names
+whose translation would reduce precision. Installed Plugin report writes must use
+`scripts/write_utf8_report.ps1` or another equivalently verified Unicode-safe
+method, then strictly read the bytes back as UTF-8 and reject BOM, `U+FFFD`,
+suspicious replacement `?` runs, or missing CJK in the default mode. Never pipe a
+PowerShell here-string containing CJK directly into native Python under an
+unconfigured Windows PowerShell 5.1 session. A successful command or existing
+file alone is not report acceptance.
 
 The optional asynchronous `PostToolUse` Hook is an untrusted H-04 hint producer
 only. It requires an existing `LLMWIKI_PROJECT_ID`, must normalize paths beneath
@@ -257,9 +275,9 @@ reconciliation available when Hooks are disabled, unavailable, malformed, or
 untrusted. `llmwiki_plan` now delegates to the I-04 initial-planning slice and
 returns only non-executable DRAFT machine state. `llmwiki_query` continues to
 return `capability-unavailable` with `available_after=G-04`; do not claim Verified
-Query or mature I-05 planning from J-05/J-05B. The release does not add C-07,
-H-05, task execution, scientific-binary semantic extraction, source-project
-writes, unauthorized external sends, or any R4 behavior.
+Query or mature I-05 planning from J-05/J-05B/J-05C. The release does not add
+C-07, H-05, task execution, scientific-binary semantic extraction,
+source-project writes, unauthorized external sends, or any R4 behavior.
 
 See `docs/codex-reference-adapter.md` and `docs/codex-plugin-installation.md`.
 

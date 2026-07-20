@@ -3,7 +3,7 @@
 - 状态：**已确认，作为后续开发的产品基线**
 - 决策编号：`P-05 Agent 原生执行闭环`、`P-08 Agent-native 科研工具架构`
 - 确认日期：2026-07-15
-- Latest supplement: 2026-07-19 (J-01 R3-minus-C-07 end-to-end acceptance)
+- Latest supplement: 2026-07-20 (J-05C Chinese-report UTF-8 corrective Plugin release)
 - 适用分支：`research-assistant`
 - Current implementation boundary (2026-07-19): deterministic entry points include project registration/inventory, B-07 `prioritize`, B-08 `coverage`, the complete `project understand` pipeline (`register -> inventory -> classify -> extract -> adaptive-read -> synthesize -> evidence -> status -> plan -> index -> web-render`), and H-07/J-05 reconciliation integration. E-07 provides the fifteen Knowledge Schema v2 Markdown artifacts; E-08 connects them to one-action resumable execution and a self-contained read-only run page. F-01 through F-03 provide strict knowledge paths, Knowledge Schema v2, Claim-Evidence currentness/result integrity, and explicit research entities/relations; F-04A remains a read-only lifecycle validator, while F-05A/F-05B provide controlled Markdown planning, exact persistence, and audit boundaries. I-01 provides the strict project Goal/Milestone machine artifact and Schema v2 `goals.md` projection contract. I-02 adds the strict internal task protocol, explicit completion references, acyclic dependencies, conservative legacy Todo compatibility, and the Schema v2 `plans/backlog.md` projection contract. I-03 adds a strict deterministic project-state snapshot bound to the current registration, Manifest, machine artifacts, and Knowledge Schema v2 summaries. I-04 adds strict DRAFT initial Goal/backlog/daily-plan machine state, a `ResearchCoreService.plan(...)` facade, and the real non-executable `llmwiki_plan` MCP operation; these units infer neither user confirmation nor execution authorization. E-02 through E-06 provide the project map, hierarchical understanding, execution flow, reviewed `research-linkage-v2`, and experiment-chain artifacts. J-01 now independently accepts the repeatable R3-minus-C-07 fixture chain, including H-07-to-I-04 refresh of only a well-formed project-state with stale registration/Manifest bindings. B-07 remains an independent recommendation operation and does not advance the understand run; H-05 selective refresh, Verified Query, mature planning, and Claude Code adaptation remain incomplete. Query is still the exact `capability-unavailable` contract with `available_after=G-04`; C-07 remains `deferred/not_started`; R4 has not started.
 
@@ -140,6 +140,22 @@ Codex / Claude Code / 其他宿主 Agent
 > The installed release therefore needs neither a source checkout nor
 > `LLMWIKI_CORE_ROOT`; `LLMWIKI_WORKSPACE_ROOT` remains an optional absolute
 > machine-state/knowledge root with a safe per-user default.
+
+> **J-05C implementation note (2026-07-20):** human-readable Markdown reports
+> default to Simplified Chinese unless the user explicitly requests another
+> language. Code, paths, commands, API/MCP identifiers, Schema fields,
+> enum/error values, Git refs/hashes, project IDs, quoted source titles, and
+> precision-sensitive technical names remain exact English. The installable
+> Plugin provides a PowerShell-native UTF-8-without-BOM writer and requires
+> strict post-write UTF-8 readback, CJK-preservation, replacement-character, and
+> suspicious-`?` validation. This is an output-integrity correction only and
+> does not add Query, C-07, H-05, mature planning, task execution, or R4
+> capability. The published Windows x86-64 snapshot is public commit
+> `81a9a589b3b207c04a56beb9ed53696bda2fde0f`, annotated tag `v0.2.1`; a
+> real remote clean-profile install and complete remove/reinstall/rollback cycle
+> passed. Default and short Codex profile paths are verified, but arbitrary deeply
+> nested custom `CODEX_HOME` paths are not promised because legacy Windows Git
+> `MAX_PATH` can fail before Plugin installation.
 
 ## 3. 数据边界与最终目录
 

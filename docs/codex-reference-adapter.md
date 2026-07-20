@@ -1,11 +1,14 @@
-# Codex Reference Adapter and Installable Release (J-05/J-05B)
+# Codex Reference Adapter and Installable Release (J-05/J-05B/J-05C)
 
 ## Status
 
-J-05 established the reference Codex adapter on **2026-07-16**. J-05B packages
+J-05 established the reference Codex adapter on **2026-07-16**. J-05B packaged
 the already accepted R3-minus-C-07 capability set as the self-contained
-**LLM Wiki Research Codex Plugin 0.2.0** for **Windows x86-64**. The release is
-validated with Codex CLI `0.144.2`.
+**LLM Wiki Research Codex Plugin 0.2.0** for **Windows x86-64**. J-05C publishes
+corrective release **0.2.1** on **2026-07-20**: human-readable reports default to
+Simplified Chinese and are saved through a strict UTF-8 readback gate. J-05C adds
+no Research Core capability. J-05B was validated with Codex CLI `0.144.2`; J-05C
+was also validated end to end with Codex CLI `0.145.0-alpha.18`.
 
 The installable release does not require the user to retain an
 `llm-wiki-agent` source checkout and does not require
@@ -46,13 +49,14 @@ plugins/llmwiki-research/
     llmwiki.cmd
     research_cockpit.py
     research-cockpit.cmd
+    write_utf8_report.ps1
   skills/llmwiki-research/SKILL.md
 ```
 
 The formal package adds:
 
 ```text
-llmwiki-research-0.2.0-windows-x86_64/
+llmwiki-research-0.2.1-windows-x86_64/
   .agents/plugins/marketplace.json
   FILELIST.txt
   SHA256SUMS
@@ -137,28 +141,44 @@ adapter at:
 
 <https://github.com/juedouwang/llmwiki-research-codex-plugin>
 
-Install the immutable `v0.2.0` marketplace snapshot with the current validated
+Public commit `81a9a589b3b207c04a56beb9ed53696bda2fde0f` is the `main`
+head and the commit selected by annotated tag `v0.2.1`. Do not move or rewrite
+that published tag.
+
+Install the immutable `v0.2.1` marketplace snapshot with the current validated
 CLI commands:
 
 ```powershell
-codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.0
+codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.1
 codex plugin add llmwiki-research@llmwiki-research-release --json
 ```
+
+OpenAI's current Plugin documentation defines `codex plugin marketplace add` and
+the manifest/component shape. The tested CLI builds `0.144.2` and
+`0.145.0-alpha.18` expose the installation verb as `codex plugin add`; the real
+clean-profile gate uses that command rather than inferring installation from
+files.
 
 The corresponding GitHub Release publishes the deterministic ZIP, sidecar,
 release notes, `FILELIST.txt`, internal `SHA256SUMS`, and `release.json`:
 
-<https://github.com/juedouwang/llmwiki-research-codex-plugin/releases/tag/v0.2.0>
+<https://github.com/juedouwang/llmwiki-research-codex-plugin/releases/tag/v0.2.1>
 
-The ZIP SHA-256 is
-`2e067be43a3329aae5f9df5e5a558a2f3a46727e2cea84f6362cc94bb1a60658`.
-A remote Git-backed clean-profile acceptance on **2026-07-19** confirmed
-marketplace and Skill discovery, MCP registration and handshake, all seven tool
-Schemas, project context, Host Context Pack, coverage, policy-authorized
-source-open, explicit full-scan reconciliation with absent Hook hints, I-04 DRAFT
-planning, exact Query unavailability, default workspace selection, source
-immutability, and error redaction without `LLMWIKI_CORE_ROOT` or a source
-checkout.
+The ZIP SHA-256 is `4e1206d31817aa9a59d45898347deabb1aadc88d7e53c3a5514b0921c44af806`. A remote Git-backed clean-profile
+acceptance on **2026-07-20** confirms marketplace and Skill discovery, MCP
+registration and handshake, all seven tool Schemas, project context, Host Context
+Pack, coverage, policy-authorized source-open, explicit full-scan reconciliation
+with absent Hook hints, I-04 DRAFT planning, exact Query unavailability, default
+workspace selection, source immutability, error redaction, and strict Chinese
+UTF-8 report write/readback without `LLMWIKI_CORE_ROOT` or a source checkout. It
+then rolled back from `0.2.1` to `0.2.0`, reinstalled `0.2.1`, uninstalled the
+Plugin, removed the marketplace, and verified zero residual Plugin/MCP
+registrations while retaining workspace state.
+
+A deliberately much deeper custom `CODEX_HOME` failed during Git checkout under
+legacy Windows `MAX_PATH`. The default Codex profile and a short independent
+profile pass; this release does not claim support for arbitrary custom path
+depth.
 
 ## Installation, upgrade, rollback, and removal
 
@@ -226,6 +246,28 @@ Each version is staged separately. A marker file
 `.llmwiki-codex-plugin-install.json` binds destructive package-purge operations
 to this managed directory. The complete Plugin tree can be moved before or
 after Codex installation because runtime and Core paths are Plugin-relative.
+
+## Chinese report language and encoding boundary
+
+The installed Skill directs human-readable Markdown reports to Simplified
+Chinese unless the user explicitly requests another language. Code, paths,
+commands, API/MCP names, Schema fields, enum/error values, Git refs/hashes,
+project IDs, quoted source titles, and precision-sensitive technical terms stay
+in exact English.
+
+`scripts/write_utf8_report.ps1` is part of both the source template and built
+package. It uses Windows PowerShell 5.1-compatible .NET APIs to write UTF-8
+without a BOM, strictly reads the final bytes back, requires CJK text by default,
+rejects invalid UTF-8, `U+FFFD`, NUL, and suspicious runs of literal `?`, and
+returns only bounded metadata plus SHA-256. It does not echo report content or
+absolute paths on failure. `-Language any` is an explicit override for a
+user-requested non-Chinese report.
+
+The Skill explicitly forbids the unsafe pattern of piping a CJK PowerShell
+here-string directly to native Python in an unconfigured Windows PowerShell 5.1
+session. That native pipeline can replace CJK with ASCII `?` before Python sees
+the text. File existence or a zero exit status is not report acceptance; strict
+readback must pass after every write.
 
 ## Operator workflow
 
@@ -352,6 +394,7 @@ uses an installed Codex CLI:
 $env:LLMWIKI_RUN_RELEASE_TESTS = '1'
 $env:LLMWIKI_RELEASE_CACHE_DIR = '<verified-release-cache>'
 $env:LLMWIKI_RELEASE_OFFLINE = '1'
+$env:LLMWIKI_RELEASE_TEST_ROOT = Join-Path $env:USERPROFILE 'l'
 $codexExe = Get-Command codex.exe -ErrorAction SilentlyContinue
 if ($codexExe) {
   $env:LLMWIKI_CODEX_EXE = $codexExe.Source
@@ -382,7 +425,9 @@ and verifies:
 - startup after moving the release and after moving the installed Plugin tree;
 - source bytes, hash, timestamps, mode, and curated knowledge preservation;
 - no binary-canary leakage or semantic extraction;
-- error redaction; and
+- error redaction;
+- Chinese report write and strict UTF-8 readback from both installed and relocated
+  Plugin paths; and
 - rollback, uninstall, and marker-validated package purge.
 
 Recorded J-05B validation on **2026-07-19** produced **8 passed, 1 skipped**
@@ -396,9 +441,23 @@ archive is rebuilt from the committed release head and its SHA-256 is recorded
 in the adjacent sidecar and release report rather than hard-coded into source
 that would alter the archive.
 
+Recorded J-05C validation on **2026-07-20** produced **16 passed, 1 skipped** for
+the report/Plugin/release focused suite, **158 passed, 4 skipped** for the final
+related Core/adapter suite, **835 passed, 32 skipped** for the full repository,
+and **3 passed** for the enabled clean-profile release acceptance with Codex CLI
+`0.145.0-alpha.18`. Two independent release builds from commit `427fc83` produced
+the same 2,129-file ZIP and SHA-256 after unused staging-sensitive `pip` console
+launchers were removed. The clean run installs without a checkout or
+`LLMWIKI_CORE_ROOT`, discovers the Skill through Codex, handshakes and exercises
+MCP, writes and re-verifies Chinese UTF-8 reports before and after Plugin
+relocation, removes Hooks for explicit reconciliation, and completes rollback,
+uninstall, and purge. J-05C changed-file Ruff and Ruff-format checks, isolated
+`py_compile`, and `git diff --check` pass. The repository-wide Ruff baseline still
+contains unrelated legacy-tool findings and is not misreported as a J-05C pass.
+
 ## Honest stop boundary
 
-J-05B does not implement or claim:
+J-05B/J-05C do not implement or claim:
 
 - Verified Query or any alternative query synthesis;
 - G-04 (Query remains `capability-unavailable` with `available_after=G-04`);
@@ -410,4 +469,4 @@ J-05B does not implement or claim:
 - source-project mutation; or
 - any new unauthorized external send.
 
-After J-05B acceptance, work stops at this release boundary.
+After J-05C acceptance and publication, work stops at this corrective release boundary.

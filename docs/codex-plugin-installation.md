@@ -1,8 +1,9 @@
-# Install LLM Wiki Research Plugin 0.2.0
+# Install LLM Wiki Research Plugin 0.2.1
 
-This procedure installs the self-contained J-05B Windows x86-64 release. It does
-not require an `llm-wiki-agent` checkout, a system Python, or
-`LLMWIKI_CORE_ROOT`.
+This procedure installs the self-contained J-05B/J-05C Windows x86-64 release.
+Version `0.2.1` corrects human-readable report language and Windows Unicode
+integrity without adding a research capability. It does not require an
+`llm-wiki-agent` checkout, a system Python, or `LLMWIKI_CORE_ROOT`.
 
 ## Prerequisites
 
@@ -10,21 +11,29 @@ not require an `llm-wiki-agent` checkout, a system Python, or
 - Codex CLI installed and available as `codex`.
 - PowerShell 5.1 or later.
 
-The release was validated on **2026-07-19** with Codex CLI `0.144.2`. Other
-Codex versions are not implied by that validation.
+The original self-contained release was validated on **2026-07-19** with Codex
+CLI `0.144.2`. The `0.2.1` corrective release was validated end to end on
+**2026-07-20** with Codex CLI `0.145.0-alpha.18`. Other Codex versions are not
+implied by those validations. Use the normal Codex profile or a short custom
+`CODEX_HOME` on Windows. A deliberately very deep custom profile reproduced a
+legacy Git `MAX_PATH` checkout failure; arbitrary path depth is not supported or
+claimed.
 
 ## Recommended: public Git marketplace
 
 Add the public, immutable marketplace tag and install the Plugin:
 
 ```powershell
-codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.0
+codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.1
 codex plugin add llmwiki-research@llmwiki-research-release --json
 ```
 
 This is a real Git-backed installation of the complete self-contained Plugin.
 It does not use the unbundled `plugins/llmwiki-research/` source template from a
-checkout. Codex CLI `0.144.2` uses `plugin add` as the installation subcommand.
+checkout. OpenAI's current Plugin documentation defines the Plugin layout and
+`codex plugin marketplace add`; the locally verified CLI builds `0.144.2` and
+`0.145.0-alpha.18` expose installation as `codex plugin add`. Check
+`codex plugin --help` if a future CLI changes that verb.
 
 Verify the remote marketplace, Plugin, Skill-backed prompt context, and MCP
 registration:
@@ -41,7 +50,7 @@ For a tagged upgrade/reinstall or a full uninstall:
 # Upgrade/reinstall from the selected immutable tag
 codex plugin remove llmwiki-research@llmwiki-research-release --json
 codex plugin marketplace remove llmwiki-research-release --json
-codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.0
+codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.1
 codex plugin add llmwiki-research@llmwiki-research-release --json
 
 # Uninstall
@@ -49,17 +58,27 @@ codex plugin remove llmwiki-research@llmwiki-research-release --json
 codex plugin marketplace remove llmwiki-research-release --json
 ```
 
+The remote lifecycle was exercised on **2026-07-20**: install `v0.2.1`, rollback
+to `v0.2.0`, reinstall `v0.2.1`, uninstall, and remove the marketplace. The final
+clean profile contained zero installed Plugins and zero MCP registrations, while
+the separate workspace remained intact.
+
 Public repository:
 <https://github.com/juedouwang/llmwiki-research-codex-plugin>
 
 Release page:
-<https://github.com/juedouwang/llmwiki-research-codex-plugin/releases/tag/v0.2.0>
+<https://github.com/juedouwang/llmwiki-research-codex-plugin/releases/tag/v0.2.1>
+
+The published `main` branch and annotated `v0.2.1` tag resolve to release commit
+`81a9a589b3b207c04a56beb9ed53696bda2fde0f`. The GitHub Release contains both
+the ZIP and its `.sha256` sidecar. A real clean profile fetched this exact remote
+tag rather than a local checkout.
 
 ## Direct ZIP artifact names
 
 ```text
-llmwiki-research-0.2.0-windows-x86_64.zip
-llmwiki-research-0.2.0-windows-x86_64.zip.sha256
+llmwiki-research-0.2.1-windows-x86_64.zip
+llmwiki-research-0.2.1-windows-x86_64.zip.sha256
 ```
 
 The extracted directory contains `FILELIST.txt` and `SHA256SUMS`. The installer
@@ -70,18 +89,18 @@ checks the entire internal inventory before staging the package.
 Place the ZIP and sidecar in the same directory:
 
 ```powershell
-$archive = '.\llmwiki-research-0.2.0-windows-x86_64.zip'
+$archive = '.\llmwiki-research-0.2.1-windows-x86_64.zip'
 $expected = (Get-Content "$archive.sha256" -Raw).Split()[0].ToLowerInvariant()
 $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw 'Release archive SHA-256 mismatch.' }
 Expand-Archive -LiteralPath $archive -DestinationPath . -Force
-Set-Location .\llmwiki-research-0.2.0-windows-x86_64
+Set-Location .\llmwiki-research-0.2.1-windows-x86_64
 ```
 
 The published ZIP SHA-256 is:
 
 ```text
-2e067be43a3329aae5f9df5e5a558a2f3a46727e2cea84f6362cc94bb1a60658
+4e1206d31817aa9a59d45898347deabb1aadc88d7e53c3a5514b0921c44af806
 ```
 
 It is also available in the release sidecar and GitHub asset digest. Do not
@@ -96,7 +115,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 Successful JSON output identifies:
 
 - Plugin ID `llmwiki-research@llmwiki-research-release`;
-- Plugin version `0.2.0`;
+- Plugin version `0.2.1`;
 - the managed staged version directory; and
 - the default workspace.
 
@@ -142,17 +161,17 @@ The managed package base is:
 %LOCALAPPDATA%\LLMWiki\CodexPlugins\llmwiki-research\
 ```
 
-For version `0.2.0`, the staged Plugin is normally:
+For version `0.2.1`, the staged Plugin is normally:
 
 ```text
-%LOCALAPPDATA%\LLMWiki\CodexPlugins\llmwiki-research\0.2.0\marketplace\plugins\llmwiki-research\
+%LOCALAPPDATA%\LLMWiki\CodexPlugins\llmwiki-research\0.2.1\marketplace\plugins\llmwiki-research\
 ```
 
 Example PowerShell usage:
 
 ```powershell
 $plugin = Join-Path $env:LOCALAPPDATA `
-  'LLMWiki\CodexPlugins\llmwiki-research\0.2.0\marketplace\plugins\llmwiki-research'
+  'LLMWiki\CodexPlugins\llmwiki-research\0.2.1\marketplace\plugins\llmwiki-research'
 
 & "$plugin\scripts\llmwiki.cmd" register C:\path\to\research-project --json
 & "$plugin\scripts\llmwiki.cmd" understand C:\path\to\research-project --json
@@ -165,7 +184,48 @@ project context, Host Context Pack, coverage, policy-authorized source-open,
 explicit reconciliation, I-04 DRAFT initial planning, and the intentional Query
 unavailable result.
 
-## 5. Upgrade or reinstall
+## 5. Chinese report output and strict UTF-8 verification
+
+Human-readable Markdown reports default to Simplified Chinese unless the user
+explicitly requests another language. Keep code, paths, commands, API/MCP names,
+Schema fields, enum/error values, Git refs/hashes, project IDs, quoted source
+titles, and precision-sensitive technical identifiers in exact English.
+
+Write a report from the installed Plugin root with the PowerShell-native writer:
+
+```powershell
+$report = @(
+  '# 项目理解报告',
+  '',
+  '这里写中文分析；`ResearchCoreService` 和 `llmwiki_query` 保留英文标识。'
+) -join "`r`n"
+
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File "$plugin\scripts\write_utf8_report.ps1" `
+  -LiteralPath C:\path\to\outputs\project-understanding.md `
+  -Content $report `
+  -Force
+```
+
+The writer emits UTF-8 without a BOM, strictly reads the saved bytes back,
+requires CJK text by default, rejects invalid UTF-8, `U+FFFD`, NUL, and suspicious
+runs of literal `?`, and returns bounded JSON metadata with SHA-256. Re-verify an
+existing Chinese report with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File "$plugin\scripts\write_utf8_report.ps1" `
+  -LiteralPath C:\path\to\outputs\project-understanding.md `
+  -VerifyOnly
+```
+
+Use `-Language any` only when the user explicitly requests another language.
+Do not pipe a CJK PowerShell here-string directly to native Python in an
+unconfigured Windows PowerShell 5.1 session; that path can replace Chinese with
+literal ASCII `?` before Python receives it. A successful command or an existing
+file is not acceptance unless strict readback passes.
+
+## 6. Upgrade or reinstall
 
 Extract the desired release and run its installer with `-Force`:
 
@@ -177,7 +237,7 @@ Each version is staged in a separate managed subdirectory, allowing an older
 retained version to be selected later. `-Force` is also the supported reinstall
 command for a damaged or already staged copy of the same version.
 
-## 6. Rollback
+## 7. Rollback
 
 Rollback selects a version that is still present in the managed package base:
 
@@ -185,11 +245,13 @@ Rollback selects a version that is still present in the managed package base:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\rollback.ps1 -Version 0.2.0
 ```
 
-Rollback changes Codex Plugin/marketplace registration. It does not rewrite,
-migrate, or delete workspace state. If package purge removed the requested
-version, re-extract that release and reinstall it instead.
+Rollback to `0.2.0` changes Codex Plugin/marketplace registration and restores
+the previous package, which does not include the J-05C Chinese-report encoding
+fix. Rollback does not rewrite, migrate, or delete workspace state. If package
+purge removed the requested version, re-extract that release and reinstall it
+instead.
 
-## 7. Uninstall
+## 8. Uninstall
 
 Remove Codex registration but keep staged packages and all workspace state:
 
@@ -203,7 +265,7 @@ Also purge the managed package base:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1 -PurgePackages
 ```
 
-`-PurgePackages` proceeds only when the install base has the exact J-05B managed
+`-PurgePackages` proceeds only when the install base has the exact managed
 marker and is a safe non-root path. It never removes
 `%LOCALAPPDATA%\LLMWiki\workspace`.
 
@@ -235,7 +297,8 @@ Do not treat Hook delivery as proof that the project is synchronized.
 
 ## Capability boundary
 
-Release `0.2.0` packages R3-minus-C-07 only:
+Release `0.2.1` is a report-language/encoding correction and still packages
+R3-minus-C-07 only:
 
 - `llmwiki_query` returns `capability-unavailable`;
 - `available_after` is `G-04`;

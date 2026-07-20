@@ -50,25 +50,40 @@ gemini      # reads GEMINI.md
 
 ### Self-contained Codex Plugin release (Windows x86-64)
 
-The J-05B release packages the accepted R3-minus-C-07 Research Core workflows as
-`llmwiki-research` Plugin `0.2.0`. A release installation does not require this
-repository checkout, a system Python, or `LLMWIKI_CORE_ROOT`.
+J-05B packaged the accepted R3-minus-C-07 Research Core workflows; J-05C
+publishes the corrective `llmwiki-research` Plugin `0.2.1` release. It preserves
+human-readable Markdown reports as strict UTF-8 and defaults report narrative to
+Simplified Chinese unless the user explicitly requests another language. Code,
+paths, commands, API/MCP identifiers, Schema fields, enums/errors, Git refs and
+hashes, project IDs, and precision-sensitive technical names remain exact
+English. The release still requires no source checkout, system Python, or
+`LLMWIKI_CORE_ROOT`.
 
 Install from the public Git marketplace without cloning this source repository:
 
 ```powershell
-codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.0
+codex plugin marketplace add juedouwang/llmwiki-research-codex-plugin --ref v0.2.1
 codex plugin add llmwiki-research@llmwiki-research-release --json
 ```
 
 The public marketplace repository and immutable release assets are available at
 [`juedouwang/llmwiki-research-codex-plugin`](https://github.com/juedouwang/llmwiki-research-codex-plugin)
-and its [`v0.2.0` release](https://github.com/juedouwang/llmwiki-research-codex-plugin/releases/tag/v0.2.0).
-Codex CLI `0.144.2`, used for release validation, names the installation command
-`codex plugin add`.
+and its [`v0.2.1` release](https://github.com/juedouwang/llmwiki-research-codex-plugin/releases/tag/v0.2.1).
+Public commit `81a9a589b3b207c04a56beb9ed53696bda2fde0f` backs both the
+`main` branch and annotated `v0.2.1` tag snapshot. OpenAI's current Plugin
+documentation defines the marketplace command and Plugin layout. Codex CLI
+`0.144.2` and the J-05C clean-profile host `0.145.0-alpha.18` both expose the
+verified installation verb as `codex plugin add`.
+
+A fresh short Windows Codex profile installed `v0.2.1` directly from that GitHub
+tag, discovered the Plugin/Skill/MCP, completed all seven MCP Schema and workflow
+checks, rolled back to `0.2.0`, reinstalled `0.2.1`, and then removed both the
+Plugin and marketplace. Extremely deep custom `CODEX_HOME` paths can still hit
+legacy Windows Git `MAX_PATH`; the default Codex profile and a short isolated
+profile are the verified configurations.
 
 For the integrity-checked ZIP path, download and extract
-`llmwiki-research-0.2.0-windows-x86_64.zip`, then run:
+`llmwiki-research-0.2.1-windows-x86_64.zip`, then run:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
@@ -79,8 +94,8 @@ Maintainers can rebuild the deterministic package on Windows x86-64 with Python
 --json`.
 
 The optional workspace defaults to `%LOCALAPPDATA%\LLMWiki\workspace`.
-Upgrade/reinstall, rollback, uninstall, archive verification, and exact capability
-boundaries are documented in
+Upgrade/reinstall, rollback to `0.2.0`, uninstall, archive verification, Chinese
+report validation, and exact capability boundaries are documented in
 [`docs/codex-plugin-installation.md`](docs/codex-plugin-installation.md).
 
 ## Usage
@@ -201,7 +216,7 @@ The `research-assistant` branch is evolving this repository into a local-first, 
 - [Deterministic one-action project understanding](docs/project-understand.md)
 - [Conservative H-07 project reconciliation](docs/project-reconciliation.md)
 - [Minimal MCP stdio server](docs/research-mcp-server.md)
-- [Codex reference adapter and J-05B release](docs/codex-reference-adapter.md)
+- [Codex reference adapter and J-05B/J-05C release](docs/codex-reference-adapter.md)
 - [Codex Plugin installation guide](docs/codex-plugin-installation.md)
 - [B-02 explainable scan-policy contract](docs/scan-policy.md)
 - [J-03 product research cockpit](docs/research-cockpit.md)
@@ -275,15 +290,15 @@ The development dashboard shows Roadmap, Git, checkpoint, and validation-ledger
 state. It does not scan registered research projects and is not the product
 cockpit.
 
-The J-05B Codex release source lives at `plugins/llmwiki-research/`. Plugin
-`0.2.0` bundles a private Python runtime, allowlisted current Core, Skill, MCP,
-CLI/cockpit launchers, and one optional fail-open Hook. The installed release
-needs neither a repository checkout nor `LLMWIKI_CORE_ROOT`;
-`LLMWIKI_WORKSPACE_ROOT` is optional and defaults to the safe per-user data
-directory. Hooks submit untrusted path hints only, so finish relevant work with
-explicit `llmwiki_reconcile`. I-04 DRAFT initial planning is available, but
-`llmwiki_query` remains exactly unavailable until G-04 and C-07 remains
-deferred/not_started.
+The J-05B/J-05C Codex release source lives at `plugins/llmwiki-research/`.
+Plugin `0.2.1` bundles a private Python runtime, allowlisted current Core, Skill,
+MCP, CLI/cockpit launchers, the strict UTF-8 Chinese-report writer, and one
+optional fail-open Hook. The installed release needs neither a repository
+checkout nor `LLMWIKI_CORE_ROOT`; `LLMWIKI_WORKSPACE_ROOT` is optional and
+defaults to the safe per-user data directory. Hooks submit untrusted path hints
+only, so finish relevant work with explicit `llmwiki_reconcile`. I-04 DRAFT
+initial planning is available, but `llmwiki_query` remains exactly unavailable
+until G-04 and C-07 remains deferred/not_started.
 
 Registered projects also accept host-neutral file-change signals through the
 append-only H-04 event ledger. `event submit` records an idempotent event under
